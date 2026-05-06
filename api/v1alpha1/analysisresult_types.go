@@ -67,18 +67,12 @@ type AnalysisResultSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	ProposalName string `json:"proposalName,omitempty"`
-
-	// attempt is the 1-based attempt number.
-	// +required
-	// +kubebuilder:validation:Minimum=1
-	Attempt int32 `json:"attempt,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Proposal",type=string,JSONPath=`.spec.proposalName`
-// +kubebuilder:printcolumn:name="Attempt",type=integer,JSONPath=`.spec.attempt`
 // +kubebuilder:printcolumn:name="Outcome",type=string,JSONPath=`.status.conditions[?(@.type=="Completed")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

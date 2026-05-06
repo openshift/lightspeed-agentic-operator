@@ -192,13 +192,6 @@ type AnalysisStepStatus struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=0
 	SelectedOption *int32 `json:"selectedOption,omitempty"`
-	// observedGeneration is the metadata.generation of the Proposal that
-	// this analysis was produced for. When metadata.generation >
-	// observedGeneration, the operator re-runs analysis with revision
-	// feedback appended.
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	// results references AnalysisResult CRs, newest last.
 	// Each entry corresponds to one analysis attempt.
 	// +optional

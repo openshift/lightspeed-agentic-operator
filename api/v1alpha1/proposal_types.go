@@ -320,14 +320,6 @@ type ProposalStatus struct {
 	// +kubebuilder:validation:MaxItems=8
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
-	// attempts is the number of times this proposal has been attempted
-	// (1-based). Incremented each time the proposal is retried after a
-	// failure. Starts at 1 for the first attempt.
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=2147483647
-	Attempts int32 `json:"attempts,omitempty"`
-
 	// steps contains the per-step observed state (analysis, execution,
 	// verification). Each step independently tracks its timing, sandbox
 	// info, and references to result CRs.

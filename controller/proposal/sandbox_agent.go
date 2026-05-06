@@ -284,8 +284,6 @@ func buildAgentContext(proposal *agenticv1alpha1.Proposal) *agentContext {
 		TargetNamespaces: proposal.Spec.TargetNamespaces,
 	}
 
-	ctx.Attempt = proposal.Status.Attempts
-
 	ctx.PreviousAttempts = append(ctx.PreviousAttempts, collectFailedResults(proposal.Status.Steps.Analysis.Results, "analysis")...)
 	ctx.PreviousAttempts = append(ctx.PreviousAttempts, collectFailedResults(proposal.Status.Steps.Execution.Results, "execution")...)
 	ctx.PreviousAttempts = append(ctx.PreviousAttempts, collectFailedResults(proposal.Status.Steps.Verification.Results, "verification")...)

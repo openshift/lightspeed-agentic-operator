@@ -150,9 +150,6 @@ func TestList_WideOutput(t *testing.T) {
 	}
 
 	output := out.String()
-	if !strings.Contains(output, "ATTEMPT") {
-		t.Error("wide output should contain ATTEMPT header")
-	}
 	if !strings.Contains(output, "TARGET-NS") {
 		t.Error("wide output should contain TARGET-NS header")
 	}

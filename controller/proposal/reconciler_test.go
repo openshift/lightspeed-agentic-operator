@@ -291,9 +291,6 @@ func TestReconcile_StatusInitialization(t *testing.T) {
 	if phase != agenticv1alpha1.ProposalPhaseProposed {
 		t.Fatalf("expected Proposed (analysis complete), got %s", phase)
 	}
-	if p.Status.Attempts != 1 {
-		t.Fatal("attempt not initialized to 1")
-	}
 }
 
 func TestReconcile_Denied_Terminal(t *testing.T) {
@@ -301,7 +298,6 @@ func TestReconcile_Denied_Terminal(t *testing.T) {
 
 	proposal := testProposal()
 	proposal.Status = agenticv1alpha1.ProposalStatus{
-		Attempts: 1,
 		Conditions: []metav1.Condition{
 			{Type: agenticv1alpha1.ProposalConditionAnalyzed, Status: metav1.ConditionTrue, Reason: "AnalysisComplete"},
 			{Type: agenticv1alpha1.ProposalConditionDenied, Status: metav1.ConditionTrue, Reason: "UserDenied"},

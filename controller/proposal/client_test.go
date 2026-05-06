@@ -138,7 +138,6 @@ func TestAgentHTTPClient_RunWithoutExecutionResult(t *testing.T) {
 	client := NewAgentHTTPClient(server.URL)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
-		Attempt:          1,
 	}
 	_, err := client.Run(context.Background(), "", "test", nil, agentCtx)
 	if err != nil {
@@ -158,9 +157,6 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 		if len(req.Context.TargetNamespaces) != 1 || req.Context.TargetNamespaces[0] != "production" {
 			t.Errorf("targetNamespaces = %v", req.Context.TargetNamespaces)
 		}
-		if req.Context.Attempt != 2 {
-			t.Errorf("attempt = %d, want 2", req.Context.Attempt)
-		}
 		if len(req.Context.PreviousAttempts) != 1 {
 			t.Fatalf("previousAttempts count = %d, want 1", len(req.Context.PreviousAttempts))
 		}
@@ -176,7 +172,6 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 	client := NewAgentHTTPClient(server.URL)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
-		Attempt:          2,
 		PreviousAttempts: []agentPreviousAttempt{{Attempt: 1, FailureReason: "timeout"}},
 	}
 	_, err := client.Run(context.Background(), "", "test", nil, agentCtx)

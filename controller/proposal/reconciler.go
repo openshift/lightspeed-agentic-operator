@@ -66,15 +66,6 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
-	// --- Initialize status on first reconcile ---
-	if proposal.Status.Attempts == 0 {
-		base := proposal.DeepCopy()
-		proposal.Status.Attempts = 1
-		if err := r.Status().Patch(ctx, &proposal, client.MergeFrom(base)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("initialize status: %w", err)
-		}
-	}
-
 	phase := agenticv1alpha1.DerivePhase(proposal.Status.Conditions)
 
 	// --- Finalizer ---
@@ -125,10 +116,11 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		log.Error(err, "workflow resolution failed")
 		base := proposal.DeepCopy()
 		meta.SetStatusCondition(&proposal.Status.Conditions, metav1.Condition{
-			Type:    agenticv1alpha1.ProposalConditionAnalyzed,
-			Status:  metav1.ConditionFalse,
-			Reason:  reasonWorkflowFailed,
-			Message: err.Error(),
+			Type:               agenticv1alpha1.ProposalConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonWorkflowFailed,
+			Message:            err.Error(),
+			ObservedGeneration: proposal.Generation,
 		})
 		if statusErr := r.statusPatch(ctx, &proposal, base); statusErr != nil {
 			log.Error(statusErr, "failed to patch status after workflow resolution failure")
@@ -136,7 +128,7 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("reconciling", "phase", phase, "attempts", proposal.Status.Attempts)
+	log.Info("reconciling", "phase", phase)
 
 	// --- Phase routing ---
 	switch phase {

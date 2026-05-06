@@ -235,10 +235,3 @@ func int32PtrStr(p *int32) string {
 	}
 	return fmt.Sprintf("%d", *p)
 }
-
-func int32Str(v int32) string {
-	if v == 0 {
-		return "-"
-	}
-	return fmt.Sprintf("%d", v)
-}

@@ -29,7 +29,6 @@ type agentRunRequest struct {
 
 type agentContext struct {
 	TargetNamespaces []string                        `json:"targetNamespaces,omitempty"`
-	Attempt          int32                           `json:"attempt,omitempty"`
 	PreviousAttempts []agentPreviousAttempt          `json:"previousAttempts,omitempty"`
 	ApprovedOption   *agenticv1alpha1.RemediationOption `json:"approvedOption,omitempty"`
 	ExecutionResult  *agentExecutionResult           `json:"executionResult,omitempty"`

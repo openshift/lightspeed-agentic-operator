@@ -90,9 +90,6 @@ func (o *GetOptions) printDetail(p *agenticv1alpha1.Proposal) {
 	fmt.Fprintf(w, "Name:              %s\n", p.Name)
 	fmt.Fprintf(w, "Namespace:         %s\n", p.Namespace)
 	fmt.Fprintf(w, "Phase:             %s\n", ColoredPhase(agenticv1alpha1.DerivePhase(p.Status.Conditions)))
-	if p.Status.Attempts > 0 {
-		fmt.Fprintf(w, "Attempts:          %d\n", p.Status.Attempts)
-	}
 	fmt.Fprintf(w, "Age:               %s\n", HumanDuration(p.CreationTimestamp.Time))
 	fmt.Fprintf(w, "Request:           %s\n", p.Spec.Request)
 

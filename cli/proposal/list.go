@@ -150,9 +150,9 @@ func (o *ListOptions) printTable(items []agenticv1alpha1.Proposal) {
 func (o *ListOptions) printWideTable(items []agenticv1alpha1.Proposal) {
 	var headers []string
 	if o.allNamespaces {
-		headers = []string{"NAMESPACE", "NAME", "PHASE", "ATTEMPT", "TARGET-NS", "AGE"}
+		headers = []string{"NAMESPACE", "NAME", "PHASE", "TARGET-NS", "AGE"}
 	} else {
-		headers = []string{"NAME", "PHASE", "ATTEMPT", "TARGET-NS", "AGE"}
+		headers = []string{"NAME", "PHASE", "TARGET-NS", "AGE"}
 	}
 	rows := make([][]string, 0, len(items))
 	for _, p := range items {
@@ -165,7 +165,7 @@ func (o *ListOptions) printWideTable(items []agenticv1alpha1.Proposal) {
 			row = append(row, p.Namespace)
 		}
 		row = append(row, p.Name, ColoredPhase(agenticv1alpha1.DerivePhase(p.Status.Conditions)),
-			int32Str(p.Status.Attempts), targetNS, HumanDuration(p.CreationTimestamp.Time))
+			targetNS, HumanDuration(p.CreationTimestamp.Time))
 		rows = append(rows, row)
 	}
 	PrintTable(o.Out, headers, rows)

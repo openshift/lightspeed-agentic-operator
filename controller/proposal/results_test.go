@@ -23,7 +23,7 @@ func TestCreateIdempotent_StatusFieldsWritten(t *testing.T) {
 		},
 		Spec: agenticv1alpha1.AnalysisResultSpec{
 			ProposalName: "test-proposal",
-			Attempt:      1,
+
 		},
 		Status: agenticv1alpha1.AnalysisResultStatus{
 			Conditions: []metav1.Condition{
@@ -52,9 +52,6 @@ func TestCreateIdempotent_StatusFieldsWritten(t *testing.T) {
 	if got.Spec.ProposalName != "test-proposal" {
 		t.Errorf("proposalName = %q, want test-proposal", got.Spec.ProposalName)
 	}
-	if got.Spec.Attempt != 1 {
-		t.Errorf("attempt = %d, want 1", got.Spec.Attempt)
-	}
 	if len(got.Status.Options) != 1 {
 		t.Fatalf("expected 1 option in status, got %d", len(got.Status.Options))
 	}
@@ -82,7 +79,7 @@ func TestCreateIdempotent_AlreadyExists(t *testing.T) {
 		},
 		Spec: agenticv1alpha1.AnalysisResultSpec{
 			ProposalName: "test-proposal",
-			Attempt:      1,
+
 		},
 	}
 
@@ -97,7 +94,7 @@ func TestCreateIdempotent_AlreadyExists(t *testing.T) {
 		},
 		Spec: agenticv1alpha1.AnalysisResultSpec{
 			ProposalName: "test-proposal",
-			Attempt:      1,
+
 		},
 		Status: agenticv1alpha1.AnalysisResultStatus{
 			Options: []agenticv1alpha1.RemediationOption{
@@ -133,7 +130,7 @@ func TestCreateIdempotent_ExecutionResult(t *testing.T) {
 		},
 		Spec: agenticv1alpha1.ExecutionResultSpec{
 			ProposalName: "test-proposal",
-			Attempt:      1,
+
 			RetryIndex:   &retryIdx,
 		},
 		Status: agenticv1alpha1.ExecutionResultStatus{

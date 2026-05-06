@@ -35,9 +35,7 @@ func testProposal(name, namespace string) *agenticv1alpha1.Proposal {
 
 func testProposalWithStatus(name, namespace string, phase agenticv1alpha1.ProposalPhase) *agenticv1alpha1.Proposal {
 	p := testProposal(name, namespace)
-	p.Status = agenticv1alpha1.ProposalStatus{
-		Attempts: 1,
-	}
+	p.Status = agenticv1alpha1.ProposalStatus{}
 	setPhaseConditions(&p.Status, phase)
 	return p
 }

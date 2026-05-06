@@ -478,7 +478,7 @@ func TestReconcile_RevisionHappyPath(t *testing.T) {
 	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.ProposalPhaseProposed {
 		t.Fatalf("expected Proposed after revision, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
-	if p.Status.Steps.Analysis.ObservedGeneration == 0 {
+	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.ProposalConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration == 0 {
 		t.Fatal("observedGeneration not set after revision")
 	}
 	if len(p.Status.Steps.Analysis.Results) <= initialResultCount {
@@ -521,7 +521,7 @@ func TestReconcile_RevisionMultipleRounds(t *testing.T) {
 	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.ProposalPhaseProposed {
 		t.Fatalf("expected Proposed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
-	if p.Status.Steps.Analysis.ObservedGeneration == 0 {
+	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.ProposalConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration == 0 {
 		t.Fatal("observedGeneration not set after second revision")
 	}
 
@@ -557,7 +557,13 @@ func TestReconcile_RevisionNoOp_WhenObserved(t *testing.T) {
 	}
 	p, _ = getProposal(r, "fix-crash")
 	base = p.DeepCopy()
-	p.Status.Steps.Analysis.ObservedGeneration = 2
+	meta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{
+		Type:               agenticv1alpha1.ProposalConditionAnalyzed,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonRevisionComplete,
+		Message:            "Revision complete",
+		ObservedGeneration: 2,
+	})
 	if err := fc.Status().Patch(context.Background(), p, client.MergeFrom(base)); err != nil {
 		t.Fatalf("patch status observedGeneration: %v", err)
 	}
@@ -682,7 +688,7 @@ func TestReconcile_RevisionWithFeedback(t *testing.T) {
 	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.ProposalPhaseProposed {
 		t.Fatalf("expected Proposed after revision, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
-	if p.Status.Steps.Analysis.ObservedGeneration == 0 {
+	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.ProposalConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration == 0 {
 		t.Fatal("observedGeneration not set after revision")
 	}
 	if p.Spec.RevisionFeedback != "Focus on the memory limit, not CPU throttling" {

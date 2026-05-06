@@ -120,8 +120,9 @@ type ApprovalStage struct {
 	Type ApprovalStageType `json:"type,omitempty"`
 
 	// decision indicates whether this stage is approved or denied.
-	// Denied is terminal — the entire proposal is denied.
-	// Once set to Denied, it cannot be changed.
+	// Denying any stage terminates the entire proposal, even if
+	// earlier stages were already approved. Once set to Denied,
+	// it cannot be changed.
 	// +optional
 	Decision ApprovalDecision `json:"decision,omitempty"`
 
@@ -149,11 +150,11 @@ type ApprovalStage struct {
 // ProposalApprovalSpec defines the desired state of ProposalApproval.
 //
 // spec.stages is append-only: once a stage is added, it cannot be removed.
-// Once denied is set to true on a stage, it cannot be unset.
+// Decisions once set cannot be changed. maxAttempts once set cannot be reduced.
 //
 // +kubebuilder:validation:XValidation:rule="oldSelf.stages.all(old, self.stages.exists(s, s.type == old.type))",message="stages are append-only: existing stages cannot be removed"
-// +kubebuilder:validation:XValidation:rule="oldSelf.stages.all(old, !(has(old.decision) && old.decision == 'Denied') || self.stages.exists(s, s.type == old.type && has(s.decision) && s.decision == 'Denied'))",message="decision cannot be changed once set to Denied"
-// +kubebuilder:validation:XValidation:rule="oldSelf.stages.all(old, old.type != 'Execution' || !has(old.execution) || !has(old.execution.maxAttempts) || old.execution.maxAttempts == 0 || self.stages.exists(s, s.type == 'Execution' && has(s.execution) && has(s.execution.maxAttempts) && s.execution.maxAttempts >= old.execution.maxAttempts))",message="execution maxAttempts cannot be reduced once set"
+// +kubebuilder:validation:XValidation:rule="oldSelf.stages.all(old, !(has(old.decision) && old.decision == 'Denied') || self.stages.exists(s, s.type == old.type && has(s.decision) && s.decision == 'Denied'))",message="decisions once set cannot be changed"
+// +kubebuilder:validation:XValidation:rule="oldSelf.stages.all(old, old.type != 'Execution' || !has(old.execution) || !has(old.execution.maxAttempts) || old.execution.maxAttempts == 0 || self.stages.exists(s, s.type == 'Execution' && has(s.execution) && has(s.execution.maxAttempts) && s.execution.maxAttempts == old.execution.maxAttempts))",message="maxAttempts once set cannot be changed"
 // +kubebuilder:validation:MinProperties=1
 type ProposalApprovalSpec struct {
 	// stages lists the approved (or denied) workflow steps. Each entry is

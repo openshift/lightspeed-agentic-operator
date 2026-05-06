@@ -84,9 +84,7 @@ func newTestSandboxAgentCallerWithProposal(sandbox *mockSandboxProvider, httpCli
 }
 
 func testSandboxProposal() *agenticv1alpha1.Proposal {
-	p := testProposal()
-	p.Status.Attempts = 1
-	return p
+	return testProposal()
 }
 
 func testSandboxStep() resolvedStep {
@@ -263,7 +261,6 @@ func TestSandboxAgentCaller_ContextPropagation(t *testing.T) {
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
 
-	attempt := int32(2)
 	proposal := &agenticv1alpha1.Proposal{
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.ProposalSpec{
@@ -275,7 +272,6 @@ func TestSandboxAgentCaller_ContextPropagation(t *testing.T) {
 			Verification:     agenticv1alpha1.ProposalStep{Agent: "default"},
 		},
 		Status: agenticv1alpha1.ProposalStatus{
-			Attempts: attempt,
 			Steps: agenticv1alpha1.StepsStatus{
 				Execution: agenticv1alpha1.ExecutionStepStatus{
 					Results: []agenticv1alpha1.StepResultRef{
@@ -293,9 +289,6 @@ func TestSandboxAgentCaller_ContextPropagation(t *testing.T) {
 	}
 	if len(httpClient.lastCtx.TargetNamespaces) != 2 {
 		t.Errorf("targetNamespaces count = %d, want 2", len(httpClient.lastCtx.TargetNamespaces))
-	}
-	if httpClient.lastCtx.Attempt != 2 {
-		t.Errorf("attempt = %d, want 2", httpClient.lastCtx.Attempt)
 	}
 	if len(httpClient.lastCtx.PreviousAttempts) != 1 {
 		t.Fatalf("previousAttempts count = %d, want 1", len(httpClient.lastCtx.PreviousAttempts))

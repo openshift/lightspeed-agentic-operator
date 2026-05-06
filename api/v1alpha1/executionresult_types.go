@@ -65,16 +65,11 @@ type ExecutionResultSpec struct {
 	// +kubebuilder:validation:MaxLength=253
 	ProposalName string `json:"proposalName,omitempty"`
 
-	// attempt is the 1-based overall attempt number.
-	// +required
-	// +kubebuilder:validation:Minimum=1
-	Attempt int32 `json:"attempt,omitempty"`
-
 	// retryIndex is the 0-based retry index within the current analysis.
 	// First execution has retryIndex 0, first retry has retryIndex 1, etc.
 	// +required
 	// +kubebuilder:validation:Minimum=0
-	// +kubebuilder:validation:Maximum=10
+	// +kubebuilder:validation:Maximum=2
 	RetryIndex *int32 `json:"retryIndex,omitempty"`
 }
 
@@ -82,7 +77,6 @@ type ExecutionResultSpec struct {
 // +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Proposal",type=string,JSONPath=`.spec.proposalName`
-// +kubebuilder:printcolumn:name="Attempt",type=integer,JSONPath=`.spec.attempt`
 // +kubebuilder:printcolumn:name="Retry",type=integer,JSONPath=`.spec.retryIndex`
 // +kubebuilder:printcolumn:name="Outcome",type=string,JSONPath=`.status.conditions[?(@.type=="Completed")].reason`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

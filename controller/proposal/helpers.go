@@ -90,10 +90,11 @@ func (r *ProposalReconciler) failStep(ctx context.Context, log logr.Logger, prop
 	}
 
 	meta.SetStatusCondition(&proposal.Status.Conditions, metav1.Condition{
-		Type:    conditionType,
-		Status:  metav1.ConditionFalse,
-		Reason:  reasonFailed,
-		Message: err.Error(),
+		Type:               conditionType,
+		Status:             metav1.ConditionFalse,
+		Reason:             reasonFailed,
+		Message:            err.Error(),
+		ObservedGeneration: proposal.Generation,
 	})
 	if statusErr := r.statusPatch(ctx, proposal, base); statusErr != nil {
 		log.Error(statusErr, "failed to patch status after step failure")
@@ -122,10 +123,11 @@ func isTerminal(phase agenticv1alpha1.ProposalPhase) bool {
 
 func setVerificationSkipped(proposal *agenticv1alpha1.Proposal) {
 	meta.SetStatusCondition(&proposal.Status.Conditions, metav1.Condition{
-		Type:    agenticv1alpha1.ProposalConditionVerified,
-		Status:  metav1.ConditionTrue,
-		Reason:  reasonSkipped,
-		Message: "Verification step not configured in workflow",
+		Type:               agenticv1alpha1.ProposalConditionVerified,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonSkipped,
+		Message:            "Verification step not configured in workflow",
+		ObservedGeneration: proposal.Generation,
 	})
 }
 
@@ -175,7 +177,6 @@ type escalationData struct {
 	Name                string
 	Namespace           string
 	Request             string
-	AttemptCount        int32
 	AnalysisResults     []agenticv1alpha1.StepResultRef
 	ExecutionResults    []agenticv1alpha1.StepResultRef
 	VerificationResults []agenticv1alpha1.StepResultRef
@@ -186,7 +187,6 @@ func buildEscalationRequest(proposal *agenticv1alpha1.Proposal) string {
 		Name:                proposal.Name,
 		Namespace:           proposal.Namespace,
 		Request:             proposal.Spec.Request,
-		AttemptCount:        proposal.Status.Attempts,
 		AnalysisResults:     proposal.Status.Steps.Analysis.Results,
 		ExecutionResults:    proposal.Status.Steps.Execution.Results,
 		VerificationResults: proposal.Status.Steps.Verification.Results,
@@ -198,7 +198,11 @@ func needsRevision(proposal *agenticv1alpha1.Proposal) bool {
 	if proposal.Spec.RevisionFeedback == "" {
 		return false
 	}
-	return proposal.Generation > proposal.Status.Steps.Analysis.ObservedGeneration
+	analyzed := meta.FindStatusCondition(proposal.Status.Conditions, agenticv1alpha1.ProposalConditionAnalyzed)
+	if analyzed == nil {
+		return false
+	}
+	return proposal.Generation > analyzed.ObservedGeneration
 }
 
 type revisionData struct {

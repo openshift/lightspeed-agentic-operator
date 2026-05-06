@@ -31,14 +31,15 @@ func TestNeedsRevision(t *testing.T) {
 				Spec: agenticv1alpha1.ProposalSpec{
 					RevisionFeedback: tt.feedback,
 				},
-				Status: agenticv1alpha1.ProposalStatus{
-					Attempts: 1,
-					Steps: agenticv1alpha1.StepsStatus{
-						Analysis: agenticv1alpha1.AnalysisStepStatus{
-							ObservedGeneration: tt.observedGeneration,
-						},
-					},
-				},
+				Status: agenticv1alpha1.ProposalStatus{},
+			}
+			if tt.observedGeneration > 0 {
+				proposal.Status.Conditions = []metav1.Condition{{
+					Type:               agenticv1alpha1.ProposalConditionAnalyzed,
+					Status:             metav1.ConditionTrue,
+					Reason:             "Complete",
+					ObservedGeneration: tt.observedGeneration,
+				}}
 			}
 			if got := needsRevision(proposal); got != tt.want {
 				t.Errorf("needsRevision() = %v, want %v", got, tt.want)

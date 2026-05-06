@@ -4,8 +4,6 @@ Namespace: {{.Namespace}}
 Original request:
 {{.Request}}
 
-This proposal failed after {{.AttemptCount}} attempt(s).
-
 Step results (use `oc get <kind> <name> -n {{.Namespace}} -o yaml` to inspect):
 {{- range .AnalysisResults}}
   - AnalysisResult: {{.Name}} (success={{.Success}})
