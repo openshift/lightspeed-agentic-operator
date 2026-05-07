@@ -1,0 +1,21 @@
+Escalation for proposal: {{.Name}}
+Namespace: {{.Namespace}}
+
+Original request:
+{{.Request}}
+
+Step results (use `oc get <kind> <name> -n {{.Namespace}} -o yaml` to inspect):
+{{- range .AnalysisResults}}
+  - AnalysisResult: {{.Name}} (success={{.Success}})
+{{- end}}
+{{- range .ExecutionResults}}
+  - ExecutionResult: {{.Name}} (success={{.Success}})
+{{- end}}
+{{- range .VerificationResults}}
+  - VerificationResult: {{.Name}} (success={{.Success}})
+{{- end}}
+
+Review the failed step results, diagnose why remediation did not succeed,
+and produce a structured escalation summary. Your output should contain:
+- A summary of what was attempted and why it failed
+- Recommended next steps for a human operator or support team

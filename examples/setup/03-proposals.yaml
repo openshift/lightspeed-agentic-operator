@@ -1,0 +1,104 @@
+# Example proposals — the actual units of work.
+---
+# Remediation proposal (full lifecycle)
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: fix-crashloop
+  namespace: openshift-lightspeed
+spec:
+  request: "Pod api-server-xyz is crash looping in production namespace"
+  targetNamespaces:
+    - production
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+    requiredSecrets:
+      - name: github-token
+        description: "GitHub API token for repository access"
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: GH_TOKEN
+  analysis:
+    agent: smart
+  execution:
+    agent: default
+  verification:
+    agent: fast
+---
+# Assisted proposal (execution skipped, user applies manually, then verify)
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: assisted-fix
+  namespace: openshift-lightspeed
+spec:
+  request: "High memory usage detected in staging — recommend resource limit changes"
+  targetNamespaces:
+    - staging
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
+  verification:
+    agent: fast
+---
+# Advisory-only
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: one-off-advisory
+  namespace: openshift-lightspeed
+spec:
+  request: "Investigate intermittent 503 errors on the api-gateway service"
+  targetNamespaces:
+    - production
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
+---
+# Fully inline — analysis only (one-off investigation)
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: one-off-investigation
+  namespace: openshift-lightspeed
+spec:
+  request: "Investigate why pod foo is crashlooping"
+  targetNamespaces:
+    - production
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
+---
+# Fully inline — full pipeline (analyze + execute + verify)
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: inline-full-remediation
+  namespace: openshift-lightspeed
+spec:
+  request: "Fix OOM kills in the payments service"
+  targetNamespaces:
+    - production
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+    requiredSecrets:
+      - name: github-token
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: GH_TOKEN
+  analysis:
+    agent: smart
+  execution:
+    agent: default
+  verification:
+    agent: fast

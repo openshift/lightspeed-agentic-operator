@@ -1,0 +1,31 @@
+# Demo: MCP server integration with the agent sandbox flow.
+# Creates a proposal that uses MCP tools to diagnose cluster state.
+#
+# Note: MCP server config is not shown in this example as mcpServers
+# have been dropped from the tools spec. MCP connectivity is configured
+# at the sandbox level.
+#
+# Prerequisites:
+#   helm install kubernetes-mcp-server ./charts/kubernetes-mcp-server \
+#     --namespace openshift-lightspeed --set openshift=true \
+#     --set rbac.create=true --set ingress.enabled=false
+---
+# Inline proposal (no template) for MCP demo
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: mcp-demo-cluster-health
+  namespace: openshift-lightspeed
+spec:
+  request: |
+    Using ONLY the MCP tools (mcp__openshift__*), NOT oc or kubectl:
+    1. List all nodes and report their status
+    2. List pods in the openshift-lightspeed namespace
+    3. Summarize what you found
+  targetNamespaces:
+    - openshift-lightspeed
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart

@@ -1,0 +1,22 @@
+# ApprovalPolicy — cluster-scoped singleton that configures default approval
+# behavior for proposal workflow steps.
+#
+# Each step has a built-in approval gate. The step does not run until approval
+# is present — either auto-approved via this policy or explicitly approved by
+# the user on the ProposalApproval resource.
+#
+# If no ApprovalPolicy exists, all steps default to Manual.
+---
+apiVersion: agentic.openshift.io/v1alpha1
+kind: ApprovalPolicy
+metadata:
+  name: cluster
+spec:
+  maxAttempts: 3
+  stages:
+    - name: Analysis
+      approval: Manual
+    - name: Execution
+      approval: Manual
+    - name: Verification
+      approval: Manual

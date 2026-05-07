@@ -1,0 +1,125 @@
+# AlertManager adapter — example proposals and demo workload.
+#
+# When Prometheus fires an alert, the AlertManager adapter creates a Proposal
+# with inline steps and skills.
+#
+# Includes a JVM OOMKill demo that triggers a CrashLoopBackOff alert.
+#
+# Requires: LLMProvider + Agent from 00/01
+---
+# AlertManager remediation
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: alert-high-cpu-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: alertmanager
+spec:
+  request: |
+    AlertManager alert fired: HighCPUUsage (critical)
+    Pod api-server in namespace production is using 95% CPU for the last 15 minutes.
+    Labels: severity=critical, namespace=production, pod=api-server
+  targetNamespaces:
+    - production
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
+  execution:
+    agent: default
+  verification:
+    agent: fast
+---
+# AlertManager advisory
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: alert-disk-warning-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: alertmanager
+spec:
+  request: |
+    AlertManager alert fired: DiskSpaceWarning (warning)
+    Node worker-3 disk usage at 85%.
+    Labels: severity=warning, node=worker-3
+  targetNamespaces:
+    - openshift-lightspeed
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
+
+---
+# === Demo workload and PrometheusRule ===
+
+# PrometheusRule: fires KubePodCrashLooping after 1 minute (fast for demos)
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lightspeed-demo-alerts
+  namespace: openshift-lightspeed
+spec:
+  groups:
+  - name: lightspeed-demo
+    rules:
+    - alert: KubePodCrashLooping
+      annotations:
+        description: >-
+          Pod {{ $labels.namespace }}/{{ $labels.pod }} ({{ $labels.container }})
+          is in a CrashLoopBackOff state and has restarted {{ $value }} times
+          in the last 5 minutes.
+        summary: Pod is crash-looping.
+        runbook_url: https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubepodcrashlooping
+      expr: |
+        rate(kube_pod_container_status_restarts_total{namespace="lightspeed-demo"}[5m]) * 60 * 5 > 0
+      for: 1m
+      labels:
+        severity: warning
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: lightspeed-demo
+---
+# JVM OOMKill demo — container memory limit (256Mi) is too low for the JVM
+# footprint (256MB Xms + metaspace + threads ≈ 450MB). The JVM is OOMKilled on
+# startup. The app itself only needs 200MB heap — the fix is to increase the
+# container limit to 768Mi so the JVM fits. After the fix, the app starts and
+# prints "Service ready."
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jvm-oomkill-demo
+  namespace: lightspeed-demo
+  labels:
+    app: jvm-oomkill-demo
+  annotations:
+    description: "Demo app: JVM OOMKill due to container memory limit < JVM heap size"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jvm-oomkill-demo
+  template:
+    metadata:
+      labels:
+        app: jvm-oomkill-demo
+    spec:
+      containers:
+      - name: jvm
+        image: registry.access.redhat.com/ubi9/openjdk-21:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo 'public class App { public static void main(String[] a) throws Exception { System.out.println("Starting JVM service..."); byte[][] cache = new byte[200][]; for (int i = 0; i < 200; i++) { cache[i] = new byte[1024*1024]; } System.out.println("Cache loaded: 200MB. Service ready."); Thread.sleep(Long.MAX_VALUE); }}' > /tmp/App.java &&
+          java -Xms256m -Xmx512m /tmp/App.java
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 256Mi

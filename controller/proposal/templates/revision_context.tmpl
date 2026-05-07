@@ -1,0 +1,12 @@
+This is a revised analysis for proposal "{{.ProposalName}}" in namespace "{{.Namespace}}" (generation {{.Generation}}).
+{{- if .Feedback}}
+
+## User Feedback
+
+{{.Feedback}}
+{{- end}}
+
+Review the current analysis options and the user's feedback, then produce updated remediation
+options that address the user's request.
+If you disagree with the user's suggestion, return multiple options: one following their request
+and one with your recommendation, with clear explanations and appropriate risk/confidence levels.

@@ -1,0 +1,139 @@
+# ACS (Red Hat Advanced Cluster Security) proposals.
+#
+# When RHACS detects a policy violation (vulnerable image, misconfiguration,
+# runtime anomaly), the ACS adapter creates a Proposal with inline steps.
+# Tools (skills, secrets) are specified inline on each Proposal.
+#
+# Requires: LLMProvider + Agent from 00/01
+---
+# ACS remediation — full pipeline
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: acs-cve-nginx-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: acs
+    agentic.openshift.io/policy: fixable-cve-critical
+spec:
+  request: |
+    ACS policy violation: Fixable CVSS >= 7 (severity: CRITICAL_SEVERITY)
+    Policy description: Alert on deployments with fixable vulnerabilities with a CVSS of at least 7
+    Lifecycle stage: DEPLOY
+    Affected deployment: staging/nginx-frontend
+    Affected images: nginx:1.21
+    Violations:
+      - CVE-2023-44487 (CVSS 7.5) in nginx:1.21 — HTTP/2 rapid reset attack
+      - CVE-2024-24790 (CVSS 9.8) in nginx:1.21 — path traversal
+  targetNamespaces:
+    - staging
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+    requiredSecrets:
+      - name: acs-api-token
+        description: "ACS Central API token for querying violations"
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: ACS_API_TOKEN
+  analysis:
+    agent: smart
+  execution:
+    agent: default
+  verification:
+    agent: fast
+---
+# ACS assisted — analyze + verify, user applies changes via git
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: acs-cve-nginx-assisted-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: acs
+    agentic.openshift.io/policy: fixable-cve-critical
+spec:
+  request: |
+    ACS policy violation: Fixable CVSS >= 7 (severity: CRITICAL_SEVERITY)
+    Affected deployment: production/nginx-frontend
+    Affected images: nginx:1.21
+    This namespace is managed by ArgoCD. Advise git repository changes only.
+  targetNamespaces:
+    - production
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+    requiredSecrets:
+      - name: acs-api-token
+        description: "ACS Central API token for querying violations"
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: ACS_API_TOKEN
+  analysis:
+    agent: smart
+  verification:
+    agent: fast
+---
+# ACS advisory — analysis only
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: acs-cve-nginx-advisory-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: acs
+    agentic.openshift.io/policy: fixable-cve-critical
+spec:
+  request: |
+    ACS policy violation: Fixable CVSS >= 7 (severity: CRITICAL_SEVERITY)
+    Affected deployment: staging/nginx-frontend
+    Affected images: nginx:1.21
+  targetNamespaces:
+    - staging
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+    requiredSecrets:
+      - name: acs-api-token
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: ACS_API_TOKEN
+  analysis:
+    agent: smart
+---
+# ACS per-step tools — different skills paths for analysis vs verification
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: acs-cve-per-step-tools-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: acs
+spec:
+  request: "Complex ACS violation requiring specialized analysis and verification skills"
+  targetNamespaces:
+    - staging
+  tools:
+    requiredSecrets:
+      - name: acs-api-token
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: ACS_API_TOKEN
+  analysis:
+    agent: smart
+    tools:
+      skills:
+        - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+          paths: [/skills/acs-remediation, /skills/acs-compliance]
+  execution:
+    agent: default
+  verification:
+    agent: fast
+    tools:
+      skills:
+        - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+          paths: [/skills/acs-compliance]

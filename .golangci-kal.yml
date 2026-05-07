@@ -1,0 +1,59 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - kubeapilinter
+
+  settings:
+    custom:
+      kubeapilinter:
+        type: module
+        description: Kube API Linter lints Kube like APIs based on API conventions and best practices.
+        settings:
+          linters:
+            enable:
+              - maxlength
+              - minlength
+              - nobools
+              - preferredmarkers
+              - statussubresource
+            disable:
+              - statusoptional # Legacy, not recommended
+              - nonpointerstructs # Intended for native types, not CRD types
+          lintersConfig:
+            conditions:
+              isFirstField: Warn
+              usePatchStrategy: Ignore
+              useProtobuf: Ignore
+            optionalfields:
+              pointers:
+                preference: WhenRequired
+                policy: SuggestFix
+              omitEmpty:
+                policy: SuggestFix
+              omitzero:
+                policy: SuggestFix
+            requiredfields:
+              pointers:
+                policy: SuggestFix
+              omitempty:
+                policy: SuggestFix
+              omitzero:
+                policy: SuggestFix
+            preferredmarkers:
+              markers:
+                - preferredIdentifier: "kubebuilder:validation:XValidation"
+                  equivalentIdentifiers:
+                    - identifier: "kubebuilder:validation:Pattern"
+            noreferences:
+              policy: NoReferences
+
+  exclusions:
+    rules:
+      - linters:
+          - kubeapilinter
+        path-except: "api/"
+
+issues:
+  max-issues-per-linter: 1000

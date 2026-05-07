@@ -1,0 +1,57 @@
+# OSSM (OpenShift Service Mesh) proposals.
+#
+# When Istio metrics detect service mesh issues (high error rates, latency
+# spikes, mTLS misconfigurations), the AlertManager adapter creates a
+# Proposal with inline steps.
+#
+# Requires: LLMProvider + Agent from 00/01
+---
+# OSSM remediation
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: ossm-high-error-rate-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: alertmanager
+    agentic.openshift.io/component: ossm
+spec:
+  request: |
+    AlertManager alert fired: IstioHighErrorRate (critical)
+    Service payment-service in namespace istio-system has 15% error rate
+    (5xx responses) over the last 10 minutes.
+    Source workload: checkout-frontend
+    Labels: severity=critical, destination_service=payment-service.istio-system.svc.cluster.local
+  targetNamespaces:
+    - istio-system
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
+  execution:
+    agent: default
+  verification:
+    agent: fast
+---
+# OSSM advisory
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: ossm-mtls-misconfigured-example
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: alertmanager
+    agentic.openshift.io/component: ossm
+spec:
+  request: |
+    Istio mTLS misconfiguration detected in namespace bookinfo.
+    PeerAuthentication is set to STRICT but DestinationRule uses
+    DISABLE for reviews service. Traffic may be blocked.
+  targetNamespaces:
+    - bookinfo
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+  analysis:
+    agent: smart
