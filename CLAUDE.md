@@ -2,6 +2,8 @@
 
 Kubernetes controller for the agentic proposal workflow. CRDs: Proposal, ProposalApproval, Agent, LLMProvider, ApprovalPolicy under `agentic.openshift.io/v1alpha1`.
 
+For agent workflow norms (assumptions, minimal scope, verification habits), see `agent.md`.
+
 ## Module Structure
 
 Two Go modules in this repo:
