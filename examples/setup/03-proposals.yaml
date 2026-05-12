@@ -12,7 +12,10 @@ spec:
     - production
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
     requiredSecrets:
       - name: github-token
         description: "GitHub API token for repository access"
@@ -39,7 +42,10 @@ spec:
     - staging
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
   analysis:
     agent: smart
   verification:
@@ -57,7 +63,10 @@ spec:
     - production
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
   analysis:
     agent: smart
 ---
@@ -73,7 +82,10 @@ spec:
     - production
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
   analysis:
     agent: smart
 ---
@@ -89,7 +101,10 @@ spec:
     - production
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
     requiredSecrets:
       - name: github-token
         mountAs:

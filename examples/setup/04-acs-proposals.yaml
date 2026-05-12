@@ -29,7 +29,10 @@ spec:
     - staging
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
     requiredSecrets:
       - name: acs-api-token
         description: "ACS Central API token for querying violations"
@@ -63,7 +66,10 @@ spec:
     - production
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
     requiredSecrets:
       - name: acs-api-token
         description: "ACS Central API token for querying violations"
@@ -94,7 +100,10 @@ spec:
     - staging
   tools:
     skills:
-      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths:
+          - /skills/find-token
     requiredSecrets:
       - name: acs-api-token
         mountAs:
@@ -127,7 +136,8 @@ spec:
     agent: smart
     tools:
       skills:
-        - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+        - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
           paths: [/skills/acs-remediation, /skills/acs-compliance]
   execution:
     agent: default
@@ -135,5 +145,6 @@ spec:
     agent: fast
     tools:
       skills:
-        - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+        - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
           paths: [/skills/acs-compliance]

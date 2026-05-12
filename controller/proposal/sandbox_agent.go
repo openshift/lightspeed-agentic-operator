@@ -13,7 +13,10 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
-const defaultSandboxTimeout = 5 * time.Minute
+const (
+	defaultSandboxTimeout  = 5 * time.Minute
+	defaultBaseTemplateName = "lightspeed-agent"
+)
 
 type analysisResponse struct {
 	Success bool                                `json:"success"`
@@ -35,27 +38,25 @@ type verificationResponse struct {
 // SandboxAgentCaller implements AgentCaller by claiming a sandbox pod,
 // calling the agent HTTP service, and releasing the sandbox on completion.
 type SandboxAgentCaller struct {
-	Sandbox          SandboxProvider
-	K8sClient        client.Client
-	ClientFactory    func(endpoint string) AgentHTTPClientInterface
-	Namespace        string
-	BaseTemplateName string
-	Timeout          time.Duration
+	Sandbox       SandboxProvider
+	K8sClient     client.Client
+	ClientFactory func(endpoint string) AgentHTTPClientInterface
+	Namespace     string
+	Timeout       time.Duration
 }
 
 func NewSandboxAgentCaller(
 	sandbox SandboxProvider,
 	k8sClient client.Client,
 	clientFactory func(endpoint string) AgentHTTPClientInterface,
-	namespace, baseTemplateName string,
+	namespace string,
 ) *SandboxAgentCaller {
 	return &SandboxAgentCaller{
-		Sandbox:          sandbox,
-		K8sClient:        k8sClient,
-		ClientFactory:    clientFactory,
-		Namespace:        namespace,
-		BaseTemplateName: baseTemplateName,
-		Timeout:          defaultSandboxTimeout,
+		Sandbox:       sandbox,
+		K8sClient:     k8sClient,
+		ClientFactory: clientFactory,
+		Namespace:     namespace,
+		Timeout:       defaultSandboxTimeout,
 	}
 }
 
@@ -164,7 +165,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	query string,
 	agentCtx *agentContext,
 ) (json.RawMessage, error) {
-	templateName, err := EnsureAgentTemplate(ctx, s.K8sClient, s.BaseTemplateName, s.Namespace, stepName, step.Agent, step.LLM, step.Tools)
+	templateName, err := EnsureAgentTemplate(ctx, s.K8sClient, defaultBaseTemplateName, s.Namespace, stepName, step.Agent, step.LLM, step.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("ensure agent template: %w", err)
 	}

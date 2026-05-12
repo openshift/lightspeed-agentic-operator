@@ -4,6 +4,8 @@ import (
 	"flag"
 	"os"
 
+	consolev1 "github.com/openshift/api/console/v1"
+	openshiftv1 "github.com/openshift/api/operator/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -13,7 +15,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
-	"github.com/openshift/lightspeed-agentic-operator/controller/proposal"
+	agenticcontroller "github.com/openshift/lightspeed-agentic-operator/controller"
 )
 
 var scheme = runtime.NewScheme()
@@ -21,20 +23,24 @@ var scheme = runtime.NewScheme()
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(agenticv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(consolev1.AddToScheme(scheme))
+	utilruntime.Must(openshiftv1.AddToScheme(scheme))
 }
 
 func main() {
 	var (
-		metricsAddr  string
-		healthAddr   string
-		namespace    string
-		templateName string
+		metricsAddr         string
+		healthAddr          string
+		namespace           string
+		agenticConsoleImage string
+		agenticSandboxImage string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
 	flag.StringVar(&namespace, "namespace", "", "The namespace where the operator runs (required).")
-	flag.StringVar(&templateName, "template-name", "lightspeed-agent", "Default SandboxTemplate name.")
+	flag.StringVar(&agenticConsoleImage, "agentic-console-image", "", "The image of the agentic console plugin container.")
+	flag.StringVar(&agenticSandboxImage, "agentic-sandbox-image", "", "The image of the agentic sandbox container.")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -59,24 +65,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	sandboxMgr := proposal.NewSandboxManager(mgr.GetClient(), namespace)
-
-	agentCaller := proposal.NewSandboxAgentCaller(
-		sandboxMgr,
-		mgr.GetClient(),
-		proposal.NewAgentHTTPClient,
-		namespace,
-		templateName,
-	)
-
-	reconciler := &proposal.ProposalReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Proposal"),
-		Agent:  agentCaller,
-	}
-
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		log.Error(err, "unable to create controller", "controller", "Proposal")
+	if err := agenticcontroller.Setup(mgr, agenticcontroller.Options{
+		Namespace:           namespace,
+		AgenticConsoleImage: agenticConsoleImage,
+		AgenticSandboxImage: agenticSandboxImage,
+	}); err != nil {
+		log.Error(err, "unable to set up agentic controllers")
 		os.Exit(1)
 	}
 
@@ -89,7 +83,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("starting manager", "namespace", namespace, "template", templateName)
+	log.Info("starting manager", "namespace", namespace)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "problem running manager")
 		os.Exit(1)

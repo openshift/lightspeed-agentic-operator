@@ -69,8 +69,8 @@ func TestEnsureAgenticConsole_CreatesAllResources(t *testing.T) {
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: pluginName, Namespace: cfg.Namespace}, &dep); err != nil {
 		t.Errorf("Deployment not created: %v", err)
 	}
-	if dep.Spec.Template.Spec.Containers[0].Image != cfg.Image {
-		t.Errorf("Deployment image = %q, want %q", dep.Spec.Template.Spec.Containers[0].Image, cfg.Image)
+	if dep.Spec.Template.Spec.Containers[0].Image != "quay.io/test/agentic-console:latest" {
+		t.Errorf("Deployment image = %q, want %q", dep.Spec.Template.Spec.Containers[0].Image, "quay.io/test/agentic-console:latest")
 	}
 
 	var plugin consolev1.ConsolePlugin

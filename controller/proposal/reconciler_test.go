@@ -210,7 +210,7 @@ func fakeBaseTemplate() *unstructured.Unstructured {
 			"apiVersion": "extensions.agents.x-k8s.io/v1alpha1",
 			"kind":       "SandboxTemplate",
 			"metadata": map[string]any{
-				"name":      "test-template",
+				"name":      defaultBaseTemplateName,
 				"namespace": "test-ns",
 			},
 			"spec": map[string]any{
@@ -253,9 +253,8 @@ func newMockSandboxAgent(analysisJSON, executionJSON, verificationJSON string) (
 			httpClient.response = &agentRunResponse{Response: json.RawMessage(resp)}
 			return httpClient
 		},
-		Namespace:        "test-ns",
-		BaseTemplateName: "test-template",
-		Timeout:          5 * time.Minute,
+		Namespace: "test-ns",
+		Timeout:   5 * time.Minute,
 	}
 	return caller, sandbox
 }

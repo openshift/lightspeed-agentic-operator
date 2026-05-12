@@ -62,6 +62,9 @@ func (r *ProposalReconciler) handleAnalysis(
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
+	if !analysisResult.Success {
+		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, fmt.Errorf("analysis agent reported failure"))
+	}
 	base = proposal.DeepCopy()
 	completedAt := metav1.Now()
 	startTime := conditionTime(proposal.Status.Conditions, agenticv1alpha1.ProposalConditionAnalyzed)
@@ -124,6 +127,9 @@ func (r *ProposalReconciler) handleRevision(
 	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
+	}
+	if !analysisResult.Success {
+		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, fmt.Errorf("analysis agent reported failure"))
 	}
 
 	base = proposal.DeepCopy()

@@ -163,10 +163,10 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // SetupWithManager sets up the controller with the Manager.
 func (r *ProposalReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	maxConcurrent := int(agenticv1alpha1.DefaultMaxConcurrentProposals)
-	var policy agenticv1alpha1.ApprovalPolicy
-	if err := mgr.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: "cluster"}, &policy); err == nil {
-		if policy.Spec.MaxConcurrentProposals > 0 {
-			maxConcurrent = int(policy.Spec.MaxConcurrentProposals)
+	var ap agenticv1alpha1.ApprovalPolicy
+	if err := mgr.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: "cluster"}, &ap); err == nil {
+		if ap.Spec.MaxConcurrentProposals > 0 {
+			maxConcurrent = int(ap.Spec.MaxConcurrentProposals)
 		}
 	}
 	return ctrl.NewControllerManagedBy(mgr).
