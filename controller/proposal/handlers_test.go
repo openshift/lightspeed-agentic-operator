@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -721,7 +722,7 @@ func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent}
+	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, OperatorNamespace: "openshift-lightspeed"}
 
 	// Pending → Proposed (analysis complete)
 	reconcileOnce(r, "fix-crash")
@@ -753,6 +754,10 @@ func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &binding); err != nil {
 		t.Fatalf("execution RoleBinding not created: %v", err)
 	}
+	// RoleBinding subject must reference the SA in the operator namespace, not the proposal namespace
+	if binding.Subjects[0].Namespace != "openshift-lightspeed" {
+		t.Fatalf("expected RoleBinding subject namespace 'openshift-lightspeed', got %q", binding.Subjects[0].Namespace)
+	}
 
 	// Verify cluster-scoped ClusterRole+ClusterRoleBinding were created
 	crName := clusterRoleName("fix-crash")
@@ -780,6 +785,102 @@ func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.ProposalPhaseCompleted {
 		t.Fatalf("expected Completed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
+}
+
+func TestReconcile_ExecutionRBACUsesOperatorNamespace_NotProposalNamespace(t *testing.T) {
+	agent := newTestAgentCaller()
+	agent.analyzeResult = &AnalysisOutput{
+		Success: true,
+		Options: []agenticv1alpha1.RemediationOption{{
+			Title: "Increase memory",
+			Diagnosis: agenticv1alpha1.DiagnosisResult{
+				Summary: "OOM", Confidence: "High", RootCause: "Low limit",
+			},
+			Proposal: agenticv1alpha1.ProposalResult{
+				Description: "Increase to 512Mi",
+				Actions:     []agenticv1alpha1.ProposedAction{{Type: "patch", Description: "Patch deploy"}},
+				Risk:        "Low",
+				Reversible:  agenticv1alpha1.ReversibilityReversible,
+			},
+			RBAC: agenticv1alpha1.RBACResult{
+				NamespaceScoped: []agenticv1alpha1.RBACRule{{
+					APIGroups:     []string{"apps"},
+					Resources:     []string{"deployments"},
+					Verbs:         []string{"get", "patch"},
+					Justification: "Patch deployment memory",
+				}},
+			},
+		}},
+	}
+
+	scheme := testScheme()
+	proposal := &agenticv1alpha1.Proposal{
+		ObjectMeta: metav1.ObjectMeta{Name: "cross-ns-test", Namespace: "user-namespace"},
+		Spec: agenticv1alpha1.ProposalSpec{
+			Request:          "Pod crashing",
+			Tools:            testTools(),
+			TargetNamespaces: []string{"target-ns"},
+			Analysis:         agenticv1alpha1.ProposalStep{Agent: "default"},
+			Execution:        agenticv1alpha1.ProposalStep{Agent: "default"},
+			Verification:     agenticv1alpha1.ProposalStep{Agent: "default"},
+		},
+	}
+
+	objs := append([]client.Object{proposal}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
+
+	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, OperatorNamespace: "openshift-lightspeed"}
+
+	// Analysis
+	r.Reconcile(context.Background(), reconcileRequest("cross-ns-test", "user-namespace"))
+	var p agenticv1alpha1.Proposal
+	fc.Get(context.Background(), types.NamespacedName{Name: "cross-ns-test", Namespace: "user-namespace"}, &p)
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.ProposalPhaseProposed {
+		t.Fatalf("expected Proposed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+
+	// Approve execution
+	var approval agenticv1alpha1.ProposalApproval
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "cross-ns-test", Namespace: "user-namespace"}, &approval); err != nil {
+		t.Fatalf("get ProposalApproval: %v", err)
+	}
+	approvalBase := approval.DeepCopy()
+	hasExec := false
+	optIdx := int32(0)
+	for i, s := range approval.Spec.Stages {
+		if s.Type == agenticv1alpha1.ApprovalStageExecution {
+			approval.Spec.Stages[i].Execution = agenticv1alpha1.ExecutionApproval{Option: &optIdx}
+			hasExec = true
+			break
+		}
+	}
+	if !hasExec {
+		approval.Spec.Stages = append(approval.Spec.Stages, agenticv1alpha1.ApprovalStage{
+			Type:      agenticv1alpha1.ApprovalStageExecution,
+			Execution: agenticv1alpha1.ExecutionApproval{Option: &optIdx},
+		})
+	}
+	if err := fc.Patch(context.Background(), &approval, client.MergeFrom(approvalBase)); err != nil {
+		t.Fatalf("approve execution: %v", err)
+	}
+
+	// Execute
+	r.Reconcile(context.Background(), reconcileRequest("cross-ns-test", "user-namespace"))
+
+	// Verify RoleBinding subject uses operator namespace, not proposal namespace
+	roleName := executionRoleName("cross-ns-test")
+	var binding rbacv1.RoleBinding
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "target-ns"}, &binding); err != nil {
+		t.Fatalf("execution RoleBinding not created in target-ns: %v", err)
+	}
+	if binding.Subjects[0].Namespace != "openshift-lightspeed" {
+		t.Fatalf("RoleBinding subject namespace should be operator namespace 'openshift-lightspeed', got %q (bug: was using proposal namespace 'user-namespace')", binding.Subjects[0].Namespace)
+	}
+}
+
+func reconcileRequest(name, namespace string) ctrl.Request {
+	return ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
 }
 
 func TestReconcile_ExecutionRBACCleanedOnFailure(t *testing.T) {

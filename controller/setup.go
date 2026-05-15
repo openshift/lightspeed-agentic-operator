@@ -28,9 +28,10 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 	)
 
 	if err := (&proposal.ProposalReconciler{
-		Client: mgr.GetClient(),
-		Log:    ctrl.Log.WithName("controllers").WithName("Proposal"),
-		Agent:  agentCaller,
+		Client:            mgr.GetClient(),
+		Log:               ctrl.Log.WithName("controllers").WithName("Proposal"),
+		Agent:             agentCaller,
+		OperatorNamespace: opts.Namespace,
 	}).SetupWithManager(mgr); err != nil {
 		return err
 	}

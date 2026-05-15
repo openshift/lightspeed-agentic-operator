@@ -21,8 +21,9 @@ import (
 // Agent must be set before calling SetupWithManager.
 type ProposalReconciler struct {
 	client.Client
-	Log   logr.Logger
-	Agent AgentCaller
+	Log                logr.Logger
+	Agent              AgentCaller
+	OperatorNamespace  string
 }
 
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=proposals,verbs=get;list;watch;create;update;patch;delete
