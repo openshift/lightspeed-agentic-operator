@@ -25,26 +25,27 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 19. **LLMProvider — discriminator**: `spec.type` MUST match exactly one embedded config: `anthropic`, `googleCloudVertex`, `openAI`, `azureOpenAI`, or `awsBedrock`; CEL enforces mutual exclusion.
 20. **LLMProvider — secrets**: Each provider’s `credentialsSecret` references a `Secret` **by name** in the operator namespace (documented on fields as the deployment namespace for the operator, e.g. OpenShift Lightspeed namespace); required secret **keys** are defined per provider type on the API field comments (e.g. API key env file key names).
 21. **LLMProvider — endpoints**: Optional URL overrides per provider; validation enforces HTTP/HTTPS URL shape. Azure requires `endpoint`; optional separate URL override field exists where defined.
-22. **ApprovalPolicy — singleton name**: CRD validation requires `metadata.name` equals `cluster`.
-23. **ApprovalPolicy — `spec.stages`**: Optional list keyed by `name` (`SandboxStep`). Each entry sets `approval` to `Automatic` or `Manual`. Stages not listed default to **Manual** per API comments.
-24. **ApprovalPolicy — `spec.maxAttempts`**: Upper bound for execution attempts (initial + retries) when verification fails; default behavior when unset is defined in controller (see `approval.md`).
-25. **ApprovalPolicy — `spec.maxConcurrentProposals`**: Caps concurrent reconciles when positive; operator falls back to a default constant when unset.
-26. **ProposalApproval — pairing**: For each `Proposal`, the controller MUST create (if missing) a same-named `ProposalApproval` in the same namespace with controller owner reference to the `Proposal`.
-27. **ProposalApproval — `spec.stages`**: Append-only map list keyed by `type` (`ApprovalStageType`). Each stage carries a discriminated union: exactly one of `analysis`, `execution`, `verification`, `escalation` MUST be present matching `type`. Optional `decision` may be `Approved` (default when omitted) or `Denied`; `Denied` is terminal per API rules.
-28. **ProposalApproval — immutability CEL**: Stages cannot be removed; decisions cannot change once set; execution `maxAttempts` cannot decrease once set.
-29. **Execution approval fields**: `spec.stages[].execution.option` selects 0-based analysis option index; `maxAttempts` caps attempts but MUST NOT exceed policy `maxAttempts`; `agent` overrides the `Proposal` step’s agent when set.
-30. **AnalysisResult**: `spec.proposalName` immutable; `status.options` holds `RemediationOption` entries; `status.sandbox` and `status.failureReason` optional; conditions use shared result condition types.
-31. **ExecutionResult**: Adds `spec.retryIndex` (bound to allowed retry range per field validation); `status.actionsTaken`, `status.verification` (inline), optional `failureReason`, `sandbox`.
-32. **VerificationResult**: `spec.retryIndex` parallels execution for the same attempt cluster; `status.checks`, `status.summary`, optional `failureReason`, `sandbox`.
-33. **EscalationResult**: `status.summary`, `status.content`, optional `failureReason`, `sandbox`; no `retryIndex`.
-34. **RemediationOption**: Cohesion rules require `diagnosis` and `proposal` to be paired when present; `components` holds schemaless JSON for adapter data shaped by `spec.analysisOutput.schema`.
-35. **RBACResult / RBACRule**: Analysis MAY request namespace-scoped and cluster-scoped rules with verb/apigroup/resource metadata and mandatory `justification`; `namespace` on rules MUST align with proposal targeting rules (validated at runtime by policy engine per field comments).
-36. **ToolsSpec**: MAY include `skills` (unique images), `mcpServers` (unique names), `requiredSecrets` (unique names). `SkillsSource.image` MUST be a valid pullspec; optional `paths` restrict mounted subtrees.
-37. **SecretRequirement**: Names a namespace-local `Secret`; `mountAs` discriminates `EnvVar` vs `FilePath` with required nested config per type.
-38. **MCPHeaderValueSource**: Discriminated by `type`; `Secret` requires nested `secret` name reference.
-39. **Result CR ownership**: Result CRs MUST declare controller `ownerReferences` to their `Proposal` for GC; naming follows operator conventions (see `sandbox-execution.md` for when they are created).
-40. **Label conventions**: Operator uses labels for proposal name, step, component, and managed template markers (exact keys are implementation-specific; behavior: selectors for GC/list, not duplicated here).
-41. **CEL immutability** (Proposal): Enforced transitions include: `request`, `targetNamespaces`, `analysisOutput`, `tools`, `analysis`, `execution`, `verification` immutability after initial set as encoded in API markers.
+22. **LLMProvider — `spec.tlsCertificate`**: Optional `ConfigMapReference` naming a ConfigMap in the operator namespace containing a PEM-encoded CA bundle under the key `ca-bundle.crt`. When set, the operator injects the CA into derived sandbox templates so all HTTPS clients trust the additional CA (see `sandbox-execution.md`). When omitted, sandbox pods use only the default system trust store.
+23. **ApprovalPolicy — singleton name**: CRD validation requires `metadata.name` equals `cluster`.
+24. **ApprovalPolicy — `spec.stages`**: Optional list keyed by `name` (`SandboxStep`). Each entry sets `approval` to `Automatic` or `Manual`. Stages not listed default to **Manual** per API comments.
+25. **ApprovalPolicy — `spec.maxAttempts`**: Upper bound for execution attempts (initial + retries) when verification fails; default behavior when unset is defined in controller (see `approval.md`).
+26. **ApprovalPolicy — `spec.maxConcurrentProposals`**: Caps concurrent reconciles when positive; operator falls back to a default constant when unset.
+27. **ProposalApproval — pairing**: For each `Proposal`, the controller MUST create (if missing) a same-named `ProposalApproval` in the same namespace with controller owner reference to the `Proposal`.
+28. **ProposalApproval — `spec.stages`**: Append-only map list keyed by `type` (`ApprovalStageType`). Each stage carries a discriminated union: exactly one of `analysis`, `execution`, `verification`, `escalation` MUST be present matching `type`. Optional `decision` may be `Approved` (default when omitted) or `Denied`; `Denied` is terminal per API rules.
+29. **ProposalApproval — immutability CEL**: Stages cannot be removed; decisions cannot change once set; execution `maxAttempts` cannot decrease once set.
+30. **Execution approval fields**: `spec.stages[].execution.option` selects 0-based analysis option index; `maxAttempts` caps attempts but MUST NOT exceed policy `maxAttempts`; `agent` overrides the `Proposal` step’s agent when set.
+31. **AnalysisResult**: `spec.proposalName` immutable; `status.options` holds `RemediationOption` entries; `status.sandbox` and `status.failureReason` optional; conditions use shared result condition types.
+32. **ExecutionResult**: Adds `spec.retryIndex` (bound to allowed retry range per field validation); `status.actionsTaken`, `status.verification` (inline), optional `failureReason`, `sandbox`.
+33. **VerificationResult**: `spec.retryIndex` parallels execution for the same attempt cluster; `status.checks`, `status.summary`, optional `failureReason`, `sandbox`.
+34. **EscalationResult**: `status.summary`, `status.content`, optional `failureReason`, `sandbox`; no `retryIndex`.
+35. **RemediationOption**: Cohesion rules require `diagnosis` and `proposal` to be paired when present; `components` holds schemaless JSON for adapter data shaped by `spec.analysisOutput.schema`.
+36. **RBACResult / RBACRule**: Analysis MAY request namespace-scoped and cluster-scoped rules with verb/apigroup/resource metadata and mandatory `justification`; `namespace` on rules MUST align with proposal targeting rules (validated at runtime by policy engine per field comments).
+37. **ToolsSpec**: MAY include `skills` (unique images), `mcpServers` (unique names), `requiredSecrets` (unique names). `SkillsSource.image` MUST be a valid pullspec; optional `paths` restrict mounted subtrees.
+38. **SecretRequirement**: Names a namespace-local `Secret`; `mountAs` discriminates `EnvVar` vs `FilePath` with required nested config per type.
+39. **MCPHeaderValueSource**: Discriminated by `type`; `Secret` requires nested `secret` name reference.
+40. **Result CR ownership**: Result CRs MUST declare controller `ownerReferences` to their `Proposal` for GC; naming follows operator conventions (see `sandbox-execution.md` for when they are created).
+41. **Label conventions**: Operator uses labels for proposal name, step, component, and managed template markers (exact keys are implementation-specific; behavior: selectors for GC/list, not duplicated here).
+42. **CEL immutability** (Proposal): Enforced transitions include: `request`, `targetNamespaces`, `analysisOutput`, `tools`, `analysis`, `execution`, `verification` immutability after initial set as encoded in API markers.
 
 ## Configuration Surface (by path)
 
@@ -57,7 +58,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `metadata.name`, `spec.llmProvider.name`, `spec.model`, `spec.timeouts.*`, `spec.maxTurns`, `status.conditions`
 
 ### LLMProvider
-- `metadata.name`, `spec.type`, `spec.anthropic.*`, `spec.googleCloudVertex.*`, `spec.openAI.*`, `spec.azureOpenAI.*`, `spec.awsBedrock.*`
+- `metadata.name`, `spec.type`, `spec.tlsCertificate.name`, `spec.anthropic.*`, `spec.googleCloudVertex.*`, `spec.openAI.*`, `spec.azureOpenAI.*`, `spec.awsBedrock.*`
 
 ### ApprovalPolicy
 - `metadata.name` (must be `cluster`), `spec.stages[]`, `spec.maxAttempts`, `spec.maxConcurrentProposals`
@@ -73,6 +74,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `SkillsSource`: `image`, `paths[]`
 - `SecretRequirement`: `name`, `description`, `mountAs.*`
 - `StepResultRef`: `name`, `outcome`
+- `ConfigMapReference`: `name`
 - `SandboxInfo`: `claimName`, `namespace`
 
 ## Constraints
