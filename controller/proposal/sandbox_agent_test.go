@@ -58,11 +58,11 @@ func newTestSandboxAgentCaller(sandbox *mockSandboxProvider, httpClient *mockHTT
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
 	_ = fc.Create(context.Background(), fakeBaseTemplate())
 	return &SandboxAgentCaller{
-		Sandbox:          sandbox,
-		K8sClient:        fc,
-		ClientFactory:    func(_ string) AgentHTTPClientInterface { return httpClient },
-		Namespace:        "test-ns",
-		Timeout:          5 * time.Minute,
+		Sandbox:       sandbox,
+		K8sClient:     fc,
+		ClientFactory: func(_ string) AgentHTTPClientInterface { return httpClient },
+		Namespace:     "test-ns",
+		Timeout:       5 * time.Minute,
 	}
 }
 
@@ -73,11 +73,11 @@ func newTestSandboxAgentCallerWithProposal(sandbox *mockSandboxProvider, httpCli
 		Build()
 	_ = fc.Create(context.Background(), fakeBaseTemplate())
 	return &SandboxAgentCaller{
-		Sandbox:          sandbox,
-		K8sClient:        fc,
-		ClientFactory:    func(_ string) AgentHTTPClientInterface { return httpClient },
-		Namespace:        "test-ns",
-		Timeout:          5 * time.Minute,
+		Sandbox:       sandbox,
+		K8sClient:     fc,
+		ClientFactory: func(_ string) AgentHTTPClientInterface { return httpClient },
+		Namespace:     "test-ns",
+		Timeout:       5 * time.Minute,
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultSandboxTimeout  = 5 * time.Minute
+	defaultSandboxTimeout   = 5 * time.Minute
 	defaultBaseTemplateName = "lightspeed-agent"
 )
 

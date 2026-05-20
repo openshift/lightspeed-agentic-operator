@@ -56,5 +56,5 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 
 - [PLANNED: OLS-2957] **Sandbox template management** UX and CRD ergonomics (base/derived lifecycle, versioning) may change operator/template coupling described in rules 2–4.
 - [PLANNED: OLS-3038] **TLS verification and network policy** for agent traffic may replace permissive internal TLS client behavior.
-- [PLANNED: OLS-3044] **Provider parity**: environment variable contract for non-Claude providers in templates MUST track sandbox image capabilities.
+- **Sandbox provider selection**: Derived templates MUST set `LIGHTSPEED_AGENT_PROVIDER` from `LLMProvider.spec.type` (`Anthropic`/`AWSBedrock` → `claude`; `OpenAI`/`AzureOpenAI` → `openai`; `GoogleCloudVertex` → routed by `googleCloudVertex.modelProvider`: `Anthropic` → `claude`, `Google` → `gemini`, `OpenAI` → `openai`). Model env var follows the provider: `ANTHROPIC_MODEL`, `GEMINI_MODEL`, or `OPENAI_MODEL`.
 - [PLANNED: OLS-2894] Support **multiple concurrent skills images** in template derivation beyond the first `skills` entry if product requires composite skill bundles.
