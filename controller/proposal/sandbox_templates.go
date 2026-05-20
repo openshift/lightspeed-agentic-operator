@@ -26,7 +26,8 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 }
 
 const (
-	agentModeEnvVar = "LIGHTSPEED_MODE"
+	agentModeEnvVar            = "LIGHTSPEED_MODE"
+	sandboxAgentProviderEnvVar = "LIGHTSPEED_AGENT_PROVIDER"
 
 	vertexCredsMountPath = "/var/secrets/google"
 	vertexCredsFileName  = "credentials.json"
@@ -245,14 +246,74 @@ func providerURL(llm *agenticv1alpha1.LLMProvider) string {
 	}
 }
 
+func vertexSandboxAgentProvider(mp agenticv1alpha1.GoogleCloudVertexModelProvider) (string, error) {
+	switch mp {
+	case agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic:
+		return "claude", nil
+	case agenticv1alpha1.GoogleCloudVertexModelProviderGoogle:
+		return "gemini", nil
+	case agenticv1alpha1.GoogleCloudVertexModelProviderOpenAI:
+		return "openai", nil
+	default:
+		return "", fmt.Errorf("unsupported googleCloudVertex.modelProvider %q", mp)
+	}
+}
+
+func sandboxAgentProviderValue(llm *agenticv1alpha1.LLMProvider) (string, error) {
+	switch llm.Spec.Type {
+	case agenticv1alpha1.LLMProviderAnthropic, agenticv1alpha1.LLMProviderAWSBedrock:
+		return "claude", nil
+	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
+		return vertexSandboxAgentProvider(llm.Spec.GoogleCloudVertex.ModelProvider)
+	case agenticv1alpha1.LLMProviderOpenAI, agenticv1alpha1.LLMProviderAzureOpenAI:
+		return "openai", nil
+	default:
+		return "", fmt.Errorf("unsupported LLM provider type %q", llm.Spec.Type)
+	}
+}
+
+func vertexModelEnvVar(mp agenticv1alpha1.GoogleCloudVertexModelProvider) string {
+	switch mp {
+	case agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic:
+		return "ANTHROPIC_MODEL"
+	case agenticv1alpha1.GoogleCloudVertexModelProviderGoogle:
+		return "GEMINI_MODEL"
+	case agenticv1alpha1.GoogleCloudVertexModelProviderOpenAI:
+		return "OPENAI_MODEL"
+	default:
+		return ""
+	}
+}
+
+func modelEnvVarName(llm *agenticv1alpha1.LLMProvider) string {
+	switch llm.Spec.Type {
+	case agenticv1alpha1.LLMProviderOpenAI, agenticv1alpha1.LLMProviderAzureOpenAI:
+		return "OPENAI_MODEL"
+	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
+		return vertexModelEnvVar(llm.Spec.GoogleCloudVertex.ModelProvider)
+	default:
+		return "ANTHROPIC_MODEL"
+	}
+}
+
 func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.LLMProvider, model string) error {
 	secretName := credentialsSecretName(llm)
 
 	if err := addEnvFromSecret(tmpl, secretName); err != nil {
 		return fmt.Errorf("add credentials envFrom: %w", err)
 	}
-	if err := setEnvVar(tmpl, "ANTHROPIC_MODEL", model); err != nil {
-		return fmt.Errorf("set ANTHROPIC_MODEL: %w", err)
+
+	providerValue, err := sandboxAgentProviderValue(llm)
+	if err != nil {
+		return err
+	}
+	if err := setEnvVar(tmpl, sandboxAgentProviderEnvVar, providerValue); err != nil {
+		return fmt.Errorf("set %s: %w", sandboxAgentProviderEnvVar, err)
+	}
+
+	modelEnv := modelEnvVarName(llm)
+	if err := setEnvVar(tmpl, modelEnv, model); err != nil {
+		return fmt.Errorf("set %s: %w", modelEnv, err)
 	}
 
 	if u := providerURL(llm); u != "" {
@@ -264,8 +325,10 @@ func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.L
 	switch llm.Spec.Type {
 	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
 		cfg := llm.Spec.GoogleCloudVertex
-		if err := setEnvVar(tmpl, "CLAUDE_CODE_USE_VERTEX", "1"); err != nil {
-			return fmt.Errorf("set CLAUDE_CODE_USE_VERTEX: %w", err)
+		if cfg.ModelProvider == agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic {
+			if err := setEnvVar(tmpl, "CLAUDE_CODE_USE_VERTEX", "1"); err != nil {
+				return fmt.Errorf("set CLAUDE_CODE_USE_VERTEX: %w", err)
+			}
 		}
 		if err := setEnvVar(tmpl, "GCP_PROJECT", cfg.ProjectID); err != nil {
 			return fmt.Errorf("set GCP_PROJECT: %w", err)
