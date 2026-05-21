@@ -134,7 +134,7 @@ func createFixtures(t *testing.T, c client.Client) *e2eFixtures {
 					CredentialsSecret: agenticv1alpha1.SecretReference{Name: "e2e-llm-secret"},
 					ProjectID:         "e2e-project",
 					Region:            "us-central1",
-					Runtime:           agenticv1alpha1.GoogleCloudVertexRuntimeClaude,
+					ModelProvider:       agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic,
 				},
 			},
 		},

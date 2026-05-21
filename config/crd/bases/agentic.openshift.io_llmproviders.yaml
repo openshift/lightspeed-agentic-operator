@@ -36,8 +36,8 @@ spec:
           AI provider (model specified on Agent, not here):\n\n\tapiVersion: agentic.openshift.io/v1alpha1\n\tkind:
           LLMProvider\n\tmetadata:\n\t  name: vertex-ai\n\tspec:\n\t  type: GoogleCloudVertex\n\t
           \ googleCloudVertex:\n\t    credentialsSecret:\n\t      name: llm-credentials\n\t
-          \   projectID: my-gcp-project\n\t    region: us-central1\n\t    runtime:
-          Claude"
+          \   projectID: my-gcp-project\n\t    region: us-central1\n\t    modelProvider:
+          Anthropic"
         properties:
           apiVersion:
             description: |-
@@ -269,6 +269,17 @@ spec:
                     required:
                     - name
                     type: object
+                  modelProvider:
+                    description: |-
+                      modelProvider selects which model provider stack talks to Vertex AI (required).
+                      "Anthropic" uses Anthropic models on Vertex; "Google" uses Google models on Vertex;
+                      "OpenAI" uses OpenAI-compatible models on Vertex.
+                      Enum is defined on GoogleCloudVertexModelProvider.
+                    enum:
+                    - Anthropic
+                    - Google
+                    - OpenAI
+                    type: string
                   projectID:
                     description: |-
                       projectID is the Google Cloud Project ID where Vertex AI is enabled.
@@ -296,17 +307,6 @@ spec:
                     - message: region must contain only lowercase letters, digits,
                         and hyphens, start with a letter, and not end with a hyphen
                       rule: self.matches('^[a-z][a-z0-9-]*[a-z0-9]$')
-                  runtime:
-                    description: |-
-                      runtime selects which SDK talks to Vertex AI (required).
-                      "Claude" uses Anthropic-on-Vertex; "Gemini" uses Google GenAI on Vertex;
-                      "OpenAI" uses the OpenAI SDK against Vertex's OpenAI-compatible API.
-                      Enum is defined on GoogleCloudVertexRuntime.
-                    enum:
-                    - Claude
-                    - Gemini
-                    - OpenAI
-                    type: string
                   url:
                     description: |-
                       url is an optional override for the Vertex AI API endpoint.
@@ -328,9 +328,9 @@ spec:
                       rule: '!self.contains(''#'')'
                 required:
                 - credentialsSecret
+                - modelProvider
                 - projectID
                 - region
-                - runtime
                 type: object
               openAI:
                 description: |-

@@ -106,7 +106,7 @@ func testLLM(name string) *agenticv1alpha1.LLMProvider {
 				CredentialsSecret: agenticv1alpha1.SecretReference{Name: "llm-secret"},
 				ProjectID:         "test-project",
 				Region:            "us-central1",
-				Runtime:           agenticv1alpha1.GoogleCloudVertexRuntimeClaude,
+				ModelProvider:     agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic,
 			},
 		},
 	}

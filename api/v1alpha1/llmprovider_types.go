@@ -72,18 +72,18 @@ type AnthropicConfig struct {
 	URL string `json:"url,omitempty"`
 }
 
-// GoogleCloudVertexRuntime selects which SDK talks to Vertex AI.
+// GoogleCloudVertexModelProvider selects which model provider stack talks to Vertex AI.
 //
-// +kubebuilder:validation:Enum=Claude;Gemini;OpenAI
-type GoogleCloudVertexRuntime string
+// +kubebuilder:validation:Enum=Anthropic;Google;OpenAI
+type GoogleCloudVertexModelProvider string
 
 const (
-	// GoogleCloudVertexRuntimeClaude uses Anthropic-on-Vertex (Claude SDK).
-	GoogleCloudVertexRuntimeClaude GoogleCloudVertexRuntime = "Claude"
-	// GoogleCloudVertexRuntimeGemini uses Google GenAI on Vertex.
-	GoogleCloudVertexRuntimeGemini GoogleCloudVertexRuntime = "Gemini"
-	// GoogleCloudVertexRuntimeOpenAI uses the OpenAI SDK against Vertex's OpenAI-compatible endpoint.
-	GoogleCloudVertexRuntimeOpenAI GoogleCloudVertexRuntime = "OpenAI"
+	// GoogleCloudVertexModelProviderAnthropic uses Anthropic models on Vertex (Claude SDK).
+	GoogleCloudVertexModelProviderAnthropic GoogleCloudVertexModelProvider = "Anthropic"
+	// GoogleCloudVertexModelProviderGoogle uses Google models on Vertex (GenAI SDK).
+	GoogleCloudVertexModelProviderGoogle GoogleCloudVertexModelProvider = "Google"
+	// GoogleCloudVertexModelProviderOpenAI uses OpenAI-compatible models on Vertex (OpenAI SDK).
+	GoogleCloudVertexModelProviderOpenAI GoogleCloudVertexModelProvider = "OpenAI"
 )
 
 // GoogleCloudVertexConfig contains configuration for the Google Cloud Vertex AI provider.
@@ -114,12 +114,12 @@ type GoogleCloudVertexConfig struct {
 	// +kubebuilder:validation:XValidation:rule="self.matches('^[a-z][a-z0-9-]*[a-z0-9]$')",message="region must contain only lowercase letters, digits, and hyphens, start with a letter, and not end with a hyphen"
 	Region string `json:"region,omitempty"`
 
-	// runtime selects which SDK talks to Vertex AI (required).
-	// "Claude" uses Anthropic-on-Vertex; "Gemini" uses Google GenAI on Vertex;
-	// "OpenAI" uses the OpenAI SDK against Vertex's OpenAI-compatible API.
-	// Enum is defined on GoogleCloudVertexRuntime.
+	// modelProvider selects which model provider stack talks to Vertex AI (required).
+	// "Anthropic" uses Anthropic models on Vertex; "Google" uses Google models on Vertex;
+	// "OpenAI" uses OpenAI-compatible models on Vertex.
+	// Enum is defined on GoogleCloudVertexModelProvider.
 	// +required
-	Runtime GoogleCloudVertexRuntime `json:"runtime"`
+	ModelProvider GoogleCloudVertexModelProvider `json:"modelProvider"`
 
 	// url is an optional override for the Vertex AI API endpoint.
 	// Only needed for custom deployments or API proxies.
@@ -333,7 +333,7 @@ type LLMProviderSpec struct {
 //	      name: llm-credentials
 //	    projectID: my-gcp-project
 //	    region: us-central1
-//	    runtime: Claude
+//	    modelProvider: Anthropic
 type LLMProvider struct {
 	metav1.TypeMeta `json:",inline"`
 
