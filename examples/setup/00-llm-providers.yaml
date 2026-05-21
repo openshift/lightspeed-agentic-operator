@@ -20,3 +20,4 @@ spec:
       name: llm-credentials
     projectID: my-gcp-project
     region: us-central1
+    runtime: Claude
