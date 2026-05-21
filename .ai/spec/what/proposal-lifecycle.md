@@ -5,15 +5,16 @@ Behavioral specification for the `Proposal` resource lifecycle. **Approval gates
 ## Behavioral Rules
 
 1. **Source of truth**: `status.conditions` (Kubernetes conditions keyed by `type`) is authoritative. The **phase** is a derived display value only; it is not persisted as its own field.
-2. **Phases**: The system MUST derive exactly one phase label from `status.conditions` using the algorithm in rule 9 (and precedence rules 10–11). Valid labels: `Pending`, `Analyzing`, `Proposed`, `Executing`, `Verifying`, `Completed`, `Failed`, `Denied`, `Escalating`, `Escalated`.
-3. **Condition types (proposal-level)**: The workflow uses `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated` (string values as defined on the API). Status values are `True`, `False`, or `Unknown`.
-4. **Terminal phases**: `Completed`, `Denied`, `Escalated`, and `Failed` are terminal for reconciliation progression. After `Completed`, `Denied`, or `Escalated`, the controller MUST stop active work and MAY release sandbox claims when present. `Failed` triggers failure cleanup behaviors (see `sandbox-execution.md` for RBAC cleanup interactions).
+2. **Phases**: The system MUST derive exactly one phase label from `status.conditions` using the algorithm in rule 9 (and precedence rules 10–11). Valid labels: `Pending`, `Analyzing`, `Proposed`, `Executing`, `Verifying`, `Completed`, `Failed`, `Denied`, `Escalating`, `Escalated`, `EmergencyStopped`.
+3. **Condition types (proposal-level)**: The workflow uses `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`, `EmergencyStopped` (string values as defined on the API). Status values are `True`, `False`, or `Unknown`.
+4. **Terminal phases**: `Completed`, `Denied`, `Escalated`, `Failed`, and `EmergencyStopped` are terminal for reconciliation progression. After `Completed`, `Denied`, `Escalated`, or `EmergencyStopped`, the controller MUST stop active work and MAY release sandbox claims when present. `Failed` triggers failure cleanup behaviors (see `sandbox-execution.md` for RBAC cleanup interactions). `EmergencyStopped` indicates the proposal was terminated by the system kill switch (see `system-config.md`).
 5. **Workflow shape**: `spec.analysis` is always required. `spec.execution` and `spec.verification` MAY be omitted; omission skips those steps subject to rules 20–22.
 6. **Revision loop**: If `spec.revisionFeedback` is non-empty AND `metadata.generation` is greater than `Analyzed.observedGeneration`, the system MUST treat the proposal as needing **re-analysis** before continuing downstream steps. Re-analysis MUST append revision context to the user-visible request text (after `spec.request`), then reset execution/verification/escalation progress as implemented for revision handling, and MUST NOT advance execution until the new analysis completes.
 7. **Execution retries (verification-gated)**: When `spec.verification` is present, after a successful execution the verification step MAY fail **objectively** if the agent reports failure **or** any verification check records a non-pass outcome (even when a coarse success flag might otherwise read true). In that case the system MAY increment `status.steps.execution.retryCount` and clear execution/verification progress to run execution again, bounded by the effective max attempt count from approval policy and execution approval (see `approval.md`). While awaiting a retry, `Verified` MUST be `False` with reason indicating retrying execution.
 8. **Escalation injection**: When verification has failed and retries are exhausted (per `approval.md`), the system MUST set `Verified` to `False` with reason indicating retries exhausted and MUST set `Escalated` to `Unknown` with reason indicating retries exhausted, entering the escalating phase until the escalation step completes or fails.
 9. **DerivePhase — precedence (first match in order)**:
-   - If `Escalated` exists with status `True` → phase `Escalated`.
+   - If `EmergencyStopped` exists with status `True` → phase `EmergencyStopped`.
+   - Else if `Escalated` exists with status `True` → phase `Escalated`.
    - Else if `Denied` exists with status `True` → phase `Denied`.
    - Else if `Escalated` exists → if status is `Unknown` → phase `Escalating`; otherwise → phase `Failed`.
    - Else evaluate `Verified` if present:
@@ -30,7 +31,7 @@ Behavioral specification for the `Proposal` resource lifecycle. **Approval gates
      - If `Analyzed` is `Unknown` → phase `Analyzing`.
      - If `Analyzed` is `False` → phase `Failed`.
    - Else → phase `Pending`.
-10. **Denial vs escalation in derivation**: `Escalated=True` MUST win over `Denied=True` if both are present because derivation checks complete escalation before denial. Otherwise `Denied=True` MUST win over non-terminal progress (`Analyzed`, `Executed`, `Verified` combinations).
+10. **EmergencyStopped vs other terminals in derivation**: `EmergencyStopped=True` MUST win over all other conditions because derivation checks it first. `Escalated=True` MUST win over `Denied=True` if both are present because derivation checks complete escalation before denial. Otherwise `Denied=True` MUST win over non-terminal progress (`Analyzed`, `Executed`, `Verified` combinations).
 11. **Advisory completion**: If execution is absent and verification is absent, after successful analysis the controller MAY set `Executed` and `Verified` to `True` with skip reasons such that the derived phase is `Completed`.
 12. **Trust mode completion**: If execution is present and verification is absent, after successful execution the controller MUST set `Verified` to `True` with a skip reason such that the derived phase is `Completed`.
 13. **Skipped steps**: `Executed=True` with skip reason and `Verified=True` with skip reason together MUST derive `Completed` when that is the intended advisory outcome per tests and valid condition combinations.
@@ -67,3 +68,4 @@ Behavioral specification for the `Proposal` resource lifecycle. **Approval gates
 
 - [PLANNED: OLS-2913] Populate `status.steps.<step>.conditions` consistently for UIs/CLI without inferring only from top-level conditions.
 - [PLANNED: OLS-2894] **Per-proposal approval overrides** (e.g. annotations) and **namespace-scoped approval policy** if product requires policy resolution beyond cluster singleton `ApprovalPolicy` named `cluster` (current code: cluster singleton only; see `approval.md`).
+- [PLANNED: OLS-3018] `EmergencyStopped` phase and condition type added to proposal lifecycle. See `system-config.md` for full kill switch specification.

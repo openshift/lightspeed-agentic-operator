@@ -7,9 +7,10 @@ These specs define WHAT the operator must do -- testable behavioral rules, confi
 | Spec | Description |
 |------|-------------|
 | [proposal-lifecycle.md](proposal-lifecycle.md) | Proposal phases, condition-driven state machine, retry logic, revision, escalation |
-| [crd-api.md](crd-api.md) | All CRD types and field semantics: Proposal, Agent, LLMProvider, ApprovalPolicy, result CRs |
+| [crd-api.md](crd-api.md) | All CRD types and field semantics: Proposal, Agent, LLMProvider, ApprovalPolicy, AgenticOLSConfig, result CRs |
 | [approval.md](approval.md) | Human-in-the-loop approval system: policy modes, stage gates, deny semantics |
 | [sandbox-execution.md](sandbox-execution.md) | Sandbox pod lifecycle, RBAC scoping, agent communication, skills mounting |
+| [system-config.md](system-config.md) | AgenticOLSConfig CRD, emergency kill switch (spec.suspended), console/CLI visibility |
 
 ## Relationship to how/ Specs
 

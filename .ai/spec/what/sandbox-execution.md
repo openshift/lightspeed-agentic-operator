@@ -31,7 +31,7 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 25. **Finalizers**: Non-deleted proposals MUST gain a cleanup finalizer before leaving non-terminal phases so deletion can run RBAC and sandbox release hooks safely.
 26. **Result CR writes**: After each successful or failed agent invocation (per step), the controller MUST create/update an `AnalysisResult`, `ExecutionResult`, `VerificationResult`, or `EscalationResult` with immutable spec, owner reference to the `Proposal`, started/completed conditions, embedded outcome payload, sandbox reference, and optional `failureReason` for system errors.
 27. **Retry index**: `ExecutionResult` and `VerificationResult` MUST record the current execution retry index in spec for correlation with `status.steps.execution.retryCount`.
-28. **Sandbox release**: On proposal deletion and on terminal phases (`Completed`, `Denied`, `Escalated`), the controller MUST delete known sandbox claims recorded under `status.steps.*.sandbox` (best-effort aggregation; first error MAY be returned for visibility).
+28. **Sandbox release**: On proposal deletion and on terminal phases (`Completed`, `Denied`, `Escalated`, `EmergencyStopped`), the controller MUST delete known sandbox claims recorded under `status.steps.*.sandbox` (best-effort aggregation; first error MAY be returned for visibility). For `EmergencyStopped`, sandbox release is part of the termination sequence (see `system-config.md`).
 29. **Concurrency cap**: Maximum concurrent proposal reconciles SHOULD respect `ApprovalPolicy.spec.maxConcurrentProposals` when present (see `crd-api.md`).
 
 ## Configuration Surface
