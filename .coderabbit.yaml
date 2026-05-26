@@ -27,10 +27,10 @@ reviews:
     - '!api/go.sum'
     - '!vendor/**'
     # Prodsec recommended exclusions
-    - '!node_modules/**'
-    - '!dist/**'
-    - '!*.min.js'
-    - '!yarn.lock'
+    - '!**/node_modules/**'
+    - '!**/dist/**'
+    - '!**/*.min.js'
+    - '!**/yarn.lock'
 
   # Review output — keep signal, kill noise
   high_level_summary: true
@@ -237,7 +237,7 @@ reviews:
         - Guardrails: bidirectional filtering on prompts and responses
 
     # ── Supply chain & dependencies ──────────────────────────────
-    - path: "**/{requirements*.txt,Pipfile*,pyproject.toml,package*.json,go.mod,go.sum,Cargo.toml,Gemfile*,pom.xml,build.gradle*}"
+    - path: "**/{requirements*.txt,Pipfile*,pyproject.toml,package*.json,go.mod,go.sum,Cargo.toml,Cargo.lock,Gemfile*,pom.xml,build.gradle*}"
       instructions: |
         Supply chain security (prodsec-skills):
         - New deps: justify need, check license compatibility
