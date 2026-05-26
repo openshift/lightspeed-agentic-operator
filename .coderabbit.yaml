@@ -1,10 +1,14 @@
 # CodeRabbit configuration — lightspeed-agentic-operator
-# Docs: https://docs.coderabbit.ai/guides/configure-coderabbit
+# Docs: https://docs.coderabbit.ai/reference/configuration
+language: "en-US"
+early_access: true
+tone_instructions: >-
+  Be direct and concise. Focus on bugs, security issues, and correctness.
+  Skip praise and pleasantries.
+
 reviews:
-  # Profile: "chill" generates fewer comments, focuses on significant issues
   profile: chill
 
-  # Auto-review settings
   auto_review:
     enabled: true
     base_branches:
@@ -23,21 +27,31 @@ reviews:
     - '!api/go.sum'
     - '!vendor/**'
     # Prodsec recommended exclusions
-    # https://github.com/RedHatProductSecurity/prodsec-skills/blob/main/.coderabbit.yaml
     - '!node_modules/**'
     - '!dist/**'
     - '!*.min.js'
     - '!yarn.lock'
 
-  # Review behavior
-  collapse_walkthrough: true
-  poem: false
+  # Review output — keep signal, kill noise
   high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  collapse_walkthrough: true
   review_status: true
   commit_status: true
-
-  # Sequence diagrams for complex logic (chill profile limits these to significant changes)
   sequence_diagrams: true
+  poem: false
+  in_progress_fortune: false
+  suggested_labels: false
+  suggested_reviewers: false
+  estimate_code_review_effort: false
+  related_prs: false
+  enable_prompt_for_ai_agents: true
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
 
   # Prodsec recommended review instructions
   # https://github.com/RedHatProductSecurity/prodsec-skills/blob/main/.coderabbit.yaml
@@ -320,8 +334,7 @@ reviews:
         - Audit logging: who uploaded/downloaded/deleted what
         - Secure storage: encrypted at rest, access-controlled
 
-  # Prodsec recommended security scanners
-  # https://github.com/RedHatProductSecurity/prodsec-skills/blob/main/.coderabbit.yaml
+  # Security scanners (prodsec) + language-specific linters
   tools:
     gitleaks:
       enabled: true
@@ -339,9 +352,13 @@ reviews:
       enabled: true
     ast-grep:
       essential_rules: true
+    shellcheck:
+      enabled: true
+    golangci-lint:
+      enabled: true
+    yamllint:
+      enabled: true
 
-# Prodsec recommended knowledge base
-# https://github.com/RedHatProductSecurity/prodsec-skills/blob/main/.coderabbit.yaml
 knowledge_base:
   code_guidelines:
     enabled: true
@@ -352,8 +369,15 @@ knowledge_base:
       - "**/CONTRIBUTING.md"
   issues:
     scope: "auto"
+  jira:
+    usage: "auto"
   pull_requests:
     scope: "auto"
+  linked_repositories:
+    - repository: "openshift/lightspeed-agentic-sandbox"
+      instructions: >-
+        Python/FastAPI agent runtime. The operator calls its
+        POST /v1/agent/run endpoint to run agent steps.
 
 chat:
   auto_reply: true
