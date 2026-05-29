@@ -85,7 +85,8 @@ func (r *ProposalReconciler) handleAnalysis(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToAnalyzing, err)
 	}
 
-	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request, defaultSandboxSA)
+	timeout := proposalTimeout(proposal)
+	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
@@ -151,7 +152,8 @@ func (r *ProposalReconciler) handleRevision(
 	revisionSuffix := buildRevisionContext(proposal)
 	requestWithRevision := proposal.Spec.Request + "\n\n" + revisionSuffix
 
-	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision, defaultSandboxSA)
+	timeout := proposalTimeout(proposal)
+	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
@@ -270,7 +272,8 @@ func (r *ProposalReconciler) handleExecution(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToExecuting, err)
 	}
 
-	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption, execSA)
+	timeout := proposalTimeout(proposal)
+	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption, execSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionExecuted, err)
 	}
@@ -387,7 +390,8 @@ func (r *ProposalReconciler) handleVerification(
 		}
 	}
 
-	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput, defaultSandboxSA)
+	timeout := proposalTimeout(proposal)
+	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionVerified, err)
 	}
@@ -586,7 +590,8 @@ func (r *ProposalReconciler) handleEscalation(
 	}
 
 	escalationText := buildEscalationRequest(proposal)
-	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText, defaultSandboxSA)
+	timeout := proposalTimeout(proposal)
+	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionEscalated, err)
 	}

@@ -373,6 +373,16 @@ type ProposalSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
+
+	// timeoutMinutes overrides the default sandbox operation timeout for
+	// this proposal. When set, all sandbox wait and HTTP client timeouts
+	// use this value instead of the operator default (5 minutes).
+	//
+	// Immutable: timeout policy is fixed at creation.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=120
+	TimeoutMinutes *int32 `json:"timeoutMinutes,omitzero"`
 }
 
 // ProposalStatus defines the observed state of Proposal. All fields are

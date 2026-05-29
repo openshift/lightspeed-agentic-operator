@@ -35,7 +35,7 @@ func TestAgentHTTPClient_RunSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	resp, err := client.Run(context.Background(), "You are an SRE agent", "check health", nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -52,7 +52,7 @@ func TestAgentHTTPClient_RunHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	_, err := client.Run(context.Background(), "", "test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
@@ -60,7 +60,7 @@ func TestAgentHTTPClient_RunHTTPError(t *testing.T) {
 }
 
 func TestAgentHTTPClient_RunConnectionError(t *testing.T) {
-	client := NewAgentHTTPClient("http://127.0.0.1:1")
+	client := NewAgentHTTPClient("http://127.0.0.1:1", 0)
 	_, err := client.Run(context.Background(), "", "test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for connection failure")
@@ -100,7 +100,7 @@ func TestAgentHTTPClient_RunWithExecutionResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 		ExecutionResult: &agentExecutionResult{
@@ -135,7 +135,7 @@ func TestAgentHTTPClient_RunWithoutExecutionResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 	}
@@ -169,7 +169,7 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 		PreviousAttempts: []agentPreviousAttempt{{Attempt: 1, FailureReason: "timeout"}},

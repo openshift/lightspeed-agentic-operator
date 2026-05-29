@@ -34,6 +34,14 @@ rules:
   - delete
   - get
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - agentic.openshift.io
   resources:
   - agenticolsconfigs
