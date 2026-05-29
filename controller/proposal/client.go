@@ -74,10 +74,13 @@ type AgentHTTPClient struct {
 	endpoint   string
 }
 
-func NewAgentHTTPClient(endpoint string) AgentHTTPClientInterface {
+func NewAgentHTTPClient(endpoint string, timeout time.Duration) AgentHTTPClientInterface {
+	if timeout <= 0 {
+		timeout = defaultSandboxTimeout
+	}
 	return &AgentHTTPClient{
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute,
+			Timeout: timeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // internal cluster traffic
 			},
@@ -87,11 +90,13 @@ func NewAgentHTTPClient(endpoint string) AgentHTTPClientInterface {
 }
 
 func (c *AgentHTTPClient) Run(ctx context.Context, systemPrompt, query string, outputSchema json.RawMessage, agentCtx *agentContext) (*agentRunResponse, error) {
+	timeoutMs := int64(c.httpClient.Timeout / time.Millisecond)
 	req := agentRunRequest{
 		Query:        query,
 		SystemPrompt: systemPrompt,
 		OutputSchema: outputSchema,
 		Context:      agentCtx,
+		TimeoutMs:    &timeoutMs,
 	}
 
 	body, err := json.Marshal(req)

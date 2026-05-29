@@ -58,7 +58,8 @@ func (r *ProposalReconciler) handleAnalysis(
 		return ctrl.Result{}, fmt.Errorf("update to Analyzing: %w", err)
 	}
 
-	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request)
+	timeout := proposalTimeout(proposal)
+	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request, timeout)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
@@ -124,7 +125,8 @@ func (r *ProposalReconciler) handleRevision(
 	revisionSuffix := buildRevisionContext(proposal)
 	requestWithRevision := proposal.Spec.Request + "\n\n" + revisionSuffix
 
-	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision)
+	timeout := proposalTimeout(proposal)
+	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision, timeout)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
@@ -240,7 +242,8 @@ func (r *ProposalReconciler) handleExecution(
 		return ctrl.Result{}, fmt.Errorf("update to Executing: %w", err)
 	}
 
-	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption)
+	timeout := proposalTimeout(proposal)
+	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption, timeout)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionExecuted, err)
 	}
@@ -343,7 +346,8 @@ func (r *ProposalReconciler) handleVerification(
 		}
 	}
 
-	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput)
+	timeout := proposalTimeout(proposal)
+	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput, timeout)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionVerified, err)
 	}
@@ -503,7 +507,8 @@ func (r *ProposalReconciler) handleEscalation(
 	}
 
 	escalationText := buildEscalationRequest(proposal)
-	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText)
+	timeout := proposalTimeout(proposal)
+	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText, timeout)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionEscalated, err)
 	}

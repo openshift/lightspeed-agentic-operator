@@ -2,6 +2,7 @@ package proposal
 
 import (
 	"context"
+	"time"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -42,10 +43,10 @@ type EscalationOutput struct {
 // HTTP implementations POST to /v1/agent/run — a step-agnostic
 // endpoint where all workflow context is in the request payload.
 type AgentCaller interface {
-	Analyze(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string) (*AnalysisOutput, error)
-	Execute(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption) (*ExecutionOutput, error)
-	Verify(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) (*VerificationOutput, error)
-	Escalate(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string) (*EscalationOutput, error)
+	Analyze(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string, timeout time.Duration) (*AnalysisOutput, error)
+	Execute(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption, timeout time.Duration) (*ExecutionOutput, error)
+	Verify(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput, timeout time.Duration) (*VerificationOutput, error)
+	Escalate(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string, timeout time.Duration) (*EscalationOutput, error)
 	ReleaseSandboxes(ctx context.Context, proposal *agenticv1alpha1.Proposal) error
 }
 
@@ -53,7 +54,7 @@ type AgentCaller interface {
 // implementation (sandbox + HTTP) when the agent infrastructure is ready.
 type StubAgentCaller struct{}
 
-func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string) (*AnalysisOutput, error) {
+func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ time.Duration) (*AnalysisOutput, error) {
 	return &AnalysisOutput{
 		Success: true,
 		Options: []agenticv1alpha1.RemediationOption{{
@@ -73,7 +74,7 @@ func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal
 	}, nil
 }
 
-func (s *StubAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption) (*ExecutionOutput, error) {
+func (s *StubAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ time.Duration) (*ExecutionOutput, error) {
 	return &ExecutionOutput{
 		Success: true,
 		ActionsTaken: []agenticv1alpha1.ExecutionAction{{
@@ -88,7 +89,7 @@ func (s *StubAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal
 	}, nil
 }
 
-func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string) (*EscalationOutput, error) {
+func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ time.Duration) (*EscalationOutput, error) {
 	return &EscalationOutput{
 		Success: true,
 		Summary: "Stub escalation summary",
@@ -100,7 +101,7 @@ func (s *StubAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1
 	return nil
 }
 
-func (s *StubAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput) (*VerificationOutput, error) {
+func (s *StubAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ time.Duration) (*VerificationOutput, error) {
 	return &VerificationOutput{
 		Success: true,
 		Checks: []agenticv1alpha1.VerifyCheck{{

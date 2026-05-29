@@ -1,0 +1,188 @@
+# IntelliAide RCA Proposals
+#
+# IntelliAide is a live-cluster / must-gather RCA pipeline that runs a 3-pass
+# analysis (High → Medium → Low priority) using Claude as the orchestrator.
+#
+# Integration model:
+#   User triggers a Proposal CR  →  operator launches analysis sandbox
+#   →  Claude reads /app/skills/intelliaide/SKILL.md
+#   →  Claude calls skill scripts (extract_cluster, select_files, analyze_data, perform_rca)
+#   →  All LLM reasoning is performed by the orchestrating Claude session
+#   →  Claude maps results into standard diagnosis/proposal fields
+#
+# Workflow shape: analysis ONLY (advisory).
+#   IntelliAide returns diagnosis and recommendations. There is no automated
+#   execution or verification step — humans decide on follow-up actions.
+#
+# Output rendering:
+#   RCA findings are mapped into the standard diagnosis/proposal fields so they
+#   render with MarkdownText in the console UI. No custom outputSchema is used.
+#
+# IntelliAide triggering:
+#   The analysis prompt (analysis_query.tmpl) reads the request text and invokes
+#   the IntelliAide pipeline when the request contains RCA keywords such as
+#   "root cause analysis", "RCA", "deeper analysis", "must-gather", or "IntelliAide".
+#   All requests in this file are phrased to trigger IntelliAide automatically.
+#
+# Modes:
+#   Live mode (default) — IntelliAide reads live cluster state via kubectl/oc.
+#   Must-gather mode    — set RUN_MUST_GATHER=1 env var, or phrase the request
+#                         with "using must-gather" / "collect must-gather".
+#
+# Pre-requisites (cluster admin, one-time):
+#   1. Build and push skills image:
+#        podman build -f Dockerfile.skills \
+#          -t quay.io/<org>/intelliaide-skills:latest .
+#        podman push quay.io/<org>/intelliaide-skills:latest
+#   2. Label openshift-lightspeed namespace (Kubernetes 1.21+ does this
+#      automatically via kubernetes.io/metadata.name):
+#        oc label namespace openshift-lightspeed \
+#          kubernetes.io/metadata.name=openshift-lightspeed --overwrite
+#
+# Trigger:
+#   kubectl apply -f 09-intelliaide-proposals.yaml
+#   oc agentic proposal approve <name> -n openshift-lightspeed --stage=analysis
+
+---
+# etcd RCA — etcd member health / leader election failures
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: intelliaide-rca-etcd
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: intelliaide
+    agentic.openshift.io/component: etcd
+    agentic.openshift.io/mode: live
+spec:
+  request: |
+    Perform root cause analysis for the following issue:
+    One or more etcd pods are not ready, or etcd endpoint health is degraded
+    in namespace openshift-etcd. Investigate the root cause using live cluster
+    data and provide remediation options.
+
+  targetNamespaces:
+    - openshift-etcd
+
+  # IntelliAide RCA takes 10-30 minutes; override the default 5-min timeout.
+  timeoutMinutes: 30
+
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+
+  analysis:
+    agent: smart
+
+---
+# Cluster update failure RCA
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: intelliaide-rca-update-failure
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: intelliaide
+    agentic.openshift.io/component: cluster-version-operator
+    agentic.openshift.io/mode: live
+spec:
+  request: |
+    Perform root cause analysis for the following issue:
+    OpenShift cluster update has stalled or failed. ClusterVersion reports
+    Progressing=True with no forward progress, or Degraded=True. Investigate
+    the root cause using live cluster data and recommend remediation steps.
+
+  targetNamespaces:
+    - openshift-cluster-version
+    - openshift-machine-config-operator
+
+  timeoutMinutes: 30
+
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+
+  analysis:
+    agent: smart
+
+---
+# Live-cluster RCA — intermittent router/ingress latency spikes
+#
+# Tricky because the symptoms (HTTP 504s, slow responses) appear at the
+# application layer but the underlying cause is almost always one of:
+#   - HAProxy router thread saturation from a single high-fan-out Service
+#   - A misconfigured keepalive / timeout on one backend pool causing cascading
+#     connection exhaustion across unrelated routes
+#   - An mTLS re-handshake storm triggered by certificate rotation on a subset
+#     of pods, which the router cannot distinguish from normal slow backends
+#
+# IntelliAide runs in LIVE mode so it reads current router metrics, endpoint
+# slice states, and HAProxy stats in real time without collecting a must-gather.
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: intelliaide-rca-router-latency
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: intelliaide
+    agentic.openshift.io/component: ingress
+    agentic.openshift.io/mode: live
+spec:
+  request: |
+    Perform root cause analysis for the following issue:
+    Applications behind the OpenShift router are intermittently experiencing
+    HTTP 504 Gateway Timeout and elevated P99 latency (>2 s) during normal
+    business hours, even though individual pod health checks report healthy.
+    The issue is not reproducible on every request and affects multiple routes
+    in the same namespace. No recent changes were made to the Deployments or
+    Services involved. Investigate the root cause using live cluster data and
+    provide remediation options.
+
+  targetNamespaces:
+    - openshift-ingress
+    - openshift-ingress-operator
+
+  timeoutMinutes: 30
+
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+
+  analysis:
+    agent: smart
+
+---
+# General RCA — operator-managed workload degradation (no dedicated template)
+#
+# Use this as a starting point when no specific proposal template fits.
+# Covers scenarios such as: Deployment rollout stuck, pods CrashLoopBackOff,
+# OOMKill cycles, PVC mount failures, or admission webhook rejections that
+# are not caused by a single obvious misconfiguration. IntelliAide examines
+# the affected namespace holistically and correlates events, logs, and
+# resource state across the 3-pass priority model.
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Proposal
+metadata:
+  name: intelliaide-rca-general
+  namespace: openshift-lightspeed
+  labels:
+    agentic.openshift.io/source: intelliaide
+    agentic.openshift.io/mode: live
+spec:
+  request: |
+    Perform a deeper root cause analysis for the following issue:
+    One or more workloads in the cluster are degraded or unavailable and the
+    cause is not immediately obvious from describe output or recent events.
+    Use IntelliAide to collect and correlate live cluster data across
+    namespaces, then identify the root cause and recommend remediation steps.
+
+  targetNamespaces: []   # fill in the affected namespace(s) before applying
+
+  timeoutMinutes: 30
+
+  tools:
+    skills:
+      - image: image-registry.openshift-image-registry.svc:5000/openshift-lightspeed/lightspeed-skills:latest
+
+  analysis:
+    agent: smart

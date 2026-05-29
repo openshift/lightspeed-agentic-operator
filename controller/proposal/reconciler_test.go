@@ -36,32 +36,32 @@ type testAgentCaller struct {
 
 func newTestAgentCaller() *testAgentCaller {
 	stub := &StubAgentCaller{}
-	a, _ := stub.Analyze(context.Background(), nil, resolvedStep{}, "")
-	e, _ := stub.Execute(context.Background(), nil, resolvedStep{}, nil)
-	v, _ := stub.Verify(context.Background(), nil, resolvedStep{}, nil, nil)
-	esc, _ := stub.Escalate(context.Background(), nil, resolvedStep{}, "")
+	a, _ := stub.Analyze(context.Background(), nil, resolvedStep{}, "", 0)
+	e, _ := stub.Execute(context.Background(), nil, resolvedStep{}, nil, 0)
+	v, _ := stub.Verify(context.Background(), nil, resolvedStep{}, nil, nil, 0)
+	esc, _ := stub.Escalate(context.Background(), nil, resolvedStep{}, "", 0)
 	return &testAgentCaller{analyzeResult: a, executeResult: e, verifyResult: v, escalateResult: esc}
 }
 
-func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string) (*AnalysisOutput, error) {
+func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ time.Duration) (*AnalysisOutput, error) {
 	if ta.analyzeErr != nil {
 		return nil, ta.analyzeErr
 	}
 	return ta.analyzeResult, nil
 }
-func (ta *testAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption) (*ExecutionOutput, error) {
+func (ta *testAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ time.Duration) (*ExecutionOutput, error) {
 	if ta.executeErr != nil {
 		return nil, ta.executeErr
 	}
 	return ta.executeResult, nil
 }
-func (ta *testAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput) (*VerificationOutput, error) {
+func (ta *testAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ time.Duration) (*VerificationOutput, error) {
 	if ta.verifyErr != nil {
 		return nil, ta.verifyErr
 	}
 	return ta.verifyResult, nil
 }
-func (ta *testAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string) (*EscalationOutput, error) {
+func (ta *testAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ time.Duration) (*EscalationOutput, error) {
 	if ta.escalateErr != nil {
 		return nil, ta.escalateErr
 	}
@@ -247,7 +247,7 @@ func newMockSandboxAgent(analysisJSON, executionJSON, verificationJSON string) (
 	caller := &SandboxAgentCaller{
 		Sandbox:   sandbox,
 		K8sClient: fc,
-		ClientFactory: func(_ string) AgentHTTPClientInterface {
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface {
 			resp := responses[callCount%len(responses)]
 			callCount++
 			httpClient.response = &agentRunResponse{Response: json.RawMessage(resp)}

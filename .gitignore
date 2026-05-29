@@ -1,5 +1,6 @@
 # Binaries and local tool installs (Makefile uses ./bin for controller-gen, kustomize, etc.)
 /bin/
+/oc-agentic
 
 # IDE / OS
 .idea/

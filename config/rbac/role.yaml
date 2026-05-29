@@ -5,6 +5,14 @@ metadata:
   name: agentic-operator-manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - agentic.openshift.io
   resources:
   - agents
@@ -58,35 +66,6 @@ rules:
   - proposals/finalizers
   verbs:
   - update
-- apiGroups:
-  - agents.x-k8s.io
-  resources:
-  - sandboxes
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - extensions.agents.x-k8s.io
-  resources:
-  - sandboxclaims
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - watch
-- apiGroups:
-  - extensions.agents.x-k8s.io
-  resources:
-  - sandboxtemplates
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - update
-  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:

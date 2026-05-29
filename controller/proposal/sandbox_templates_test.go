@@ -67,7 +67,7 @@ func emptyTemplate() *unstructured.Unstructured {
 
 func mustHash(t *testing.T, llm *agenticv1alpha1.LLMProvider, model string, skills []agenticv1alpha1.SkillsSource, requiredSecrets []agenticv1alpha1.SecretRequirement, phase string) string {
 	t.Helper()
-	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, phase, "")
+	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, nil, phase, "")
 	if err != nil {
 		t.Fatalf("computeTemplateHash: %v", err)
 	}
@@ -381,14 +381,14 @@ func TestSetEnvVar_FailsOnNoContainers(t *testing.T) {
 }
 
 func TestEnsureAgentTemplate_NilAgent(t *testing.T) {
-	_, err := EnsureAgentTemplate(nil, nil, "base", "ns", "analysis", nil, testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex), nil)
+	_, err := EnsureAgentTemplate(nil, nil, "base", "ns", "analysis", nil, testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex), nil, nil)
 	if err == nil {
 		t.Error("expected error for nil agent")
 	}
 }
 
 func TestEnsureAgentTemplate_NilLLM(t *testing.T) {
-	_, err := EnsureAgentTemplate(nil, nil, "base", "ns", "analysis", testDefaultAgent(), nil, nil)
+	_, err := EnsureAgentTemplate(nil, nil, "base", "ns", "analysis", testDefaultAgent(), nil, nil, nil)
 	if err == nil {
 		t.Error("expected error for nil LLM")
 	}
@@ -491,11 +491,11 @@ func TestComputeTemplateHash_DifferentBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000")
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "1000")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "2000")
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "2000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,11 +509,11 @@ func TestComputeTemplateHash_SameBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000")
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "1000")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000")
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "1000")
 	if err != nil {
 		t.Fatal(err)
 	}

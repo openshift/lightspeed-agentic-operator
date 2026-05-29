@@ -481,6 +481,28 @@ spec:
                 x-kubernetes-validations:
                 - message: schema is required when mode is Minimal
                   rule: self.mode != 'Minimal' || has(self.schema)
+              dataSource:
+                description: |-
+                  dataSource references a PVC containing pre-populated input data
+                  (e.g., must-gather bundles, diagnostic data). The operator mounts
+                  it read-only at /data/input in the sandbox pod. Skills discover
+                  input data at this standard location.
+
+                  Immutable: input data source is fixed at creation.
+                properties:
+                  claimName:
+                    description: |-
+                      claimName is the name of the PersistentVolumeClaim to mount.
+                      The PVC must exist in the same namespace as the Proposal.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: must be a valid DNS subdomain
+                      rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                required:
+                - claimName
+                type: object
               execution:
                 description: |-
                   execution defines per-step configuration for the execution step.
@@ -913,6 +935,19 @@ spec:
                 x-kubernetes-validations:
                 - message: each namespace must be a valid DNS label
                   rule: self.all(ns, !format.dns1123Label().validate(ns).hasValue())
+              timeoutMinutes:
+                description: |-
+                  timeoutMinutes sets the per-step timeout for sandbox agent calls.
+                  This controls how long the operator waits for the sandbox pod to
+                  become ready and for the agent to complete its work. Increase this
+                  for long-running tools (e.g., IntelliAide RCA takes 10-30 minutes).
+                  Defaults to 5 minutes when omitted.
+
+                  Mutable: can be adjusted before approving a step.
+                format: int32
+                maximum: 60
+                minimum: 1
+                type: integer
               tools:
                 description: |-
                   tools defines the default tools for all steps: skills images,
@@ -1684,6 +1719,9 @@ spec:
             - message: verification is immutable once set
               rule: '!has(oldSelf.verification) || (has(self.verification) && self.verification
                 == oldSelf.verification)'
+            - message: dataSource is immutable once set
+              rule: '!has(oldSelf.dataSource) || (has(self.dataSource) && self.dataSource
+                == oldSelf.dataSource)'
           status:
             description: status defines the observed state of Proposal.
             minProperties: 1
