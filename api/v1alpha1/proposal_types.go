@@ -270,6 +270,22 @@ func (s ProposalStep) IsZero() bool {
 	return s.Agent == "" && s.Tools.IsZero()
 }
 
+// DataSource references a pre-existing PersistentVolumeClaim containing
+// input data for this proposal (e.g., must-gather bundles, diagnostic data).
+// The PVC must already exist in the same namespace as the Proposal and be
+// pre-populated with data before the Proposal is created. The operator
+// mounts it read-only at a well-known path (/data/input) accessible to
+// all skills in the sandbox pod.
+type DataSource struct {
+	// claimName is the name of the PersistentVolumeClaim to mount.
+	// The PVC must exist in the same namespace as the Proposal.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="must be a valid DNS subdomain"
+	ClaimName string `json:"claimName"`
+}
+
 // ProposalSpec defines the desired state of Proposal.
 //
 // A Proposal defines the workflow shape inline, specifying which steps
@@ -284,6 +300,7 @@ func (s ProposalStep) IsZero() bool {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.analysis) || (has(self.analysis) && self.analysis == oldSelf.analysis)",message="analysis is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.execution) || (has(self.execution) && self.execution == oldSelf.execution)",message="execution is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.verification) || (has(self.verification) && self.verification == oldSelf.verification)",message="verification is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.dataSource) || (has(self.dataSource) && self.dataSource == oldSelf.dataSource)",message="dataSource is immutable once set"
 type ProposalSpec struct {
 	// request is the user's original request, alert description, or a
 	// description of what triggered this proposal. This text is passed to
@@ -341,6 +358,15 @@ type ProposalSpec struct {
 	// +optional
 	Tools ToolsSpec `json:"tools,omitzero"`
 
+	// dataSource references a PVC containing pre-populated input data
+	// (e.g., must-gather bundles, diagnostic data). The operator mounts
+	// it read-only at /data/input in the sandbox pod. Skills discover
+	// input data at this standard location.
+	//
+	// Immutable: input data source is fixed at creation.
+	// +optional
+	DataSource *DataSource `json:"dataSource,omitzero"`
+
 	// analysis defines per-step configuration for the analysis step,
 	// including which agent handles it and any per-step tools.
 	//
@@ -362,6 +388,18 @@ type ProposalSpec struct {
 	// +optional
 	Verification ProposalStep `json:"verification,omitzero"`
 
+	// timeoutMinutes sets the per-step timeout for sandbox agent calls.
+	// This controls how long the operator waits for the sandbox pod to
+	// become ready and for the agent to complete its work. Increase this
+	// for long-running tools (e.g., IntelliAide RCA takes 10-30 minutes).
+	// Defaults to 5 minutes when omitted.
+	//
+	// Mutable: can be adjusted before approving a step.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=60
+	TimeoutMinutes *int32 `json:"timeoutMinutes,omitempty"`
+
 	// revisionFeedback is the user's free-text feedback requesting changes
 	// to the analysis. Patching this field bumps metadata.generation, which
 	// the operator detects (generation > observedGeneration) and triggers
@@ -374,15 +412,6 @@ type ProposalSpec struct {
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
 
-	// timeoutMinutes overrides the default sandbox operation timeout for
-	// this proposal. When set, all sandbox wait and HTTP client timeouts
-	// use this value instead of the operator default (5 minutes).
-	//
-	// Immutable: timeout policy is fixed at creation.
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=120
-	TimeoutMinutes *int32 `json:"timeoutMinutes,omitzero"`
 }
 
 // ProposalStatus defines the observed state of Proposal. All fields are

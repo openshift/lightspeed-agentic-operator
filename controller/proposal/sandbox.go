@@ -99,7 +99,7 @@ func (m *SandboxManager) buildClaim(claimName, proposalName, step, templateName 
 func (m *SandboxManager) Claim(ctx context.Context, proposalName, step, _ string) (string, error) {
 	log := logf.FromContext(ctx)
 
-	templateName, err := EnsureAgentTemplate(ctx, m.Client, m.BaseTemplateName, m.Namespace, step, m.agent, m.llm, m.tools, m.serviceAccount)
+	templateName, err := EnsureAgentTemplate(ctx, m.Client, m.BaseTemplateName, m.Namespace, step, m.agent, m.llm, m.tools, nil, m.serviceAccount)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", ErrEnsureAgentTemplate, err)
 	}
