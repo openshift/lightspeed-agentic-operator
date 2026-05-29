@@ -69,7 +69,7 @@ For noisy debugging: **`go test ./controller/proposal/... -v`**, **`go test ./ap
 
 ### API lint (Kube API linter)
 
-**`make api-lint`** runs **`golangci-lint custom`** (builds **`bin/golangci-lint-kube-api-linter`** from **`.custom-gcl.yml`**), then the plugin against **`api/`** with **`GOWORK=off`** and **`.golangci-kal.yml`**. Requires **`golangci-lint`** on **`PATH`**.
+**`make api-lint`** installs **`golangci-lint`** to **`bin/`** (version from **`.custom-gcl.yml`**), runs **`golangci-lint custom`** (builds **`bin/golangci-lint-kube-api-linter`**), then lints **`api/`** with **`GOWORK=off`** and **`.golangci-kal.yml`**.
 
 ### CEL validation (`XValidation`)
 

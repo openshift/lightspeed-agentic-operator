@@ -60,6 +60,11 @@ HEALTH_PROBE_BIND_ADDRESS ?= :18081
 CONTROLLER_GEN_VERSION ?= v0.19.0
 CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 
+# Must match version in .custom-gcl.yml (golangci-lint custom).
+GOLANGCI_LINT_VERSION ?= v2.9.0
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+GOLANGCI_LINT_KAL ?= $(LOCALBIN)/golangci-lint-kube-api-linter
+
 .PHONY: fmt
 fmt: ## Run go fmt against code.
 	go fmt ./...
@@ -82,9 +87,9 @@ test-e2e: ## Run e2e tests against a live cluster (operator must be running). Se
 	go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 30m
 
 .PHONY: api-lint
-api-lint: ## Kube API linter on api/ (needs golangci-lint on PATH; builds plugin to bin/). See README.md.
-	golangci-lint custom
-	cd api && GOWORK=off $(LOCALBIN)/golangci-lint-kube-api-linter run --config ../.golangci-kal.yml ./...
+api-lint: golangci-lint ## Kube API linter on api/ (installs golangci-lint to bin/; see README.md).
+	$(GOLANGCI_LINT) custom
+	cd api && GOWORK=off $(GOLANGCI_LINT_KAL) run --config ../.golangci-kal.yml ./...
 
 .PHONY: build
 build: fmt vet ## Build manager binary to bin/manager.
@@ -251,6 +256,16 @@ $(LOCALBIN):
 KUSTOMIZE_VERSION ?= v5.3.0
 KUBECTL ?= kubectl
 KUSTOMIZE ?= $(LOCALBIN)/kustomize
+
+.PHONY: golangci-lint
+golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint to $(LOCALBIN) if missing or wrong version.
+
+$(GOLANGCI_LINT): $(LOCALBIN)
+	@if test -x $(GOLANGCI_LINT) && ! $(GOLANGCI_LINT) --version 2>&1 | grep -q $(GOLANGCI_LINT_VERSION); then \
+		echo "$(GOLANGCI_LINT) version is not expected $(GOLANGCI_LINT_VERSION). Removing it before installing."; \
+		rm -rf $(GOLANGCI_LINT); \
+	fi
+	test -s $(GOLANGCI_LINT) || GOBIN=$(LOCALBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen to $(LOCALBIN) if missing or wrong version.
