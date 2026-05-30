@@ -4,15 +4,16 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 ---
 
-## Entry point: `cmd/main.go`
+## Entry point: `cmd/main.go` → `controller.Setup`
 
-- Parses flags: `metrics-bind-address`, `health-probe-bind-address`, `namespace` (falls back to `POD_NAMESPACE`), `template-name` (default base `SandboxTemplate` name, e.g. `lightspeed-agent`).
-- Builds controller-runtime `Manager` with core + `agenticv1alpha1` scheme.
-- Wires **dependency injection**:
+- Parses flags: `metrics-bind-address`, `health-probe-bind-address`, `namespace` (falls back to `POD_NAMESPACE`), `agentic-console-image`, `agentic-sandbox-image`.
+- Builds controller-runtime `Manager` with core + `agenticv1alpha1` + OpenShift console/operator scheme.
+- Calls `controller.Setup(mgr, opts)` which wires **dependency injection**:
   - `proposal.NewSandboxManager(mgr.GetClient(), namespace)` → `SandboxProvider` for the agent caller.
-  - `proposal.NewSandboxAgentCaller(sandboxMgr, mgr.GetClient(), proposal.NewAgentHTTPClient, namespace, templateName)` → satisfies `proposal.AgentCaller`.
-  - `proposal.ProposalReconciler{ Client: mgr.GetClient(), Log: ..., Agent: agentCaller }` → `SetupWithManager(mgr)`.
-- Registers health/readiness probes only; **does not** invoke `controller/console` (console ensure is a separate library entry; see Console section).
+  - `proposal.NewSandboxAgentCaller(sandboxMgr, mgr.GetClient(), proposal.NewAgentHTTPClient, namespace)` → satisfies `proposal.AgentCaller`.
+  - `proposal.ProposalReconciler{ Client, Log, Agent, Namespace }` → `SetupWithManager(mgr)`.
+  - `agenticconsole.EnsureAgenticConsole` registered as `manager.RunnableFunc` for console plugin deployment.
+- Registers health/readiness probes. See `how/project-structure.md` for full flag reference.
 
 ---
 
@@ -58,7 +59,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `reconciler.go` | `AgenticConsoleConfig` (Image, Namespace); constants for plugin name, cert, nginx config string | `EnsureAgenticConsole` (orchestrates ordered ensures), `labels`, `ensureConfigMap`, `ensureServiceAccount`, `ensureService`, `ensureDeployment`, `ensureConsolePlugin`, `ensureConsoleActivation` |
 | `reconciler_test.go` | — | Tests for idempotency, image updates, skip when no image |
 
-**Integration note:** `EnsureAgenticConsole` is **not** registered in `cmd/main.go` in this repo snapshot; another binary or future setup is expected to call it with `AgenticConsoleConfig`. It mutates OpenShift `Console` cluster CR `spec.plugins` via retry-on-conflict.
+**Integration note:** `EnsureAgenticConsole` is registered in `controller/setup.go` as a `manager.RunnableFunc` — it runs once at manager start, not as a reconcile loop. It mutates OpenShift `Console` cluster CR `spec.plugins` via retry-on-conflict.
 
 ---
 
@@ -98,7 +99,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 ## `SandboxAgentCaller` and HTTP
 
-- **Constructor:** Accepts `SandboxProvider`, `client.Client`, `ClientFactory func(endpoint string) AgentHTTPClientInterface`, operator namespace, `BaseTemplateName`, `Timeout` (default from const).
+- **Constructor:** Accepts `SandboxProvider`, `client.Client`, `ClientFactory func(endpoint string) AgentHTTPClientInterface`, operator namespace. `Timeout` defaults to `defaultSandboxTimeout` const.
 - **`callWithSandbox` order:** `EnsureAgentTemplate` → `Claim` → `patchSandboxInfo` (status subresource merge) → `WaitReady` → normalize URL (`http://{fqdn}:8080` if no scheme) → `outputSchemaForStep` → `ClientFactory(endpoint).Run(ctx, "", query, schema, agentCtx)`.
 - **`Run` contract:** Empty `systemPrompt`; full payload in POST body per `client.go` (`query`, `outputSchema`, `context`). Path constant `/v1/agent/run`.
 - **`buildAgentContext`:** `TargetNamespaces`, `ApprovedOption` / `ExecutionResult` per step, `PreviousAttempts` from failed `StepResultRef` outcomes across analysis/execution/verification result lists.
@@ -169,7 +170,7 @@ ProposalReconciler.Reconcile
 
 ## Implementation notes (gotchas)
 
-- **`cmd/main.go` scheme:** Only core + `agenticv1alpha1`. Watching or applying arbitrary CRDs from tests may need extended schemes (see `reconciler_test.go`).
+- **`cmd/main.go` scheme:** Registers core + `agenticv1alpha1` + `consolev1` + `openshiftv1`. Watching or applying arbitrary CRDs from tests may need extended schemes (see `reconciler_test.go`).
 - **Max concurrent reconciles:** `SetupWithManager` reads cluster `ApprovalPolicy` via API reader for `MaxConcurrentProposals`, else `DefaultMaxConcurrentProposals` from API package.
 - **Policy watch:** Enqueues **all** non-terminal proposals on any `ApprovalPolicy` event — can be chatty.
 - **Workflow resolution errors:** Patched onto `ProposalConditionAnalyzed` false — see API for exact condition ordering vs `DerivePhase`.

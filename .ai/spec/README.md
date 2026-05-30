@@ -1,35 +1,54 @@
 # Lightspeed Agentic Operator -- Specifications
 
-These specs define the requirements, behaviors, and architecture for the lightspeed-agentic-operator. They are organized into two layers:
+Behavioral rules, architecture specs, and implementation guides for the lightspeed-agentic-operator -- a Kubernetes operator that drives AI-assisted `Proposal` workflows through analysis, execution, and verification phases with human approval gates.
 
-- **[`what/`](what/)** -- Behavioral rules: WHAT the system must do. Technology-neutral, testable assertions. Use these to understand requirements, fix bugs, or rebuild components.
-- **[`how/`](how/)** -- Architecture specs: HOW the current implementation is structured. Module boundaries, data flow, design patterns. Use these to navigate, modify, and extend the codebase.
+## Structure
+
+| Layer | Path | Purpose |
+|---|---|---|
+| **what/** | `.ai/spec/what/` | Behavioral rules. What the system must do. Implementation-agnostic. |
+| **how/** | `.ai/spec/how/` | Codebase navigation. How the code is organized. Implementation-specific. |
 
 ## Scope
 
-These specs cover the **lightspeed-agentic-operator** Go/kubebuilder application only. The sandbox runtime, console plugin, and skills packaging are separate projects with their own specs.
+These specs cover the **lightspeed-agentic-operator** Go/kubebuilder application only. The sandbox runtime, console plugin frontend, and skills packaging are separate projects with their own specs.
 
 ## Audience
 
-AI agents (Claude). Specs optimize for precision, unambiguous rules, and machine-parseable structure.
+AI agents. Content is optimized for precision and machine consumption.
 
 ## Quick Start
 
-| I want to... | Read |
-|--------------|------|
+| Task | Start here |
+|---|---|
+| Understand the system | `what/system-overview.md` |
 | Understand the proposal workflow | `what/proposal-lifecycle.md` |
 | Look up a CRD field | `what/crd-api.md` |
 | Understand the approval system | `what/approval.md` |
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
+| Navigate the project layout | `how/project-structure.md` |
 | Navigate the controller codebase | `how/reconciler.md` |
 | Understand the CLI plugin | `how/cli.md` |
 
+## Cross-Reference
+
+| what/ | how/ |
+|---|---|
+| `what/system-overview.md` | `how/project-structure.md` |
+| `what/proposal-lifecycle.md` | `how/reconciler.md` |
+| `what/crd-api.md` | `how/reconciler.md`, `how/cli.md` |
+| `what/approval.md` | `how/reconciler.md`, `how/cli.md` |
+| `what/sandbox-execution.md` | `how/reconciler.md` |
+
 ## Conventions
 
-- `[PLANNED: OLS-XXXX]` markers indicate existing rules about to change due to open Jira work
-- "Planned Changes" sections list new capabilities not yet in code
-- CRD field names reference `spec.*` and `status.*` paths
-- Internal constants are stated as behavioral rules without numeric values
+- **Rule numbering:** behavioral rules are numbered sequentially within each what/ file.
+- **Planned changes:** unimplemented behavior is marked with `[PLANNED]` or `[PLANNED: OLS-XXXX]` inline next to the rule it affects.
+- **Constraints:** component-specific and cross-cutting constraints go in the relevant what/ file's Constraints section, co-located with behavioral rules.
+- **Authority:** what/ specs are authoritative for behavior. how/ specs are authoritative for implementation. When they conflict, what/ wins.
+- **When to create a new file vs. extend an existing one:** if the new concern has its own lifecycle, configuration surface, and can be understood independently, it gets its own file. If it's a capability added to an existing component, it goes in that component's file.
+- CRD field names reference `spec.*` and `status.*` paths.
+- Internal constants are stated as behavioral rules without numeric values.
 
 ## Project Context
 

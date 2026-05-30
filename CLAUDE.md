@@ -1,5 +1,9 @@
 # Agentic Operator — project guide
 
+## Specs
+
+All specifications live in `.ai/spec/`. Start with `.ai/spec/README.md` for project overview, reading order, and structure guide.
+
 **What lives where:** **`agent.md`** (how agents should work), **`README.md`** (tests, **`make manifests`**, Makefile, cluster workflow, **`make api-lint`**, CEL / **`XValidation`** notes). This file is **architecture and conventions** for humans and agents editing the tree.
 
 ## Module layout
