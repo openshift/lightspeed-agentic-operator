@@ -19,7 +19,45 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 13. **Verification query payload**: The `query` MUST include the approved option JSON and a JSON description of the latest execution output (actions and inline verification) when available.
 14. **Context envelope**: The `context` object MUST include `targetNamespaces` from `spec.targetNamespaces`, synthesized `previousAttempts` from failed prior `status.steps.*.results` entries, `approvedOption` when executing/verifying, and `executionResult` when verifying. Note: the sandbox context prefix formatter (see sandbox `run-api.md`) only expands `targetNamespaces`, `attempt`, `previousAttempts`, and `approvedOption` into the model prompt; `executionResult` is carried in `context` for tracing but verification execution details are primarily conveyed to the model via the `query` body (rendered from the verification template).
 15. **Secrets — proposal** `spec.tools.requiredSecrets` / per-step tools: Secret objects MUST live in the **same namespace as the `Proposal`**. Mounting into sandbox MUST honor `SecretMountSpec`: environment variable injection OR file mount at configured absolute path.
-16. **Secrets — LLM credentials**: LLM provider credentials MUST be loaded from secret names declared on the `LLMProvider` and wired into the derived template via env/volumes per provider type (including optional file mounts for provider types that require file-based credentials).
+16. **LLM configuration — env var contract**: The operator MUST set a defined set of `LIGHTSPEED_*` env vars on the sandbox pod template that mechanically mirror CRD fields. The operator MUST NOT contain SDK-specific logic (no knowledge of `ANTHROPIC_MODEL`, `CLAUDE_CODE_USE_VERTEX`, `GEMINI_MODEL`, etc.). The sandbox owns all SDK resolution.
+
+    **Always set:**
+
+    | Env var | Source |
+    |---|---|
+    | `LIGHTSPEED_LLM_TYPE` | `LLMProvider.spec.type` (verbatim enum value) |
+    | `LIGHTSPEED_MODEL` | `Agent.spec.model` |
+
+    **Set when `type=GoogleCloudVertex`:**
+
+    | Env var | Source |
+    |---|---|
+    | `LIGHTSPEED_VERTEX_MODEL_PROVIDER` | `.googleCloudVertex.modelProvider` |
+    | `LIGHTSPEED_GCP_PROJECT` | `.googleCloudVertex.projectID` |
+    | `LIGHTSPEED_GCP_REGION` | `.googleCloudVertex.region` |
+
+    **Set when `type=AzureOpenAI`:**
+
+    | Env var | Source |
+    |---|---|
+    | `LIGHTSPEED_AZURE_ENDPOINT` | `.azureOpenAI.endpoint` |
+    | `LIGHTSPEED_AZURE_API_VERSION` | `.azureOpenAI.apiVersion` (when non-empty) |
+
+    **Set when `type=AWSBedrock`:**
+
+    | Env var | Source |
+    |---|---|
+    | `LIGHTSPEED_AWS_REGION` | `.awsBedrock.region` |
+
+    **URL override (any provider, when set):**
+
+    | Env var | Source |
+    |---|---|
+    | `LIGHTSPEED_LLM_URL` | Provider-specific `url` field |
+
+    **Credentials:** The operator MUST inject the provider's `credentialsSecret` via `envFrom.secretRef` so all secret keys are available as env vars in the sandbox. For provider types requiring file-based credentials (GoogleCloudVertex), the operator MUST additionally mount the secret as a volume and set `GOOGLE_APPLICATION_CREDENTIALS` to the mount path (this is infrastructure wiring, not SDK logic).
+
+    **Existing vars unchanged:** `LIGHTSPEED_MODE`, `LIGHTSPEED_MCP_SERVERS`.
 17. **Secrets — MCP headers**: When an MCP header sources a Secret, the template MUST mount that secret on a dedicated read-only path suitable for header injection configuration.
 18. **Skills volumes**: Skills MUST be conveyed as OCI image volume(s) on the sandbox pod template; when `SkillsSource.paths` is set, the controller MUST mount each path as a `subPath` under the configured skills mount root using stable mount naming derived from the path’s final segment. When multiple `skills` entries exist in `ToolsSpec`, template derivation MUST apply image/path patching based on the **first** non-empty skills source (current behavior).
 19. **MCP servers**: MCP configuration MUST be serialized to an environment variable payload listing servers, URLs, timeouts, and header sources so the agent runtime can open MCP connections without CR-specific code in the agent.
@@ -56,5 +94,5 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 
 - [PLANNED: OLS-2957] **Sandbox template management** UX and CRD ergonomics (base/derived lifecycle, versioning) may change operator/template coupling described in rules 2–4.
 - [PLANNED: OLS-3038] **TLS verification and network policy** for agent traffic may replace permissive internal TLS client behavior.
-- [PLANNED: OLS-3044] **Provider parity**: environment variable contract for non-Claude providers in templates MUST track sandbox image capabilities.
+- [RESOLVED: OLS-3153] **Provider parity**: replaced SDK-specific env var wiring with a generic `LIGHTSPEED_*` contract (rule 16). The sandbox resolves SDK vars internally.
 - [PLANNED: OLS-2894] Support **multiple concurrent skills images** in template derivation beyond the first `skills` entry if product requires composite skill bundles.
