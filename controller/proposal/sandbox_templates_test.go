@@ -15,7 +15,7 @@ func testLLMProvider(providerType agenticv1alpha1.LLMProviderType) *agenticv1alp
 	case agenticv1alpha1.LLMProviderAnthropic:
 		spec.Anthropic = agenticv1alpha1.AnthropicConfig{CredentialsSecret: creds}
 	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
-		spec.GoogleCloudVertex = agenticv1alpha1.GoogleCloudVertexConfig{CredentialsSecret: creds, ProjectID: "test-project", Region: "us-central1"}
+		spec.GoogleCloudVertex = agenticv1alpha1.GoogleCloudVertexConfig{CredentialsSecret: creds, ProjectID: "test-project", Region: "us-central1", ModelProvider: agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic}
 	case agenticv1alpha1.LLMProviderOpenAI:
 		spec.OpenAI = agenticv1alpha1.OpenAIConfig{CredentialsSecret: creds}
 	case agenticv1alpha1.LLMProviderAzureOpenAI:
@@ -41,6 +41,21 @@ func testLLMProviderWithURL(providerType agenticv1alpha1.LLMProviderType, u stri
 		p.Spec.AWSBedrock.URL = u
 	}
 	return p
+}
+
+func testVertexLLMProvider(mp agenticv1alpha1.GoogleCloudVertexModelProvider) *agenticv1alpha1.LLMProvider {
+	creds := agenticv1alpha1.SecretReference{Name: "my-llm-secret"}
+	return &agenticv1alpha1.LLMProvider{
+		Spec: agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderGoogleCloudVertex,
+			GoogleCloudVertex: agenticv1alpha1.GoogleCloudVertexConfig{
+				CredentialsSecret: creds,
+				ProjectID:         "test-project",
+				Region:            "us-central1",
+				ModelProvider:     mp,
+			},
+		},
+	}
 }
 
 func emptyTemplate() *unstructured.Unstructured {
@@ -246,6 +261,12 @@ func TestPatchLLMCredentials_Anthropic(t *testing.T) {
 	}
 
 	envs := getEnvVars(tmpl)
+	if e, ok := findEnv(envs, "LIGHTSPEED_AGENT_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_AGENT_PROVIDER")
+	} else if e["value"] != "claude" {
+		t.Errorf("LIGHTSPEED_AGENT_PROVIDER = %q, want claude", e["value"])
+	}
+
 	if e, ok := findEnv(envs, "ANTHROPIC_MODEL"); !ok {
 		t.Error("missing ANTHROPIC_MODEL")
 	} else if e["value"] != "claude-opus-4-6" {
@@ -259,40 +280,115 @@ func TestPatchLLMCredentials_Anthropic(t *testing.T) {
 	}
 }
 
+// Vertex env contract per modelProvider:
+//
+//	modelProvider  LIGHTSPEED_AGENT_PROVIDER  Model env var     CLAUDE_CODE_USE_VERTEX
+//	─────────────  ─────────────────────────  ────────────────  ──────────────────────
+//	Anthropic      claude                     ANTHROPIC_MODEL   "1"
+//	Google         gemini                     GEMINI_MODEL      (absent)
+//	OpenAI         openai                     OPENAI_MODEL      (absent)
+//
+// All three always set: GCP_PROJECT, GCP_REGION, GOOGLE_APPLICATION_CREDENTIALS,
+// credentials volume mount at /etc/llm-credentials.
 func TestPatchLLMCredentials_Vertex(t *testing.T) {
-	tmpl := emptyTemplate()
-	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
-
-	if err := patchLLMCredentials(tmpl, llm, "claude-opus-4-6"); err != nil {
-		t.Fatalf("patchLLMCredentials: %v", err)
+	tests := []struct {
+		name          string
+		modelProvider agenticv1alpha1.GoogleCloudVertexModelProvider
+		model         string
+		wantProvider  string
+		wantModelEnv  string
+		wantVertex    bool // CLAUDE_CODE_USE_VERTEX="1"
+	}{
+		{
+			name:          "Anthropic",
+			modelProvider: agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic,
+			model:         "claude-opus-4-6",
+			wantProvider:  "claude",
+			wantModelEnv:  "ANTHROPIC_MODEL",
+			wantVertex:    true,
+		},
+		{
+			name:          "Google",
+			modelProvider: agenticv1alpha1.GoogleCloudVertexModelProviderGoogle,
+			model:         "gemini-2.5-flash",
+			wantProvider:  "gemini",
+			wantModelEnv:  "GEMINI_MODEL",
+			wantVertex:    false,
+		},
+		{
+			name:          "OpenAI",
+			modelProvider: agenticv1alpha1.GoogleCloudVertexModelProviderOpenAI,
+			model:         "gpt-4.1",
+			wantProvider:  "openai",
+			wantModelEnv:  "OPENAI_MODEL",
+			wantVertex:    false,
+		},
 	}
 
-	if !hasSecretEnvFrom(tmpl, "my-llm-secret") {
-		t.Error("missing envFrom secretRef for my-llm-secret")
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpl := emptyTemplate()
+			llm := testVertexLLMProvider(tc.modelProvider)
 
-	envs := getEnvVars(tmpl)
-	if e, ok := findEnv(envs, "CLAUDE_CODE_USE_VERTEX"); !ok {
-		t.Error("missing CLAUDE_CODE_USE_VERTEX")
-	} else if e["value"] != "1" {
-		t.Errorf("CLAUDE_CODE_USE_VERTEX = %q", e["value"])
-	}
+			if err := patchLLMCredentials(tmpl, llm, tc.model); err != nil {
+				t.Fatalf("patchLLMCredentials: %v", err)
+			}
 
-	if e, ok := findEnv(envs, "GOOGLE_APPLICATION_CREDENTIALS"); !ok {
-		t.Error("missing GOOGLE_APPLICATION_CREDENTIALS")
-	} else if e["value"] != vertexCredsMountPath+"/"+vertexCredsFileName {
-		t.Errorf("GOOGLE_APPLICATION_CREDENTIALS = %q", e["value"])
-	}
+			if !hasSecretEnvFrom(tmpl, "my-llm-secret") {
+				t.Error("missing envFrom secretRef for my-llm-secret")
+			}
 
-	containers, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "containers")
-	container := containers[0].(map[string]any)
-	mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
-	if len(mounts) != 1 {
-		t.Fatalf("expected 1 volume mount, got %d", len(mounts))
-	}
-	mount := mounts[0].(map[string]any)
-	if mount["name"] != llmCredsVolumeName || mount["mountPath"] != vertexCredsMountPath {
-		t.Errorf("mount = %v", mount)
+			envs := getEnvVars(tmpl)
+
+			if e, ok := findEnv(envs, "LIGHTSPEED_AGENT_PROVIDER"); !ok {
+				t.Error("missing LIGHTSPEED_AGENT_PROVIDER")
+			} else if e["value"] != tc.wantProvider {
+				t.Errorf("LIGHTSPEED_AGENT_PROVIDER = %q, want %q", e["value"], tc.wantProvider)
+			}
+
+			if e, ok := findEnv(envs, tc.wantModelEnv); !ok {
+				t.Errorf("missing %s", tc.wantModelEnv)
+			} else if e["value"] != tc.model {
+				t.Errorf("%s = %q, want %q", tc.wantModelEnv, e["value"], tc.model)
+			}
+
+			if _, ok := findEnv(envs, "CLAUDE_CODE_USE_VERTEX"); ok != tc.wantVertex {
+				if tc.wantVertex {
+					t.Error("missing CLAUDE_CODE_USE_VERTEX")
+				} else {
+					t.Error("CLAUDE_CODE_USE_VERTEX should not be set")
+				}
+			}
+
+			if e, ok := findEnv(envs, "GCP_PROJECT"); !ok {
+				t.Error("missing GCP_PROJECT")
+			} else if e["value"] != "test-project" {
+				t.Errorf("GCP_PROJECT = %q", e["value"])
+			}
+
+			if e, ok := findEnv(envs, "GCP_REGION"); !ok {
+				t.Error("missing GCP_REGION")
+			} else if e["value"] != "us-central1" {
+				t.Errorf("GCP_REGION = %q", e["value"])
+			}
+
+			if e, ok := findEnv(envs, "GOOGLE_APPLICATION_CREDENTIALS"); !ok {
+				t.Error("missing GOOGLE_APPLICATION_CREDENTIALS")
+			} else if e["value"] != vertexCredsMountPath+"/"+vertexCredsFileName {
+				t.Errorf("GOOGLE_APPLICATION_CREDENTIALS = %q", e["value"])
+			}
+
+			containers, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "containers")
+			container := containers[0].(map[string]any)
+			mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+			if len(mounts) != 1 {
+				t.Fatalf("expected 1 volume mount, got %d", len(mounts))
+			}
+			mount := mounts[0].(map[string]any)
+			if mount["name"] != llmCredsVolumeName || mount["mountPath"] != vertexCredsMountPath {
+				t.Errorf("mount = %v", mount)
+			}
+		})
 	}
 }
 
@@ -305,10 +401,74 @@ func TestPatchLLMCredentials_Bedrock(t *testing.T) {
 	}
 
 	envs := getEnvVars(tmpl)
+	if e, ok := findEnv(envs, "LIGHTSPEED_AGENT_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_AGENT_PROVIDER")
+	} else if e["value"] != "claude" {
+		t.Errorf("LIGHTSPEED_AGENT_PROVIDER = %q, want claude", e["value"])
+	}
+
 	if e, ok := findEnv(envs, "CLAUDE_CODE_USE_BEDROCK"); !ok {
 		t.Error("missing CLAUDE_CODE_USE_BEDROCK")
 	} else if e["value"] != "1" {
 		t.Errorf("CLAUDE_CODE_USE_BEDROCK = %q", e["value"])
+	}
+}
+
+func TestPatchLLMCredentials_OpenAI(t *testing.T) {
+	tmpl := emptyTemplate()
+	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderOpenAI, "https://api.example.com/v1")
+
+	if err := patchLLMCredentials(tmpl, llm, "gpt-4.1"); err != nil {
+		t.Fatalf("patchLLMCredentials: %v", err)
+	}
+
+	envs := getEnvVars(tmpl)
+	if e, ok := findEnv(envs, "LIGHTSPEED_AGENT_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_AGENT_PROVIDER")
+	} else if e["value"] != "openai" {
+		t.Errorf("LIGHTSPEED_AGENT_PROVIDER = %q, want openai", e["value"])
+	}
+
+	if e, ok := findEnv(envs, "OPENAI_MODEL"); !ok {
+		t.Error("missing OPENAI_MODEL")
+	} else if e["value"] != "gpt-4.1" {
+		t.Errorf("OPENAI_MODEL = %q", e["value"])
+	}
+
+	if _, ok := findEnv(envs, "ANTHROPIC_MODEL"); ok {
+		t.Error("ANTHROPIC_MODEL should not be set for OpenAI provider")
+	}
+
+	if e, ok := findEnv(envs, "OPENAI_BASE_URL"); !ok {
+		t.Error("missing OPENAI_BASE_URL")
+	} else if e["value"] != "https://api.example.com/v1" {
+		t.Errorf("OPENAI_BASE_URL = %q", e["value"])
+	}
+}
+
+func TestPatchLLMCredentials_AzureOpenAI(t *testing.T) {
+	tmpl := emptyTemplate()
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAzureOpenAI)
+
+	if err := patchLLMCredentials(tmpl, llm, "gpt-4.1"); err != nil {
+		t.Fatalf("patchLLMCredentials: %v", err)
+	}
+
+	envs := getEnvVars(tmpl)
+	if e, ok := findEnv(envs, "LIGHTSPEED_AGENT_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_AGENT_PROVIDER")
+	} else if e["value"] != "openai" {
+		t.Errorf("LIGHTSPEED_AGENT_PROVIDER = %q, want openai", e["value"])
+	}
+
+	if e, ok := findEnv(envs, "OPENAI_MODEL"); !ok {
+		t.Error("missing OPENAI_MODEL")
+	} else if e["value"] != "gpt-4.1" {
+		t.Errorf("OPENAI_MODEL = %q", e["value"])
+	}
+
+	if _, ok := findEnv(envs, "ANTHROPIC_MODEL"); ok {
+		t.Error("ANTHROPIC_MODEL should not be set for AzureOpenAI provider")
 	}
 }
 

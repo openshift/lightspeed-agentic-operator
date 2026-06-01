@@ -36,7 +36,8 @@ spec:
           AI provider (model specified on Agent, not here):\n\n\tapiVersion: agentic.openshift.io/v1alpha1\n\tkind:
           LLMProvider\n\tmetadata:\n\t  name: vertex-ai\n\tspec:\n\t  type: GoogleCloudVertex\n\t
           \ googleCloudVertex:\n\t    credentialsSecret:\n\t      name: llm-credentials\n\t
-          \   projectID: my-gcp-project\n\t    region: us-central1"
+          \   projectID: my-gcp-project\n\t    region: us-central1\n\t    modelProvider:
+          Anthropic"
         properties:
           apiVersion:
             description: |-
@@ -268,6 +269,17 @@ spec:
                     required:
                     - name
                     type: object
+                  modelProvider:
+                    description: |-
+                      modelProvider selects which model provider stack talks to Vertex AI (required).
+                      "Anthropic" uses Anthropic models on Vertex; "Google" uses Google models on Vertex;
+                      "OpenAI" uses OpenAI-compatible models on Vertex.
+                      Enum is defined on GoogleCloudVertexModelProvider.
+                    enum:
+                    - Anthropic
+                    - Google
+                    - OpenAI
+                    type: string
                   projectID:
                     description: |-
                       projectID is the Google Cloud Project ID where Vertex AI is enabled.
@@ -316,6 +328,7 @@ spec:
                       rule: '!self.contains(''#'')'
                 required:
                 - credentialsSecret
+                - modelProvider
                 - projectID
                 - region
                 type: object
