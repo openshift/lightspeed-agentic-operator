@@ -21,7 +21,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 15. **Agent — `spec.model`**: Required provider-specific model identifier string; validation restricts charset.
 16. **Agent — `spec.timeouts`**: Optional per-step and chat timeouts in seconds with min/max bounds per field.
 17. **Agent — `spec.maxTurns`**: Optional bound on tool-use turns per invocation.
-18. **Agent — `status.conditions`**: Observed readiness; `Ready` condition documents whether referenced provider resources are accessible (see operator reconcile behavior).
+18. **Agent — `status.conditions`**: [PLANNED] Observed readiness; `Ready` condition is defined on the API but no controller currently reconciles Agent status. When implemented, it SHOULD document whether referenced provider resources are accessible.
 19. **LLMProvider — discriminator**: `spec.type` MUST match exactly one embedded config: `anthropic`, `googleCloudVertex`, `openAI`, `azureOpenAI`, or `awsBedrock`; CEL enforces mutual exclusion.
 20. **LLMProvider — secrets**: Each provider’s `credentialsSecret` references a `Secret` **by name** in the operator namespace (documented on fields as the deployment namespace for the operator, e.g. OpenShift Lightspeed namespace); required secret **keys** are defined per provider type on the API field comments (e.g. API key env file key names).
 21. **LLMProvider — endpoints**: Optional URL overrides per provider; validation enforces HTTP/HTTPS URL shape. Azure requires `endpoint`; optional separate URL override field exists where defined.

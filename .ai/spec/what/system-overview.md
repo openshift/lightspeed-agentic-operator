@@ -1,0 +1,64 @@
+# System Overview
+
+The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal` custom resources and drives them through a multi-phase AI-assisted workflow. Each phase (analysis, execution, verification) invokes an LLM-backed agent running in an ephemeral sandbox pod, with human approval gates between phases. The operator manages the full lifecycle: CRD reconciliation, sandbox provisioning, RBAC materialization, result recording, and garbage collection.
+
+## Behavioral Rules
+
+### System Role
+
+1. The operator MUST watch `Proposal` resources across all namespaces and reconcile them through the proposal lifecycle defined in `proposal-lifecycle.md`.
+2. The operator MUST run as a single-replica controller-runtime manager in a designated operator namespace, not in workload namespaces.
+3. The operator MUST register health (`/healthz`) and readiness (`/readyz`) probes.
+4. The operator MUST accept its namespace via `--namespace` flag or `POD_NAMESPACE` environment variable; it MUST exit if neither is provided.
+
+### Component Inventory
+
+5. The system comprises four functional components:
+   - **Proposal controller** — reconciles `Proposal` CRs through the workflow state machine.
+   - **Console plugin** — deploys the agentic console UI as an OpenShift `ConsolePlugin`.
+   - **CLI plugin** (`oc-agentic`) — provides `oc agentic proposal` commands for proposal CRUD, approval, watch, and log streaming.
+   - **API types** (`api/v1alpha1`) — CRD type definitions published as a separate Go module for downstream consumers.
+6. The proposal controller and console plugin run in the same operator binary via `controller.Setup()`.
+7. The CLI is a separate binary (`cmd/oc-agentic`) that communicates directly with the Kubernetes API server.
+
+### External Dependencies
+
+8. The operator MUST interact with the Kubernetes API server for all CR CRUD, status updates, and RBAC management.
+9. The operator MUST interact with the Sandbox API (`extensions.agents.x-k8s.io/v1alpha1` `SandboxClaim`, `agents.x-k8s.io/v1alpha1` `Sandbox`) to provision ephemeral agent workloads.
+10. The operator MUST resolve `Agent` CRs and their referenced `LLMProvider` CRs to determine model configuration and credentials for each workflow step.
+11. The operator MUST call the sandbox agent's `POST /v1/agent/run` HTTP endpoint for each workflow step (analysis, execution, verification, escalation).
+12. The operator MUST interact with OpenShift API (`console.openshift.io/v1` `ConsolePlugin`, `operator.openshift.io/v1` `Console`) for console plugin deployment.
+
+### Dual-Module Structure
+
+13. The `api/` directory MUST be a separate Go module (`github.com/openshift/lightspeed-agentic-operator/api`) so downstream projects can depend on CRD types without importing the full operator.
+14. The root `go.mod` MUST use a `replace` directive pointing `api` to `./api` for local development.
+
+### Multi-Tenancy
+
+15. Proposals are namespace-scoped; the operator reconciles proposals across all namespaces.
+16. Cluster-scoped resources (`Agent`, `LLMProvider`, `ApprovalPolicy`) are shared across all tenants.
+17. Sandbox pods and claims run in the operator namespace, not in tenant namespaces.
+
+## Configuration Surface
+
+| Field/Flag | Type | Default | Description |
+|---|---|---|---|
+| `--namespace` / `POD_NAMESPACE` | string | (required) | Operator install namespace |
+| `--metrics-bind-address` | string | `:8080` | Metrics endpoint bind address |
+| `--health-probe-bind-address` | string | `:8081` | Health probe endpoint bind address |
+| `--agentic-console-image` | string | `""` | Console plugin container image |
+| `--agentic-sandbox-image` | string | `""` | Sandbox container image |
+
+## Constraints
+
+- The operator assumes it is the sole controller for `agentic.openshift.io/v1alpha1` resources; running multiple replicas without leader election would cause conflicts.
+- Sandbox provisioning depends on the Sandbox API CRDs being installed in the cluster (`SandboxClaim`, `Sandbox`, `SandboxTemplate`).
+- The operator requires OpenShift APIs for console plugin deployment; running on vanilla Kubernetes skips console integration.
+
+## Planned Changes
+
+| Ticket | Summary |
+|---|---|
+| OLS-2957 | Sandbox template management UX and CRD ergonomics may change operator/template coupling |
+| OLS-2940 | Autonomous workflow CRD migrations may rename or reshape `v1alpha1` fields |
