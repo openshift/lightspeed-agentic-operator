@@ -78,5 +78,5 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 
 - [PLANNED: OLS-2957] **Sandbox template management** UX and CRD ergonomics (base/derived lifecycle, versioning) may change operator/template coupling described in rules 2–4.
 - [PLANNED: OLS-3038] **TLS verification and network policy** for agent traffic may replace permissive internal TLS client behavior.
-- [OLS-3153] **Operator-sandbox env var contract**: SDK-specific env vars removed from operator; replaced by generic `LIGHTSPEED_*` vars (rule 16a). Sandbox handles all SDK-specific mapping internally. Supersedes OLS-3044 and OLS-3051.
+- [OLS-3153] ~~IMPLEMENTED~~ Operator-sandbox env var contract: SDK-specific env vars removed from operator; replaced by generic `LIGHTSPEED_*` vars (rule 16a). Sandbox handles all SDK-specific mapping internally. Supersedes OLS-3044 and OLS-3051.
 - [PLANNED: OLS-2894] Support **multiple concurrent skills images** in template derivation beyond the first `skills` entry if product requires composite skill bundles.
