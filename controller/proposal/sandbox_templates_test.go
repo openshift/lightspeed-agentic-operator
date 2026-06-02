@@ -15,11 +15,20 @@ func testLLMProvider(providerType agenticv1alpha1.LLMProviderType) *agenticv1alp
 	case agenticv1alpha1.LLMProviderAnthropic:
 		spec.Anthropic = agenticv1alpha1.AnthropicConfig{CredentialsSecret: creds}
 	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
-		spec.GoogleCloudVertex = agenticv1alpha1.GoogleCloudVertexConfig{CredentialsSecret: creds, ProjectID: "test-project", Region: "us-central1"}
+		spec.GoogleCloudVertex = agenticv1alpha1.GoogleCloudVertexConfig{
+			CredentialsSecret: creds,
+			ProjectID:         "test-project",
+			Region:            "us-central1",
+			ModelProvider:     agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic,
+		}
 	case agenticv1alpha1.LLMProviderOpenAI:
 		spec.OpenAI = agenticv1alpha1.OpenAIConfig{CredentialsSecret: creds}
 	case agenticv1alpha1.LLMProviderAzureOpenAI:
-		spec.AzureOpenAI = agenticv1alpha1.AzureOpenAIConfig{CredentialsSecret: creds, Endpoint: "https://test.openai.azure.com"}
+		spec.AzureOpenAI = agenticv1alpha1.AzureOpenAIConfig{
+			CredentialsSecret: creds,
+			Endpoint:          "https://test.openai.azure.com",
+			APIVersion:        "2024-02-01",
+		}
 	case agenticv1alpha1.LLMProviderAWSBedrock:
 		spec.AWSBedrock = agenticv1alpha1.AWSBedrockConfig{CredentialsSecret: creds, Region: "us-east-1"}
 	}
@@ -233,6 +242,45 @@ func TestComputeTemplateHash_DifferentRequiredSecrets(t *testing.T) {
 
 // --- patchLLMCredentials tests ---
 
+var sdkSpecificEnvVars = []string{
+	"ANTHROPIC_MODEL", "CLAUDE_CODE_USE_VERTEX", "GCP_PROJECT", "GCP_REGION",
+	"GOOGLE_APPLICATION_CREDENTIALS", "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_VERSION",
+	"CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "OPENAI_BASE_URL", "ANTHROPIC_BASE_URL",
+}
+
+func assertNoSDKEnvVars(t *testing.T, envs []map[string]any) {
+	t.Helper()
+	for _, name := range sdkSpecificEnvVars {
+		if _, ok := findEnv(envs, name); ok {
+			t.Errorf("unexpected SDK-specific env var %s", name)
+		}
+	}
+}
+
+func assertCredentialVolumeMount(t *testing.T, tmpl *unstructured.Unstructured) {
+	t.Helper()
+	containers, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "containers")
+	if len(containers) == 0 {
+		t.Fatal("no containers")
+	}
+	container := containers[0].(map[string]any)
+	mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+	found := false
+	for _, m := range mounts {
+		mount := m.(map[string]any)
+		if mount["name"] == llmCredsVolumeName && mount["mountPath"] == llmCredsMountPath {
+			found = true
+			if mount["readOnly"] != true {
+				t.Error("credential volume mount should be readOnly")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("missing credential volume mount at %s", llmCredsMountPath)
+	}
+}
+
 func TestPatchLLMCredentials_Anthropic(t *testing.T) {
 	tmpl := emptyTemplate()
 	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderAnthropic, "https://custom.api")
@@ -244,18 +292,25 @@ func TestPatchLLMCredentials_Anthropic(t *testing.T) {
 	if !hasSecretEnvFrom(tmpl, "my-llm-secret") {
 		t.Error("missing envFrom secretRef for my-llm-secret")
 	}
+	assertCredentialVolumeMount(t, tmpl)
 
 	envs := getEnvVars(tmpl)
-	if e, ok := findEnv(envs, "ANTHROPIC_MODEL"); !ok {
-		t.Error("missing ANTHROPIC_MODEL")
-	} else if e["value"] != "claude-opus-4-6" {
-		t.Errorf("ANTHROPIC_MODEL = %q", e["value"])
-	}
+	assertNoSDKEnvVars(t, envs)
 
-	if e, ok := findEnv(envs, "ANTHROPIC_BASE_URL"); !ok {
-		t.Error("missing ANTHROPIC_BASE_URL")
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER")
+	} else if e["value"] != "anthropic" {
+		t.Errorf("LIGHTSPEED_PROVIDER = %q, want anthropic", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_MODEL"); !ok {
+		t.Error("missing LIGHTSPEED_MODEL")
+	} else if e["value"] != "claude-opus-4-6" {
+		t.Errorf("LIGHTSPEED_MODEL = %q", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_URL"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_URL")
 	} else if e["value"] != "https://custom.api" {
-		t.Errorf("ANTHROPIC_BASE_URL = %q", e["value"])
+		t.Errorf("LIGHTSPEED_PROVIDER_URL = %q", e["value"])
 	}
 }
 
@@ -270,29 +325,35 @@ func TestPatchLLMCredentials_Vertex(t *testing.T) {
 	if !hasSecretEnvFrom(tmpl, "my-llm-secret") {
 		t.Error("missing envFrom secretRef for my-llm-secret")
 	}
+	assertCredentialVolumeMount(t, tmpl)
 
 	envs := getEnvVars(tmpl)
-	if e, ok := findEnv(envs, "CLAUDE_CODE_USE_VERTEX"); !ok {
-		t.Error("missing CLAUDE_CODE_USE_VERTEX")
-	} else if e["value"] != "1" {
-		t.Errorf("CLAUDE_CODE_USE_VERTEX = %q", e["value"])
-	}
+	assertNoSDKEnvVars(t, envs)
 
-	if e, ok := findEnv(envs, "GOOGLE_APPLICATION_CREDENTIALS"); !ok {
-		t.Error("missing GOOGLE_APPLICATION_CREDENTIALS")
-	} else if e["value"] != vertexCredsMountPath+"/"+vertexCredsFileName {
-		t.Errorf("GOOGLE_APPLICATION_CREDENTIALS = %q", e["value"])
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER")
+	} else if e["value"] != "vertex" {
+		t.Errorf("LIGHTSPEED_PROVIDER = %q, want vertex", e["value"])
 	}
-
-	containers, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "containers")
-	container := containers[0].(map[string]any)
-	mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
-	if len(mounts) != 1 {
-		t.Fatalf("expected 1 volume mount, got %d", len(mounts))
+	if e, ok := findEnv(envs, "LIGHTSPEED_MODEL"); !ok {
+		t.Error("missing LIGHTSPEED_MODEL")
+	} else if e["value"] != "claude-opus-4-6" {
+		t.Errorf("LIGHTSPEED_MODEL = %q", e["value"])
 	}
-	mount := mounts[0].(map[string]any)
-	if mount["name"] != llmCredsVolumeName || mount["mountPath"] != vertexCredsMountPath {
-		t.Errorf("mount = %v", mount)
+	if e, ok := findEnv(envs, "LIGHTSPEED_MODEL_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_MODEL_PROVIDER")
+	} else if e["value"] != string(agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic) {
+		t.Errorf("LIGHTSPEED_MODEL_PROVIDER = %q", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_PROJECT"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_PROJECT")
+	} else if e["value"] != "test-project" {
+		t.Errorf("LIGHTSPEED_PROVIDER_PROJECT = %q", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_REGION"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_REGION")
+	} else if e["value"] != "us-central1" {
+		t.Errorf("LIGHTSPEED_PROVIDER_REGION = %q", e["value"])
 	}
 }
 
@@ -304,11 +365,101 @@ func TestPatchLLMCredentials_Bedrock(t *testing.T) {
 		t.Fatalf("patchLLMCredentials: %v", err)
 	}
 
+	assertCredentialVolumeMount(t, tmpl)
+
 	envs := getEnvVars(tmpl)
-	if e, ok := findEnv(envs, "CLAUDE_CODE_USE_BEDROCK"); !ok {
-		t.Error("missing CLAUDE_CODE_USE_BEDROCK")
-	} else if e["value"] != "1" {
-		t.Errorf("CLAUDE_CODE_USE_BEDROCK = %q", e["value"])
+	assertNoSDKEnvVars(t, envs)
+
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER")
+	} else if e["value"] != "bedrock" {
+		t.Errorf("LIGHTSPEED_PROVIDER = %q, want bedrock", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_MODEL"); !ok {
+		t.Error("missing LIGHTSPEED_MODEL")
+	} else if e["value"] != "claude-opus-4-6" {
+		t.Errorf("LIGHTSPEED_MODEL = %q", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_REGION"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_REGION")
+	} else if e["value"] != "us-east-1" {
+		t.Errorf("LIGHTSPEED_PROVIDER_REGION = %q", e["value"])
+	}
+}
+
+func TestPatchLLMCredentials_OpenAI(t *testing.T) {
+	tmpl := emptyTemplate()
+	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderOpenAI, "https://api.example.com")
+
+	if err := patchLLMCredentials(tmpl, llm, "gpt-4.1"); err != nil {
+		t.Fatalf("patchLLMCredentials: %v", err)
+	}
+
+	assertCredentialVolumeMount(t, tmpl)
+
+	envs := getEnvVars(tmpl)
+	assertNoSDKEnvVars(t, envs)
+
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER")
+	} else if e["value"] != "openai" {
+		t.Errorf("LIGHTSPEED_PROVIDER = %q, want openai", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_MODEL"); !ok {
+		t.Error("missing LIGHTSPEED_MODEL")
+	} else if e["value"] != "gpt-4.1" {
+		t.Errorf("LIGHTSPEED_MODEL = %q", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_URL"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_URL")
+	} else if e["value"] != "https://api.example.com" {
+		t.Errorf("LIGHTSPEED_PROVIDER_URL = %q", e["value"])
+	}
+}
+
+func TestPatchLLMCredentials_Azure(t *testing.T) {
+	tmpl := emptyTemplate()
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAzureOpenAI)
+
+	if err := patchLLMCredentials(tmpl, llm, "gpt-4"); err != nil {
+		t.Fatalf("patchLLMCredentials: %v", err)
+	}
+
+	assertCredentialVolumeMount(t, tmpl)
+
+	envs := getEnvVars(tmpl)
+	assertNoSDKEnvVars(t, envs)
+
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER")
+	} else if e["value"] != "azure" {
+		t.Errorf("LIGHTSPEED_PROVIDER = %q, want azure", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_URL"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_URL")
+	} else if e["value"] != "https://test.openai.azure.com" {
+		t.Errorf("LIGHTSPEED_PROVIDER_URL = %q", e["value"])
+	}
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_API_VERSION"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_API_VERSION")
+	} else if e["value"] != "2024-02-01" {
+		t.Errorf("LIGHTSPEED_PROVIDER_API_VERSION = %q", e["value"])
+	}
+}
+
+func TestPatchLLMCredentials_AzureURLOverridesEndpoint(t *testing.T) {
+	tmpl := emptyTemplate()
+	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderAzureOpenAI, "https://override.example.com")
+
+	if err := patchLLMCredentials(tmpl, llm, "gpt-4"); err != nil {
+		t.Fatalf("patchLLMCredentials: %v", err)
+	}
+
+	envs := getEnvVars(tmpl)
+	if e, ok := findEnv(envs, "LIGHTSPEED_PROVIDER_URL"); !ok {
+		t.Error("missing LIGHTSPEED_PROVIDER_URL")
+	} else if e["value"] != "https://override.example.com" {
+		t.Errorf("LIGHTSPEED_PROVIDER_URL = %q, want override URL", e["value"])
 	}
 }
 
