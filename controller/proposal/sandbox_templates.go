@@ -26,8 +26,6 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 }
 
 const (
-	agentModeEnvVar = "LIGHTSPEED_MODE"
-
 	llmCredsMountPath   = "/var/run/secrets/llm-credentials"
 	llmCredsVolumeName  = "llm-credentials"
 	mcpHeadersMountRoot = "/var/secrets/mcp"
@@ -169,9 +167,6 @@ func EnsureAgentTemplate(
 		}
 	}
 
-	if err := patchAgentMode(derived, step); err != nil {
-		return "", fmt.Errorf("patch agent mode: %w", err)
-	}
 	if err := patchLLMCredentials(derived, llm, agent.Spec.Model); err != nil {
 		return "", fmt.Errorf("patch LLM credentials: %w", err)
 	}
@@ -666,10 +661,6 @@ func patchSkillsPaths(tmpl *unstructured.Unstructured, paths []string) error {
 		return fmt.Errorf("set volumeMounts: %w", err)
 	}
 	return writeContainers(tmpl, container, containers)
-}
-
-func patchAgentMode(tmpl *unstructured.Unstructured, mode string) error {
-	return setEnvVar(tmpl, agentModeEnvVar, mode)
 }
 
 // --- MCP Server patching ---
