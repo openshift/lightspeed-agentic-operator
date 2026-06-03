@@ -54,6 +54,7 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 27. **Retry index**: `ExecutionResult` and `VerificationResult` MUST record the current execution retry index in spec for correlation with `status.steps.execution.retryCount`.
 28. **Sandbox release**: On proposal deletion and on terminal phases (`Completed`, `Denied`, `Escalated`), the controller MUST delete known sandbox claims recorded under `status.steps.*.sandbox` (best-effort aggregation; first error MAY be returned for visibility).
 29. **Concurrency cap**: Maximum concurrent proposal reconciles SHOULD respect `ApprovalPolicy.spec.maxConcurrentProposals` when present (see `crd-api.md`).
+30. **Container probes**: The controller MUST set `readinessProbe` (HTTP GET `/ready` on port 8080) and `livenessProbe` (HTTP GET `/health` on port 8080) on the first container of every derived `SandboxTemplate`. This ensures Kubernetes does not mark pods as Ready until the agent HTTP server is actually serving, preventing race conditions between `WaitReady()` and `POST /v1/agent/run`.
 
 ## Configuration Surface
 

@@ -657,3 +657,75 @@ func TestComputeTemplateHash_SameBaseResourceVersion(t *testing.T) {
 		t.Error("same base template resourceVersion should produce same hash")
 	}
 }
+
+func TestPatchProbes(t *testing.T) {
+	t.Run("sets readiness and liveness probes on first container", func(t *testing.T) {
+		tmpl := emptyTemplate()
+		if err := patchProbes(tmpl); err != nil {
+			t.Fatalf("patchProbes: %v", err)
+		}
+
+		containers, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "containers")
+		container := containers[0].(map[string]any)
+
+		// Readiness probe
+		rp, ok := container["readinessProbe"].(map[string]any)
+		if !ok {
+			t.Fatal("readinessProbe not set")
+		}
+		httpGet, _ := rp["httpGet"].(map[string]any)
+		if httpGet["path"] != "/ready" {
+			t.Errorf("readinessProbe path = %v, want /ready", httpGet["path"])
+		}
+		if httpGet["port"] != int64(8080) {
+			t.Errorf("readinessProbe port = %v, want 8080", httpGet["port"])
+		}
+		if rp["initialDelaySeconds"] != int64(3) {
+			t.Errorf("readinessProbe initialDelaySeconds = %v, want 3", rp["initialDelaySeconds"])
+		}
+		if rp["periodSeconds"] != int64(10) {
+			t.Errorf("readinessProbe periodSeconds = %v, want 10", rp["periodSeconds"])
+		}
+		if rp["failureThreshold"] != int64(3) {
+			t.Errorf("readinessProbe failureThreshold = %v, want 3", rp["failureThreshold"])
+		}
+
+		// Liveness probe
+		lp, ok := container["livenessProbe"].(map[string]any)
+		if !ok {
+			t.Fatal("livenessProbe not set")
+		}
+		httpGetL, _ := lp["httpGet"].(map[string]any)
+		if httpGetL["path"] != "/health" {
+			t.Errorf("livenessProbe path = %v, want /health", httpGetL["path"])
+		}
+		if httpGetL["port"] != int64(8080) {
+			t.Errorf("livenessProbe port = %v, want 8080", httpGetL["port"])
+		}
+		if lp["initialDelaySeconds"] != int64(10) {
+			t.Errorf("livenessProbe initialDelaySeconds = %v, want 10", lp["initialDelaySeconds"])
+		}
+		if lp["periodSeconds"] != int64(30) {
+			t.Errorf("livenessProbe periodSeconds = %v, want 30", lp["periodSeconds"])
+		}
+		if lp["failureThreshold"] != int64(3) {
+			t.Errorf("livenessProbe failureThreshold = %v, want 3", lp["failureThreshold"])
+		}
+	})
+
+	t.Run("fails on template with no containers", func(t *testing.T) {
+		tmpl := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "extensions.agents.x-k8s.io/v1alpha1",
+			"kind":       "SandboxTemplate",
+			"metadata":   map[string]any{"name": "empty"},
+			"spec": map[string]any{
+				"podTemplate": map[string]any{
+					"spec": map[string]any{},
+				},
+			},
+		}}
+		if err := patchProbes(tmpl); err == nil {
+			t.Fatal("expected error for template with no containers")
+		}
+	})
+}

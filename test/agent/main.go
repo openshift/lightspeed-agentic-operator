@@ -78,6 +78,14 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" && r.Method == http.MethodGet {
 			http.Redirect(w, r, "/healthz", http.StatusFound)
@@ -86,7 +94,7 @@ func main() {
 		http.NotFound(w, r)
 	})
 
-	log.Printf("mock agent listening on %s (POST /v1/agent/run, GET /healthz)", listen)
+	log.Printf("mock agent listening on %s (POST /v1/agent/run, GET /healthz, GET /health, GET /ready)", listen)
 	log.Printf("note: rebuild and restart this process after changing mock code or controller schemas")
 	if err := http.ListenAndServe(listen, logRequests(mux)); err != nil {
 		log.Fatalf("server: %v", err)
