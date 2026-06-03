@@ -188,6 +188,10 @@ func EnsureAgentTemplate(
 		}
 	}
 
+	if err := patchProbes(derived); err != nil {
+		return "", fmt.Errorf("patch probes: %w", err)
+	}
+
 	if err := c.Create(ctx, derived); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return name, nil
@@ -355,6 +359,35 @@ func patchRequiredSecrets(tmpl *unstructured.Unstructured, secrets []agenticv1al
 		}
 	}
 	return nil
+}
+
+func patchProbes(tmpl *unstructured.Unstructured) error {
+	container, containers, err := firstContainer(tmpl)
+	if err != nil {
+		return fmt.Errorf("patchProbes: %w", err)
+	}
+
+	container["readinessProbe"] = map[string]any{
+		"httpGet": map[string]any{
+			"path": "/ready",
+			"port": int64(8080),
+		},
+		"initialDelaySeconds": int64(3),
+		"periodSeconds":       int64(10),
+		"failureThreshold":    int64(3),
+	}
+
+	container["livenessProbe"] = map[string]any{
+		"httpGet": map[string]any{
+			"path": "/health",
+			"port": int64(8080),
+		},
+		"initialDelaySeconds": int64(10),
+		"periodSeconds":       int64(30),
+		"failureThreshold":    int64(3),
+	}
+
+	return writeContainers(tmpl, container, containers)
 }
 
 func gcOldTemplates(

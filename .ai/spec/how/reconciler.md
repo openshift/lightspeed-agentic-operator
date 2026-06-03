@@ -29,7 +29,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `agent.go` | `AgentCaller`, `StubAgentCaller`; `AnalysisOutput`, `ExecutionOutput`, `VerificationOutput`, `EscalationOutput` | Interface methods on `StubAgentCaller` |
 | `sandbox.go` | `SandboxProvider`, `SandboxManager` | `NewSandboxManager`, `Claim`, `WaitReady`, `Release`, `buildClaim` |
 | `sandbox_agent.go` | `SandboxAgentCaller`; private JSON DTOs for unmarshaling agent responses local to this file | `NewSandboxAgentCaller`, `Analyze`, `Execute`, `Verify`, `Escalate`, `ReleaseSandboxes`, `callWithSandbox`, `patchSandboxInfo`, `buildAgentContext`, `collectFailedResults`, `stepString` |
-| `sandbox_templates.go` | `templateHashInput`; label constants (`LabelManaged`, `LabelProposal`, etc.); MCP env DTOs | `EnsureAgentTemplate`, `SandboxTemplateServiceAccount`, `computeTemplateHash`, `agentTemplateName`, `gcOldTemplates`, `patchLLMCredentials`, `credentialsSecretName`, `providerURL`, `patchRequiredSecrets`, `patchMCPServers`, `patchSkillsImage`, `patchSkillsPaths`, `patchAgentMode`, unstructured helpers (`firstContainer`, `setEnvVar`, `addEnvFromSecret`, …) |
+| `sandbox_templates.go` | `templateHashInput`; label constants (`LabelManaged`, `LabelProposal`, etc.); MCP env DTOs | `EnsureAgentTemplate`, `SandboxTemplateServiceAccount`, `computeTemplateHash`, `agentTemplateName`, `gcOldTemplates`, `patchLLMCredentials`, `credentialsSecretName`, `providerURL`, `patchRequiredSecrets`, `patchMCPServers`, `patchSkillsImage`, `patchSkillsPaths`, `patchAgentMode`, `patchProbes`, unstructured helpers (`firstContainer`, `setEnvVar`, `addEnvFromSecret`, …) |
 | `client.go` | `AgentHTTPClientInterface`, `AgentHTTPClient`; `agentRunRequest`, `agentContext`, `agentExecutionResult`, `agentPreviousAttempt`, `agentRunResponse` | `NewAgentHTTPClient`, `(*AgentHTTPClient).Run`, `executionOutputToAgentResult` |
 | `schemas.go` | Package vars: default/minimal analysis schemas, execution/verification/escalation schemas; `defaultOutputSchemas`, `builtInPropertyJSON` | `init` (precompute property JSON), `injectBuiltInProperty`, `outputSchemaForStep` |
 | `rbac.go` | — | `ensureExecutionRBAC`, `cleanupExecutionRBAC`, `annotatedRBACNamespaces`, `deleteIfExists`, `rbacTargetNamespaces`, `truncateK8sName`, `executionRoleName`, `clusterRoleName`, `rbacLabels`, `rbacRulesToPolicyRules`, `normalizeCoreAPIGroup` |
@@ -47,7 +47,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `rbac_test.go` | RBAC ensure/cleanup tests | — |
 | `sandbox_test.go` | Sandbox manager tests | — |
 | `sandbox_agent_test.go` | Agent caller tests | — |
-| `sandbox_templates_test.go` | Template ensure/GC tests | — |
+| `sandbox_templates_test.go` | Template ensure/GC tests; `TestPatchProbes` (rule 30 in `what/sandbox-execution.md`) | — |
 | `schemas_test.go` | Output schema assembly tests | — |
 
 ---
