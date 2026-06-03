@@ -28,11 +28,10 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 const (
 	agentModeEnvVar = "LIGHTSPEED_MODE"
 
-	vertexCredsMountPath = "/var/secrets/google"
-	vertexCredsFileName  = "credentials.json"
-	llmCredsVolumeName   = "llm-credentials"
-	mcpHeadersMountRoot  = "/var/secrets/mcp"
-	mcpServersEnvVar     = "LIGHTSPEED_MCP_SERVERS"
+	llmCredsMountPath   = "/var/run/secrets/llm-credentials"
+	llmCredsVolumeName  = "llm-credentials"
+	mcpHeadersMountRoot = "/var/secrets/mcp"
+	mcpServersEnvVar    = "LIGHTSPEED_MCP_SERVERS"
 
 	LabelManaged      = "agentic.openshift.io/managed"
 	LabelBaseTemplate = "agentic.openshift.io/base-template"
@@ -245,74 +244,97 @@ func providerURL(llm *agenticv1alpha1.LLMProvider) string {
 	}
 }
 
+func providerTypeString(t agenticv1alpha1.LLMProviderType) string {
+	switch t {
+	case agenticv1alpha1.LLMProviderAnthropic:
+		return "anthropic"
+	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
+		return "vertex"
+	case agenticv1alpha1.LLMProviderOpenAI:
+		return "openai"
+	case agenticv1alpha1.LLMProviderAzureOpenAI:
+		return "azure"
+	case agenticv1alpha1.LLMProviderAWSBedrock:
+		return "bedrock"
+	default:
+		return strings.ToLower(string(t))
+	}
+}
+
 func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.LLMProvider, model string) error {
 	secretName := credentialsSecretName(llm)
 
+	if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER", providerTypeString(llm.Spec.Type)); err != nil {
+		return fmt.Errorf("set LIGHTSPEED_PROVIDER: %w", err)
+	}
+	if err := setEnvVar(tmpl, "LIGHTSPEED_MODEL", model); err != nil {
+		return fmt.Errorf("set LIGHTSPEED_MODEL: %w", err)
+	}
 	if err := addEnvFromSecret(tmpl, secretName); err != nil {
 		return fmt.Errorf("add credentials envFrom: %w", err)
 	}
-	if err := setEnvVar(tmpl, "ANTHROPIC_MODEL", model); err != nil {
-		return fmt.Errorf("set ANTHROPIC_MODEL: %w", err)
+	if err := addSecretVolume(tmpl, llmCredsVolumeName, secretName); err != nil {
+		return fmt.Errorf("add credentials volume: %w", err)
 	}
-
-	if u := providerURL(llm); u != "" {
-		if err := setEnvVar(tmpl, providerURLEnvVar(llm.Spec.Type), u); err != nil {
-			return fmt.Errorf("set provider URL: %w", err)
-		}
+	if err := addVolumeMount(tmpl, llmCredsVolumeName, llmCredsMountPath, true); err != nil {
+		return fmt.Errorf("mount credentials: %w", err)
 	}
 
 	switch llm.Spec.Type {
+	case agenticv1alpha1.LLMProviderAnthropic:
+		if u := providerURL(llm); u != "" {
+			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
+				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+			}
+		}
 	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
 		cfg := llm.Spec.GoogleCloudVertex
-		if err := setEnvVar(tmpl, "CLAUDE_CODE_USE_VERTEX", "1"); err != nil {
-			return fmt.Errorf("set CLAUDE_CODE_USE_VERTEX: %w", err)
+		if err := setEnvVar(tmpl, "LIGHTSPEED_MODEL_PROVIDER", strings.ToLower(string(cfg.ModelProvider))); err != nil {
+			return fmt.Errorf("set LIGHTSPEED_MODEL_PROVIDER: %w", err)
 		}
-		if err := setEnvVar(tmpl, "GCP_PROJECT", cfg.ProjectID); err != nil {
-			return fmt.Errorf("set GCP_PROJECT: %w", err)
+		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_PROJECT", cfg.ProjectID); err != nil {
+			return fmt.Errorf("set LIGHTSPEED_PROVIDER_PROJECT: %w", err)
 		}
-		if err := setEnvVar(tmpl, "GCP_REGION", cfg.Region); err != nil {
-			return fmt.Errorf("set GCP_REGION: %w", err)
+		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_REGION", cfg.Region); err != nil {
+			return fmt.Errorf("set LIGHTSPEED_PROVIDER_REGION: %w", err)
 		}
-		if err := setEnvVar(tmpl, "GOOGLE_APPLICATION_CREDENTIALS", vertexCredsMountPath+"/"+vertexCredsFileName); err != nil {
-			return fmt.Errorf("set GOOGLE_APPLICATION_CREDENTIALS: %w", err)
+		if u := providerURL(llm); u != "" {
+			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
+				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+			}
 		}
-		if err := addSecretVolume(tmpl, llmCredsVolumeName, secretName); err != nil {
-			return fmt.Errorf("add Vertex credentials volume: %w", err)
-		}
-		if err := addVolumeMount(tmpl, llmCredsVolumeName, vertexCredsMountPath, true); err != nil {
-			return fmt.Errorf("mount Vertex credentials: %w", err)
+	case agenticv1alpha1.LLMProviderOpenAI:
+		if u := providerURL(llm); u != "" {
+			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
+				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+			}
 		}
 	case agenticv1alpha1.LLMProviderAzureOpenAI:
 		cfg := llm.Spec.AzureOpenAI
-		if err := setEnvVar(tmpl, "AZURE_OPENAI_ENDPOINT", cfg.Endpoint); err != nil {
-			return fmt.Errorf("set AZURE_OPENAI_ENDPOINT: %w", err)
+		providerURLValue := cfg.Endpoint
+		if u := cfg.URL; u != "" {
+			providerURLValue = u
+		}
+		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", providerURLValue); err != nil {
+			return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
 		}
 		if cfg.APIVersion != "" {
-			if err := setEnvVar(tmpl, "AZURE_OPENAI_API_VERSION", cfg.APIVersion); err != nil {
-				return fmt.Errorf("set AZURE_OPENAI_API_VERSION: %w", err)
+			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_API_VERSION", cfg.APIVersion); err != nil {
+				return fmt.Errorf("set LIGHTSPEED_PROVIDER_API_VERSION: %w", err)
 			}
 		}
 	case agenticv1alpha1.LLMProviderAWSBedrock:
 		cfg := llm.Spec.AWSBedrock
-		if err := setEnvVar(tmpl, "CLAUDE_CODE_USE_BEDROCK", "1"); err != nil {
-			return fmt.Errorf("set CLAUDE_CODE_USE_BEDROCK: %w", err)
+		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_REGION", cfg.Region); err != nil {
+			return fmt.Errorf("set LIGHTSPEED_PROVIDER_REGION: %w", err)
 		}
-		if err := setEnvVar(tmpl, "AWS_REGION", cfg.Region); err != nil {
-			return fmt.Errorf("set AWS_REGION: %w", err)
+		if u := providerURL(llm); u != "" {
+			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
+				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+			}
 		}
 	}
 	return nil
-}
-
-func providerURLEnvVar(t agenticv1alpha1.LLMProviderType) string {
-	switch t {
-	case agenticv1alpha1.LLMProviderOpenAI:
-		return "OPENAI_BASE_URL"
-	case agenticv1alpha1.LLMProviderAzureOpenAI:
-		return "AZURE_OPENAI_ENDPOINT"
-	default:
-		return "ANTHROPIC_BASE_URL"
-	}
 }
 
 func patchRequiredSecrets(tmpl *unstructured.Unstructured, secrets []agenticv1alpha1.SecretRequirement) error {

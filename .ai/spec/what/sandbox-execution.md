@@ -25,13 +25,12 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
     | Env var | Required | Source |
     |---|---|---|
     | `LIGHTSPEED_PROVIDER` | Yes | `LLMProvider.spec.type` mapped to: `anthropic`, `vertex`, `openai`, `azure`, `bedrock` |
-    | `LIGHTSPEED_MODEL` | Yes | `Agent.spec.model` |
-    | `LIGHTSPEED_MODEL_PROVIDER` | When provider=`vertex` | `googleCloudVertex.modelProvider` (`Anthropic`, `Google`, `OpenAI`) |
-    | `LIGHTSPEED_MODE` | Yes | Workflow step name |
-    | `LIGHTSPEED_PROVIDER_URL` | When URL set on provider config | URL override from active provider config branch |
-    | `LIGHTSPEED_PROVIDER_PROJECT` | When applicable | `googleCloudVertex.projectID` |
-    | `LIGHTSPEED_PROVIDER_REGION` | When applicable | `googleCloudVertex.region` or `awsBedrock.region` |
-    | `LIGHTSPEED_PROVIDER_API_VERSION` | When applicable | `azureOpenAI.apiVersion` |
+    | `LIGHTSPEED_MODEL` | Yes | `Agent.spec.model` (passed as-is) |
+    | `LIGHTSPEED_MODEL_PROVIDER` | When provider=`vertex` | `googleCloudVertex.modelProvider` lowercased: `anthropic`, `google`, `openai` |
+    | `LIGHTSPEED_PROVIDER_URL` | When URL set on provider config | URL override from active provider config branch (passed as-is) |
+    | `LIGHTSPEED_PROVIDER_PROJECT` | When provider=`vertex` | `googleCloudVertex.projectID` (passed as-is) |
+    | `LIGHTSPEED_PROVIDER_REGION` | When provider=`vertex` or `bedrock` | `googleCloudVertex.region` or `awsBedrock.region` (passed as-is) |
+    | `LIGHTSPEED_PROVIDER_API_VERSION` | When provider=`azure` | `azureOpenAI.apiVersion` (passed as-is) |
 
     Provider type mapping from CRD `spec.type`:
 
@@ -78,5 +77,4 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 
 - [PLANNED: OLS-2957] **Sandbox template management** UX and CRD ergonomics (base/derived lifecycle, versioning) may change operator/template coupling described in rules 2–4.
 - [PLANNED: OLS-3038] **TLS verification and network policy** for agent traffic may replace permissive internal TLS client behavior.
-- [OLS-3153] **Operator-sandbox env var contract**: SDK-specific env vars removed from operator; replaced by generic `LIGHTSPEED_*` vars (rule 16a). Sandbox handles all SDK-specific mapping internally. Supersedes OLS-3044 and OLS-3051.
 - [PLANNED: OLS-2894] Support **multiple concurrent skills images** in template derivation beyond the first `skills` entry if product requires composite skill bundles.
