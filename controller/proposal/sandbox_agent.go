@@ -35,13 +35,13 @@ type analysisResponse struct {
 }
 
 type executionResponse struct {
-	Success      bool                                  `json:"success"`
+	Success      bool                                   `json:"success"`
 	ActionsTaken []agenticv1alpha1.ExecutionAction      `json:"actionsTaken"`
 	Verification *agenticv1alpha1.ExecutionVerification `json:"verification,omitempty"`
 }
 
 type verificationResponse struct {
-	Success bool                         `json:"success"`
+	Success bool                          `json:"success"`
 	Checks  []agenticv1alpha1.VerifyCheck `json:"checks"`
 	Summary string                        `json:"summary"`
 }
@@ -71,12 +71,12 @@ func NewSandboxAgentCaller(
 	}
 }
 
-// proposalTimeout returns the effective timeout for sandbox operations.
-// Reads spec.timeoutMinutes when set; falls back to defaultSandboxTimeout.
+// stepTimeout returns the effective timeout for a single step's sandbox operation.
+// Reads the step's timeoutMinutes when set; falls back to defaultSandboxTimeout.
 // This is the single place where timeout policy is decided.
-func proposalTimeout(proposal *agenticv1alpha1.Proposal) time.Duration {
-	if proposal.Spec.TimeoutMinutes != nil && *proposal.Spec.TimeoutMinutes > 0 {
-		return time.Duration(*proposal.Spec.TimeoutMinutes) * time.Minute
+func stepTimeout(step resolvedStep) time.Duration {
+	if step.TimeoutMinutes > 0 {
+		return time.Duration(step.TimeoutMinutes) * time.Minute
 	}
 	return defaultSandboxTimeout
 }
@@ -194,7 +194,6 @@ func (s *SandboxAgentCaller) callWithSandbox(
 		timeout = defaultSandboxTimeout
 	}
 
-
 	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, "")
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrClaimSandbox, err)
@@ -204,7 +203,11 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	// while the sandbox is still starting up
 	s.patchSandboxInfo(ctx, proposal, stepName, claimName)
 
-	endpoint, err := s.Sandbox.WaitReady(ctx, claimName, timeout)
+	// Pod startup is an infrastructure concern unrelated to the agent's work
+	// budget. Using a fixed ceiling here ensures that the full user-configured
+	// timeout is available for the agent call itself, and avoids the effective
+	// wall-clock time being 2× the configured value.
+	endpoint, err := s.Sandbox.WaitReady(ctx, claimName, defaultSandboxTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrWaitForSandbox, err)
 	}

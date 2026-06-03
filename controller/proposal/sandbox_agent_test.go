@@ -18,13 +18,14 @@ import (
 // --- Hand-written mocks ---
 
 type mockSandboxProvider struct {
-	claimName    string
-	claimErr     error
-	endpoint     string
-	readyErr     error
-	releaseErr   error
-	claimCalls   int
-	releaseCalls int
+	claimName            string
+	claimErr             error
+	endpoint             string
+	readyErr             error
+	releaseErr           error
+	claimCalls           int
+	releaseCalls         int
+	lastWaitReadyTimeout time.Duration
 }
 
 func (m *mockSandboxProvider) SetStep(_ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ string) {
@@ -33,7 +34,8 @@ func (m *mockSandboxProvider) Claim(_ context.Context, _, _, _ string) (string, 
 	m.claimCalls++
 	return m.claimName, m.claimErr
 }
-func (m *mockSandboxProvider) WaitReady(_ context.Context, _ string, _ time.Duration) (string, error) {
+func (m *mockSandboxProvider) WaitReady(_ context.Context, _ string, d time.Duration) (string, error) {
+	m.lastWaitReadyTimeout = d
 	return m.endpoint, m.readyErr
 }
 func (m *mockSandboxProvider) Release(_ context.Context, _ string) error {
@@ -60,11 +62,11 @@ func newTestSandboxAgentCaller(sandbox *mockSandboxProvider, httpClient *mockHTT
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
 	_ = fc.Create(context.Background(), fakeBaseTemplate())
 	return &SandboxAgentCaller{
-		Sandbox:          sandbox,
-		K8sClient:        fc,
-		ClientFactory:    func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
-		Namespace:        "test-ns",
-		Timeout:          5 * time.Minute,
+		Sandbox:       sandbox,
+		K8sClient:     fc,
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
+		Namespace:     "test-ns",
+		Timeout:       5 * time.Minute,
 	}
 }
 
@@ -75,11 +77,11 @@ func newTestSandboxAgentCallerWithProposal(sandbox *mockSandboxProvider, httpCli
 		Build()
 	_ = fc.Create(context.Background(), fakeBaseTemplate())
 	return &SandboxAgentCaller{
-		Sandbox:          sandbox,
-		K8sClient:        fc,
-		ClientFactory:    func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
-		Namespace:        "test-ns",
-		Timeout:          5 * time.Minute,
+		Sandbox:       sandbox,
+		K8sClient:     fc,
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
+		Namespace:     "test-ns",
+		Timeout:       5 * time.Minute,
 	}
 }
 
@@ -729,4 +731,50 @@ func (m *trackingMockSandbox) Release(_ context.Context, claimName string) error
 		return fmt.Errorf("simulated release error for %s", claimName)
 	}
 	return nil
+}
+
+// TestSandboxAgentCaller_TimeoutPropagation verifies the two-phase timeout
+// design: WaitReady (pod startup) always uses the fixed defaultSandboxTimeout
+// regardless of the step's configured timeout, while ClientFactory receives the
+// full user-configured timeout for the agent's work.
+func TestSandboxAgentCaller_TimeoutPropagation(t *testing.T) {
+	const customTimeout = 20 * time.Minute
+
+	sandbox := &mockSandboxProvider{
+		claimName: "ls-analysis-test",
+		endpoint:  "http://sandbox:8080",
+	}
+	httpClient := &mockHTTPClient{
+		response: &agentRunResponse{
+			Response: json.RawMessage(`{"success": true, "options": []}`),
+		},
+	}
+
+	var lastFactoryTimeout time.Duration
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
+	_ = fc.Create(context.Background(), fakeBaseTemplate())
+	caller := &SandboxAgentCaller{
+		Sandbox:   sandbox,
+		K8sClient: fc,
+		ClientFactory: func(_ string, d time.Duration) AgentHTTPClientInterface {
+			lastFactoryTimeout = d
+			return httpClient
+		},
+		Namespace: "test-ns",
+		Timeout:   defaultSandboxTimeout,
+	}
+
+	_, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test", "", customTimeout)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Pod startup always uses the fixed ceiling, not the step-level timeout.
+	if sandbox.lastWaitReadyTimeout != defaultSandboxTimeout {
+		t.Errorf("WaitReady timeout = %v, want defaultSandboxTimeout (%v)", sandbox.lastWaitReadyTimeout, defaultSandboxTimeout)
+	}
+	// The agent's work budget is the full configured timeout.
+	if lastFactoryTimeout != customTimeout {
+		t.Errorf("ClientFactory timeout = %v, want %v", lastFactoryTimeout, customTimeout)
+	}
 }

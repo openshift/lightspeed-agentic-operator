@@ -73,14 +73,15 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 }
 
 const (
-	agentModeEnvVar = "LIGHTSPEED_MODE"
-	llmCredsMountPath = "/var/run/secrets/llm-credentials"
+	agentModeEnvVar      = "LIGHTSPEED_MODE"
 	vertexCredsMountPath = "/var/secrets/google"
 	vertexCredsFileName  = "credentials.json"
 	llmCredsVolumeName   = "llm-credentials"
+	llmCredsMountPath    = "/var/run/secrets/llm-credentials"
 	mcpHeadersMountRoot  = "/var/secrets/mcp"
 	mcpServersEnvVar     = "LIGHTSPEED_MCP_SERVERS"
 	dataSourceMountPath  = "/data/input"
+	dataSourceVolumeName = "lightspeed-data-source"
 
 	LabelManaged      = "agentic.openshift.io/managed"
 	LabelBaseTemplate = "agentic.openshift.io/base-template"
@@ -137,7 +138,8 @@ func agentTemplateName(step, agentName, hash string) string {
 }
 
 // EnsureAgentTemplate creates a SandboxTemplate derived from the base template
-// with skills, LLM credentials, MCP servers, and required secrets from the CRD chain.
+// with skills, LLM credentials, MCP servers, required secrets, and an optional
+// dataSource PVC from the CRD chain.
 // Template name includes a config hash — same input = same template = no-op.
 // Old templates for the same agent+phase are garbage-collected.
 func EnsureAgentTemplate(
@@ -149,7 +151,6 @@ func EnsureAgentTemplate(
 	agent *agenticv1alpha1.Agent,
 	llm *agenticv1alpha1.LLMProvider,
 	tools *agenticv1alpha1.ToolsSpec,
-	dataSource *agenticv1alpha1.DataSource,
 	serviceAccount string,
 ) (string, error) {
 	log := logf.FromContext(ctx).WithName("sandbox-templates")
@@ -170,10 +171,14 @@ func EnsureAgentTemplate(
 	var skills []agenticv1alpha1.SkillsSource
 	var mcpServers []agenticv1alpha1.MCPServerConfig
 	var requiredSecrets []agenticv1alpha1.SecretRequirement
+	var dataSource *agenticv1alpha1.DataSource
 	if tools != nil {
 		skills = tools.Skills
 		mcpServers = tools.MCPServers
 		requiredSecrets = tools.RequiredSecrets
+		if !tools.DataSource.IsZero() {
+			dataSource = &tools.DataSource
+		}
 	}
 
 	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, dataSource, step, base.GetResourceVersion(), serviceAccount)
@@ -653,7 +658,7 @@ func addPVCVolume(tmpl *unstructured.Unstructured, volumeName, claimName string)
 }
 
 func patchDataSource(tmpl *unstructured.Unstructured, ds *agenticv1alpha1.DataSource) error {
-	volName := "data-source"
+	volName := dataSourceVolumeName
 	if err := addPVCVolume(tmpl, volName, ds.ClaimName); err != nil {
 		return fmt.Errorf("add data source PVC volume: %w", err)
 	}

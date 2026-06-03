@@ -31,6 +31,11 @@ type testAgentCaller struct {
 	executeResult  *ExecutionOutput
 	verifyResult   *VerificationOutput
 	escalateResult *EscalationOutput
+
+	lastAnalyzeTimeout  time.Duration
+	lastExecuteTimeout  time.Duration
+	lastVerifyTimeout   time.Duration
+	lastEscalateTimeout time.Duration
 }
 
 func newTestAgentCaller() *testAgentCaller {
@@ -42,25 +47,29 @@ func newTestAgentCaller() *testAgentCaller {
 	return &testAgentCaller{analyzeResult: a, executeResult: e, verifyResult: v, escalateResult: esc}
 }
 
-func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ string, _ time.Duration) (*AnalysisOutput, error) {
+func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ string, timeout time.Duration) (*AnalysisOutput, error) {
+	ta.lastAnalyzeTimeout = timeout
 	if ta.analyzeErr != nil {
 		return nil, ta.analyzeErr
 	}
 	return ta.analyzeResult, nil
 }
-func (ta *testAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ string, _ time.Duration) (*ExecutionOutput, error) {
+func (ta *testAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ string, timeout time.Duration) (*ExecutionOutput, error) {
+	ta.lastExecuteTimeout = timeout
 	if ta.executeErr != nil {
 		return nil, ta.executeErr
 	}
 	return ta.executeResult, nil
 }
-func (ta *testAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ string, _ time.Duration) (*VerificationOutput, error) {
+func (ta *testAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ string, timeout time.Duration) (*VerificationOutput, error) {
+	ta.lastVerifyTimeout = timeout
 	if ta.verifyErr != nil {
 		return nil, ta.verifyErr
 	}
 	return ta.verifyResult, nil
 }
-func (ta *testAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ string, _ time.Duration) (*EscalationOutput, error) {
+func (ta *testAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Proposal, _ resolvedStep, _ string, _ string, timeout time.Duration) (*EscalationOutput, error) {
+	ta.lastEscalateTimeout = timeout
 	if ta.escalateErr != nil {
 		return nil, ta.escalateErr
 	}
@@ -494,5 +503,42 @@ func TestHandleSuspension(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReconcile_PropagatesStepTimeout verifies that timeoutMinutes set on a
+// ProposalStep is resolved and forwarded to the AgentCaller as time.Duration.
+func TestReconcile_PropagatesStepTimeout(t *testing.T) {
+	const wantMinutes int32 = 30
+
+	scheme := testScheme()
+	proposal := &agenticv1alpha1.Proposal{
+		ObjectMeta: metav1.ObjectMeta{Name: "timeout-check", Namespace: "default"},
+		Spec: agenticv1alpha1.ProposalSpec{
+			Request: "Pod crashing",
+			Tools:   testTools(),
+			Analysis: agenticv1alpha1.ProposalStep{
+				Agent:          "default",
+				TimeoutMinutes: wantMinutes,
+			},
+			Execution:    agenticv1alpha1.ProposalStep{Agent: "default"},
+			Verification: agenticv1alpha1.ProposalStep{Agent: "default"},
+		},
+	}
+
+	objs := append([]client.Object{proposal}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
+
+	caller := newTestAgentCaller()
+	r := &ProposalReconciler{Client: fc, Agent: caller, Namespace: "default"}
+
+	if _, err := reconcileOnce(r, "timeout-check"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	want := time.Duration(wantMinutes) * time.Minute
+	if caller.lastAnalyzeTimeout != want {
+		t.Errorf("Analyze timeout = %v, want %v", caller.lastAnalyzeTimeout, want)
 	}
 }
