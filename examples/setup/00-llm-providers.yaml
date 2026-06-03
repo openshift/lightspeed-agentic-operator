@@ -18,6 +18,6 @@ spec:
   googleCloudVertex:
     credentialsSecret:
       name: llm-credentials
-    projectID: my-gcp-project
+    projectID: itpc-gcp-hcm-pe-eng-claude
     region: us-central1
     modelProvider: Anthropic

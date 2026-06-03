@@ -85,7 +85,7 @@ func (r *ProposalReconciler) handleAnalysis(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToAnalyzing, err)
 	}
 
-	timeout := proposalTimeout(proposal)
+	timeout := stepTimeout(resolved.Analysis)
 	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
@@ -152,7 +152,7 @@ func (r *ProposalReconciler) handleRevision(
 	revisionSuffix := buildRevisionContext(proposal)
 	requestWithRevision := proposal.Spec.Request + "\n\n" + revisionSuffix
 
-	timeout := proposalTimeout(proposal)
+	timeout := stepTimeout(resolved.Analysis)
 	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
@@ -272,7 +272,7 @@ func (r *ProposalReconciler) handleExecution(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToExecuting, err)
 	}
 
-	timeout := proposalTimeout(proposal)
+	timeout := stepTimeout(*resolved.Execution)
 	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption, execSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionExecuted, err)
@@ -390,7 +390,7 @@ func (r *ProposalReconciler) handleVerification(
 		}
 	}
 
-	timeout := proposalTimeout(proposal)
+	timeout := stepTimeout(*resolved.Verification)
 	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionVerified, err)
@@ -590,7 +590,7 @@ func (r *ProposalReconciler) handleEscalation(
 	}
 
 	escalationText := buildEscalationRequest(proposal)
-	timeout := proposalTimeout(proposal)
+	timeout := stepTimeout(step)
 	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText, defaultSandboxSA, timeout)
 	if err != nil {
 		return r.failStep(ctx, proposal, agenticv1alpha1.ProposalConditionEscalated, err)

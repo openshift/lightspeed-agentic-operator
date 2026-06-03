@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -177,5 +178,66 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 	_, err := client.Run(context.Background(), "", "test", nil, agentCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestAgentHTTPClient_TimeoutMs_CustomTimeout verifies that a positive timeout
+// is serialized as timeout_ms in the request body sent to the agent.
+func TestAgentHTTPClient_TimeoutMs_CustomTimeout(t *testing.T) {
+	const customTimeout = 10 * time.Second
+	var gotTimeoutMs *int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req agentRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotTimeoutMs = req.TimeoutMs
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success": true}`))
+	}))
+	defer server.Close()
+
+	c := NewAgentHTTPClient(server.URL, customTimeout)
+	if _, err := c.Run(context.Background(), "", "ping", nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotTimeoutMs == nil {
+		t.Fatal("timeout_ms was not sent in request")
+	}
+	wantMs := int64(customTimeout / time.Millisecond)
+	if *gotTimeoutMs != wantMs {
+		t.Errorf("timeout_ms = %d, want %d", *gotTimeoutMs, wantMs)
+	}
+}
+
+// TestAgentHTTPClient_TimeoutMs_ZeroFallsBackToDefault verifies that timeout <= 0
+// falls back to defaultSandboxTimeout and is reflected in timeout_ms.
+func TestAgentHTTPClient_TimeoutMs_ZeroFallsBackToDefault(t *testing.T) {
+	var gotTimeoutMs *int64
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req agentRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		gotTimeoutMs = req.TimeoutMs
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success": true}`))
+	}))
+	defer server.Close()
+
+	c := NewAgentHTTPClient(server.URL, 0) // zero should fall back to defaultSandboxTimeout
+	if _, err := c.Run(context.Background(), "", "ping", nil, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotTimeoutMs == nil {
+		t.Fatal("timeout_ms was not sent in request")
+	}
+	wantMs := int64(defaultSandboxTimeout / time.Millisecond)
+	if *gotTimeoutMs != wantMs {
+		t.Errorf("timeout_ms = %d, want %d (defaultSandboxTimeout)", *gotTimeoutMs, wantMs)
 	}
 }
