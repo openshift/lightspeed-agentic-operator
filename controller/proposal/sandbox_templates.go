@@ -251,8 +251,9 @@ func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.L
 	if err := addEnvFromSecret(tmpl, secretName); err != nil {
 		return fmt.Errorf("add credentials envFrom: %w", err)
 	}
-	if err := setEnvVar(tmpl, "ANTHROPIC_MODEL", model); err != nil {
-		return fmt.Errorf("set ANTHROPIC_MODEL: %w", err)
+	modelEnvVar := modelEnvVarForProvider(llm)
+	if err := setEnvVar(tmpl, modelEnvVar, model); err != nil {
+		return fmt.Errorf("set %s: %w", modelEnvVar, err)
 	}
 
 	if u := providerURL(llm); u != "" {
@@ -302,6 +303,27 @@ func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.L
 		}
 	}
 	return nil
+}
+
+// modelEnvVarForProvider returns the sandbox env var name for the model.
+// Stopgap until both operator and sandbox migrate to generic LIGHTSPEED_MODEL
+// per spec rule 16a (OLS-3153).
+func modelEnvVarForProvider(llm *agenticv1alpha1.LLMProvider) string {
+	switch llm.Spec.Type {
+	case agenticv1alpha1.LLMProviderOpenAI, agenticv1alpha1.LLMProviderAzureOpenAI:
+		return "OPENAI_MODEL"
+	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
+		switch llm.Spec.GoogleCloudVertex.ModelProvider {
+		case agenticv1alpha1.GoogleCloudVertexModelProviderGoogle:
+			return "GEMINI_MODEL"
+		case agenticv1alpha1.GoogleCloudVertexModelProviderOpenAI:
+			return "OPENAI_MODEL"
+		default:
+			return "ANTHROPIC_MODEL"
+		}
+	default:
+		return "ANTHROPIC_MODEL"
+	}
 }
 
 func providerURLEnvVar(t agenticv1alpha1.LLMProviderType) string {

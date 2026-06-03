@@ -312,6 +312,63 @@ func TestPatchLLMCredentials_Bedrock(t *testing.T) {
 	}
 }
 
+func TestModelEnvVarForProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		llm      *agenticv1alpha1.LLMProvider
+		expected string
+	}{
+		{"Anthropic", testLLMProvider(agenticv1alpha1.LLMProviderAnthropic), "ANTHROPIC_MODEL"},
+		{"OpenAI", testLLMProvider(agenticv1alpha1.LLMProviderOpenAI), "OPENAI_MODEL"},
+		{"AzureOpenAI", testLLMProvider(agenticv1alpha1.LLMProviderAzureOpenAI), "OPENAI_MODEL"},
+		{"Bedrock", testLLMProvider(agenticv1alpha1.LLMProviderAWSBedrock), "ANTHROPIC_MODEL"},
+		{"Vertex/Anthropic", func() *agenticv1alpha1.LLMProvider {
+			p := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
+			p.Spec.GoogleCloudVertex.ModelProvider = agenticv1alpha1.GoogleCloudVertexModelProviderAnthropic
+			return p
+		}(), "ANTHROPIC_MODEL"},
+		{"Vertex/Google", func() *agenticv1alpha1.LLMProvider {
+			p := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
+			p.Spec.GoogleCloudVertex.ModelProvider = agenticv1alpha1.GoogleCloudVertexModelProviderGoogle
+			return p
+		}(), "GEMINI_MODEL"},
+		{"Vertex/OpenAI", func() *agenticv1alpha1.LLMProvider {
+			p := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
+			p.Spec.GoogleCloudVertex.ModelProvider = agenticv1alpha1.GoogleCloudVertexModelProviderOpenAI
+			return p
+		}(), "OPENAI_MODEL"},
+		{"Vertex/default", testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex), "ANTHROPIC_MODEL"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := modelEnvVarForProvider(tt.llm)
+			if got != tt.expected {
+				t.Errorf("modelEnvVarForProvider() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPatchLLMCredentials_OpenAI(t *testing.T) {
+	tmpl := emptyTemplate()
+	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderOpenAI, "https://api.openai.com/v1")
+
+	if err := patchLLMCredentials(tmpl, llm, "gpt-5.5"); err != nil {
+		t.Fatalf("patchLLMCredentials: %v", err)
+	}
+
+	envs := getEnvVars(tmpl)
+	if e, ok := findEnv(envs, "OPENAI_MODEL"); !ok {
+		t.Error("missing OPENAI_MODEL")
+	} else if e["value"] != "gpt-5.5" {
+		t.Errorf("OPENAI_MODEL = %q, want gpt-5.5", e["value"])
+	}
+
+	if _, ok := findEnv(envs, "ANTHROPIC_MODEL"); ok {
+		t.Error("should not set ANTHROPIC_MODEL for OpenAI provider")
+	}
+}
+
 // --- patchRequiredSecrets tests ---
 
 func TestPatchRequiredSecrets_EnvVar(t *testing.T) {
