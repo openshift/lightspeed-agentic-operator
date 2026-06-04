@@ -553,6 +553,44 @@ func TestManualApproval_AdvisoryOnly(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Advisory-only with auto-approve policy that includes Verification —
+// verifies that absent steps are skipped in ProposalApproval seeding (OLS-3223)
+// ---------------------------------------------------------------------------
+
+func TestAutoApproval_AdvisoryOnly_SkipsAbsentStages(t *testing.T) {
+	proposal := &agenticv1alpha1.Proposal{
+		ObjectMeta: metav1.ObjectMeta{Name: "advisory", Namespace: "default"},
+		Spec: agenticv1alpha1.ProposalSpec{
+			Request:          "Investigate issue",
+			Tools:            testTools(),
+			TargetNamespaces: []string{"production"},
+			Analysis:         agenticv1alpha1.ProposalStep{Agent: "default"},
+		},
+	}
+	agent := newTestAgentCaller()
+	policy := testAutoApprovePolicy() // auto-approves Analysis + Verification
+	r, fc := newReconcilerWithPolicy(t, proposal, agent, policy)
+
+	// First reconcile creates ProposalApproval — must not fail despite
+	// Verification being in the policy but absent from the proposal.
+	// Analysis is auto-approved and completes immediately (mock agent),
+	// then no execution/verification → straight to Completed.
+	reconcileOnce(r, "advisory")
+
+	var approval agenticv1alpha1.ProposalApproval
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "advisory", Namespace: "default"}, &approval); err != nil {
+		t.Fatalf("get ProposalApproval: %v", err)
+	}
+	for _, s := range approval.Spec.Stages {
+		if s.Type == agenticv1alpha1.ApprovalStageVerification {
+			t.Fatal("Verification stage should not be seeded for analysis-only proposal")
+		}
+	}
+
+	assertPhase(t, r, "advisory", agenticv1alpha1.ProposalPhaseCompleted)
+}
+
+// ---------------------------------------------------------------------------
 // Trust mode (no verification) needs manual analysis + execution approval
 // ---------------------------------------------------------------------------
 

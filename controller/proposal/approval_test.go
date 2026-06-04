@@ -74,6 +74,39 @@ func TestEnsureProposalApproval_AutoApproveStages(t *testing.T) {
 	}
 }
 
+func TestEnsureProposalApproval_AnalysisOnly_SkipsAbsentStages(t *testing.T) {
+	proposal := &agenticv1alpha1.Proposal{
+		ObjectMeta: metav1.ObjectMeta{Name: "advisory", Namespace: "default"},
+		Spec: agenticv1alpha1.ProposalSpec{
+			Request:  "investigate this",
+			Analysis: agenticv1alpha1.ProposalStep{Agent: "smart"},
+		},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(proposal).Build()
+	policy := testAutoApprovePolicy() // auto-approves Analysis + Verification
+
+	approval, err := ensureProposalApproval(context.Background(), fc, proposal, policy)
+	if err != nil {
+		t.Fatalf("ensureProposalApproval: %v", err)
+	}
+
+	for _, s := range approval.Spec.Stages {
+		switch s.Type {
+		case agenticv1alpha1.ApprovalStageAnalysis:
+			if s.Analysis.Agent != "smart" {
+				t.Errorf("expected Analysis agent %q, got %q", "smart", s.Analysis.Agent)
+			}
+		case agenticv1alpha1.ApprovalStageVerification:
+			t.Error("Verification stage should be skipped for analysis-only proposal")
+		case agenticv1alpha1.ApprovalStageExecution:
+			t.Error("Execution stage should be skipped for analysis-only proposal")
+		}
+	}
+	if len(approval.Spec.Stages) != 1 {
+		t.Errorf("expected 1 stage (Analysis only), got %d", len(approval.Spec.Stages))
+	}
+}
+
 func TestEnsureProposalApproval_NoPolicy(t *testing.T) {
 	proposal := testProposal()
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(proposal).Build()
