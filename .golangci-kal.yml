@@ -21,6 +21,7 @@ linters:
             disable:
               - statusoptional # Legacy, not recommended
               - nonpointerstructs # Intended for native types, not CRD types
+              - requiredfields # Incompatible with CRDs - omitempty on required fields breaks JSON marshaling
           lintersConfig:
             conditions:
               isFirstField: Warn
@@ -38,7 +39,7 @@ linters:
               pointers:
                 policy: SuggestFix
               omitempty:
-                policy: SuggestFix
+                policy: Ignore  # Required fields must not use omitempty - it causes JSON marshaler to drop empty values, breaking CRD validation
               omitzero:
                 policy: SuggestFix
             preferredmarkers:

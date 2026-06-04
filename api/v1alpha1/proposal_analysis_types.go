@@ -65,19 +65,19 @@ type DiagnosisResult struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=8192
-	Summary string `json:"summary,omitempty"`
+	Summary string `json:"summary"`
 	// confidence is the agent's self-assessed confidence in its diagnosis.
 	// Higher confidence generally correlates with clearer symptoms and
 	// more deterministic root causes.
 	// +required
-	Confidence ConfidenceLevel `json:"confidence,omitempty"`
+	Confidence ConfidenceLevel `json:"confidence"`
 	// rootCause is a concise Markdown-formatted description of the identified
 	// root cause (e.g., "OOMKilled due to memory limit of 256Mi").
 	// Maximum 1024 characters.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1024
-	RootCause string `json:"rootCause,omitempty"`
+	RootCause string `json:"rootCause"`
 }
 
 // ProposedAction describes a single discrete action the analysis agent
@@ -90,14 +90,14 @@ type ProposedAction struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
-	Type string `json:"type,omitempty"`
+	Type string `json:"type"`
 	// description is a Markdown-formatted explanation of what this action
 	// will do (e.g., "Increase memory limit from 256Mi to 512Mi").
 	// Maximum 4096 characters.
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=4096
-	Description string `json:"description,omitempty"`
+	Description string `json:"description"`
 }
 
 // Reversibility indicates whether a remediation can be rolled back.
@@ -120,18 +120,18 @@ type ProposalResult struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=8192
-	Description string `json:"description,omitempty"`
+	Description string `json:"description"`
 	// actions is the ordered list of discrete actions the agent proposes.
 	// Maximum 50 items.
 	// +required
 	// +listType=atomic
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=50
-	Actions []ProposedAction `json:"actions,omitempty"`
+	Actions []ProposedAction `json:"actions"`
 	// risk is the agent's assessment of how risky the remediation is.
 	// Critical-risk proposals typically require explicit human review.
 	// +required
-	Risk RiskLevel `json:"risk,omitempty"`
+	Risk RiskLevel `json:"risk"`
 	// reversible indicates whether the remediation can be rolled back
 	// if something goes wrong. See rollbackPlan for details.
 	// Must be one of: Reversible, Irreversible, Partial.
@@ -144,7 +144,7 @@ type ProposalResult struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1024
-	EstimatedImpact string `json:"estimatedImpact,omitempty"`
+	EstimatedImpact string `json:"estimatedImpact"`
 	// rollbackPlan describes how to undo the remediation if execution fails
 	// or causes unexpected issues. Only the execution step mutates cluster
 	// state, so rollback lives here alongside the actions it would undo.
@@ -161,7 +161,7 @@ type VerificationStep struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name,omitempty"`
+	Name string `json:"name"`
 	// command is the command or API call to run for this check
 	// (e.g., "oc get pod -n production -l app=web -o jsonpath='{.items[0].status.phase}'").
 	// Maximum 4096 characters.
@@ -180,7 +180,7 @@ type VerificationStep struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
-	Type string `json:"type,omitempty"`
+	Type string `json:"type"`
 }
 
 // RollbackPlan describes how to undo the remediation if execution fails
@@ -191,7 +191,7 @@ type RollbackPlan struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=4096
-	Description string `json:"description,omitempty"`
+	Description string `json:"description"`
 	// command is the rollback command or steps to execute.
 	// Maximum 4096 characters.
 	// +optional
@@ -210,7 +210,7 @@ type VerificationPlan struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=4096
-	Description string `json:"description,omitempty"`
+	Description string `json:"description"`
 	// steps is the ordered list of verification checks to run.
 	// Maximum 20 items.
 	// +optional
@@ -243,7 +243,7 @@ type RBACRule struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=20
 	// +kubebuilder:validation:items:MaxLength=253
-	APIGroups []string `json:"apiGroups,omitempty"` //nolint:kubeapilinter // empty string "" is a valid core API group
+	APIGroups []string `json:"apiGroups"` //nolint:kubeapilinter // empty string "" is a valid core API group
 	// resources are the resource types (e.g., "pods", "deployments").
 	// Maximum 20 items.
 	// +required
@@ -252,7 +252,7 @@ type RBACRule struct {
 	// +kubebuilder:validation:MaxItems=20
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=253
-	Resources []string `json:"resources,omitempty"`
+	Resources []string `json:"resources"`
 	// resourceNames restricts the rule to specific named resources.
 	// When empty, the rule applies to all resources of the given type.
 	// Maximum 50 items.
@@ -271,7 +271,7 @@ type RBACRule struct {
 	// +kubebuilder:validation:MaxItems=10
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=63
-	Verbs []string `json:"verbs,omitempty"`
+	Verbs []string `json:"verbs"`
 	// justification is a Markdown-formatted explanation of why this
 	// permission is needed for the remediation
 	// (e.g., "Need to patch deployment to increase memory limit").
@@ -279,7 +279,7 @@ type RBACRule struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=1024
-	Justification string `json:"justification,omitempty"`
+	Justification string `json:"justification"`
 }
 
 // RBACResult contains the RBAC permissions requested by the analysis agent
@@ -330,7 +330,7 @@ type RemediationOption struct {
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
-	Title string `json:"title,omitempty"`
+	Title string `json:"title"`
 	// summary is an optional Markdown-formatted one-line summary for
 	// collapsed views in the console UI. Maximum 1024 characters.
 	// +optional
