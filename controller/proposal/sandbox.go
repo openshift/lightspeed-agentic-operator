@@ -12,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
 var (
@@ -29,6 +31,7 @@ var (
 
 // SandboxProvider abstracts sandbox lifecycle for testability.
 type SandboxProvider interface {
+	SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec)
 	Claim(ctx context.Context, proposalName, step, templateName string) (claimName string, err error)
 	WaitReady(ctx context.Context, claimName string, timeout time.Duration) (endpoint string, err error)
 	Release(ctx context.Context, claimName string) error
@@ -42,6 +45,11 @@ type SandboxManager struct {
 
 func NewSandboxManager(c client.Client, namespace string) *SandboxManager {
 	return &SandboxManager{Client: c, Namespace: namespace}
+}
+
+// SetStep is a no-op for SandboxManager; template-based sandboxes
+// receive step configuration via SandboxTemplate, not the provider.
+func (m *SandboxManager) SetStep(_ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec) {
 }
 
 func (m *SandboxManager) buildClaim(claimName, proposalName, step, templateName string) *unstructured.Unstructured {
