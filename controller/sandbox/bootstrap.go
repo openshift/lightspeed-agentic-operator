@@ -1,5 +1,7 @@
 package sandbox
 
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create
+
 import (
 	"context"
 	"fmt"
