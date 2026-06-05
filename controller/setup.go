@@ -8,6 +8,7 @@ import (
 
 	agenticconsole "github.com/openshift/lightspeed-agentic-operator/controller/console"
 	"github.com/openshift/lightspeed-agentic-operator/controller/proposal"
+	agenticsandbox "github.com/openshift/lightspeed-agentic-operator/controller/sandbox"
 )
 
 type Options struct {
@@ -46,6 +47,16 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 		return err
 	}
 	log.Info("Agentic console runnable registered")
+
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		return agenticsandbox.EnsureBaseSandboxTemplate(ctx, mgr.GetClient(), agenticsandbox.BaseSandboxConfig{
+			Image:     opts.AgenticSandboxImage,
+			Namespace: opts.Namespace,
+		})
+	})); err != nil {
+		return err
+	}
+	log.Info("Sandbox template bootstrap runnable registered")
 
 	return nil
 }

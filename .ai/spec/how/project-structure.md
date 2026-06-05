@@ -12,6 +12,7 @@
 | `controller/setup.go` | `Setup`, `Options` | Wires proposal controller + console plugin into manager |
 | `controller/proposal/` | `ProposalReconciler`, `SandboxAgentCaller`, `SandboxManager` | Proposal reconciler, sandbox management, agent HTTP client, RBAC, results, templates |
 | `controller/console/` | `EnsureAgenticConsole`, `AgenticConsoleConfig` | Console plugin deployment (Deployment, Service, ConfigMap, ConsolePlugin CR) |
+| `controller/sandbox/` | `EnsureBaseSandboxTemplate`, `BaseSandboxConfig` | Bootstrap base SandboxTemplate + ServiceAccount at startup |
 | `cli/` | `NewRootCmd` | CLI root command |
 | `cli/proposal/` | `CreateOptions`, `ListOptions`, `GetOptions`, `ApproveOptions`, `DenyOptions`, `WatchOptions`, `LogsOptions`, `DeleteOptions` | CLI subcommands for proposal lifecycle operations |
 | `config/crd/bases/` | Generated YAML | CRD manifests (regenerate with `make manifests`) |
@@ -40,6 +41,7 @@
 - Creates `SandboxManager` and `SandboxAgentCaller` with dependency injection
 - Registers `ProposalReconciler` via `SetupWithManager`
 - Registers `EnsureAgenticConsole` as a `RunnableFunc`
+- Registers `EnsureBaseSandboxTemplate` as a `RunnableFunc`
 
 ## Naming Conventions
 
