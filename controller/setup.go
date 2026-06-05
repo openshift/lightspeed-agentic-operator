@@ -20,7 +20,7 @@ type Options struct {
 func Setup(mgr ctrl.Manager, opts Options) error {
 	log := ctrl.Log.WithName("agentic-setup")
 
-	sandboxMgr := proposal.NewSandboxManager(mgr.GetClient(), opts.Namespace)
+	sandboxMgr := proposal.NewSandboxManager(mgr.GetClient(), opts.Namespace, "lightspeed-agent")
 	agentCaller := proposal.NewSandboxAgentCaller(
 		sandboxMgr,
 		mgr.GetClient(),

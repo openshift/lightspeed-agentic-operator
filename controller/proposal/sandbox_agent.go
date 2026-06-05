@@ -165,12 +165,9 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	query string,
 	agentCtx *agentContext,
 ) (json.RawMessage, error) {
-	templateName, err := EnsureAgentTemplate(ctx, s.K8sClient, defaultBaseTemplateName, s.Namespace, stepName, step.Agent, step.LLM, step.Tools)
-	if err != nil {
-		return nil, fmt.Errorf("ensure agent template: %w", err)
-	}
+	s.Sandbox.SetStep(step.Agent, step.LLM, step.Tools)
 
-	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, templateName)
+	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, "")
 	if err != nil {
 		return nil, fmt.Errorf("claim sandbox: %w", err)
 	}
