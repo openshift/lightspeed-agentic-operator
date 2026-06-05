@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/go-logr/logr v1.4.3
-	github.com/openshift/api v0.0.0-20260604094926-332af6b7bb22
+	github.com/openshift/api v0.0.0-20260604171736-1c29b880e7ec
 	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.3
