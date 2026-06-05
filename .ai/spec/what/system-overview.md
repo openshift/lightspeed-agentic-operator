@@ -24,7 +24,7 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 ### External Dependencies
 
 8. The operator MUST interact with the Kubernetes API server for all CR CRUD, status updates, and RBAC management.
-9. The operator MUST interact with the Sandbox API (`extensions.agents.x-k8s.io/v1alpha1` `SandboxClaim`, `agents.x-k8s.io/v1alpha1` `Sandbox`) to provision ephemeral agent workloads.
+9. When `--sandbox-mode=sandbox-claim`, the operator MUST interact with the Sandbox API (`extensions.agents.x-k8s.io/v1alpha1` `SandboxClaim`, `agents.x-k8s.io/v1alpha1` `Sandbox`) to provision ephemeral agent workloads. In the default `bare-pod` mode, the operator creates Pods directly and does not depend on Sandbox API CRDs.
 10. The operator MUST resolve `Agent` CRs and their referenced `LLMProvider` CRs to determine model configuration and credentials for each workflow step.
 11. The operator MUST call the sandbox agent's `POST /v1/agent/run` HTTP endpoint for each workflow step (analysis, execution, verification, escalation).
 12. The operator MUST interact with OpenShift API (`console.openshift.io/v1` `ConsolePlugin`, `operator.openshift.io/v1` `Console`) for console plugin deployment.
@@ -49,11 +49,12 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 | `--health-probe-bind-address` | string | `:8081` | Health probe endpoint bind address |
 | `--agentic-console-image` | string | `""` | Console plugin container image |
 | `--agentic-sandbox-image` | string | `""` | Sandbox container image |
+| `--sandbox-mode` | string | `bare-pod` | Sandbox mode: `bare-pod` (direct Pod management) or `sandbox-claim` (Agent Sandbox API) |
 
 ## Constraints
 
 - The operator assumes it is the sole controller for `agentic.openshift.io/v1alpha1` resources; running multiple replicas without leader election would cause conflicts.
-- Sandbox provisioning depends on the Sandbox API CRDs being installed in the cluster (`SandboxClaim`, `Sandbox`, `SandboxTemplate`).
+- Sandbox provisioning via `SandboxClaim` depends on the Sandbox API CRDs being installed in the cluster; this dependency only applies when `--sandbox-mode=sandbox-claim`. The default `bare-pod` mode has no external CRD dependency.
 - The operator requires OpenShift APIs for console plugin deployment; running on vanilla Kubernetes skips console integration.
 
 ## Planned Changes

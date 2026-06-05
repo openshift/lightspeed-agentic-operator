@@ -6,13 +6,16 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 ## Entry point: `cmd/main.go` → `controller.Setup`
 
-- Parses flags: `metrics-bind-address`, `health-probe-bind-address`, `namespace` (falls back to `POD_NAMESPACE`), `agentic-console-image`, `agentic-sandbox-image`.
+- Parses flags: `metrics-bind-address`, `health-probe-bind-address`, `namespace` (falls back to `POD_NAMESPACE`), `agentic-console-image`, `agentic-sandbox-image`, `sandbox-mode` (default `bare-pod`).
 - Builds controller-runtime `Manager` with core + `agenticv1alpha1` + OpenShift console/operator scheme.
 - Calls `controller.Setup(mgr, opts)` which wires **dependency injection**:
-  - `proposal.NewSandboxManager(mgr.GetClient(), namespace)` → `SandboxProvider` for the agent caller.
-  - `proposal.NewSandboxAgentCaller(sandboxMgr, mgr.GetClient(), proposal.NewAgentHTTPClient, namespace)` → satisfies `proposal.AgentCaller`.
+  - **Mode-based provider selection** (`--sandbox-mode`):
+    - `sandbox-claim`: `proposal.NewSandboxManager(mgr.GetClient(), namespace, "lightspeed-agent")` → `SandboxProvider`.
+    - `bare-pod` (default): `proposal.NewBarePodManager(mgr.GetClient(), &proposal.PodSpecBuilder{Image: sandboxImage}, namespace)` → `SandboxProvider`.
+  - `proposal.NewSandboxAgentCaller(sandboxProvider, mgr.GetClient(), proposal.NewAgentHTTPClient, namespace)` → satisfies `proposal.AgentCaller`.
   - `proposal.ProposalReconciler{ Client, Log, Agent, Namespace }` → `SetupWithManager(mgr)`.
   - `agenticconsole.EnsureAgenticConsole` registered as `manager.RunnableFunc` for console plugin deployment.
+  - `agenticsandbox.EnsureBootstrapResources` registered as `manager.RunnableFunc` — creates SA always, creates `SandboxTemplate` only in `sandbox-claim` mode.
 - Registers health/readiness probes. See `how/project-structure.md` for full flag reference.
 
 ---
@@ -27,7 +30,9 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `approval.go` | — | `getApprovalPolicy`, `getProposalApproval`, `ensureProposalApproval`, `isStageApproved`, `isStageDenied`, `getStageOverrideAgent`, `getStageOption` |
 | `resolve.go` | `resolvedStep`, `resolvedWorkflow` | `resolveProposal`, `stepAgentName` |
 | `agent.go` | `AgentCaller`, `StubAgentCaller`; `AnalysisOutput`, `ExecutionOutput`, `VerificationOutput`, `EscalationOutput` | Interface methods on `StubAgentCaller` |
-| `sandbox.go` | `SandboxProvider`, `SandboxManager` | `NewSandboxManager`, `Claim`, `WaitReady`, `Release`, `buildClaim` |
+| `sandbox.go` | `SandboxProvider`, `SandboxManager` | `NewSandboxManager`, `SetStep`, `Claim`, `WaitReady`, `Release`, `buildClaim` |
+| `bare_pod_manager.go` | `BarePodManager` | `NewBarePodManager`, `SetStep`, `Claim`, `WaitReady`, `Release` |
+| `podspec_builder.go` | `PodSpecBuilder` | `Build`, `buildSkills`, `buildMCPServers`, `buildRequiredSecrets`, `addProviderSpecificEnv` |
 | `sandbox_agent.go` | `SandboxAgentCaller`; private JSON DTOs for unmarshaling agent responses local to this file | `NewSandboxAgentCaller`, `Analyze`, `Execute`, `Verify`, `Escalate`, `ReleaseSandboxes`, `callWithSandbox`, `patchSandboxInfo`, `buildAgentContext`, `collectFailedResults`, `stepString` |
 | `sandbox_templates.go` | `templateHashInput`; label constants (`LabelManaged`, `LabelProposal`, etc.); MCP env DTOs | `EnsureAgentTemplate`, `SandboxTemplateServiceAccount`, `computeTemplateHash`, `agentTemplateName`, `gcOldTemplates`, `patchLLMCredentials`, `credentialsSecretName`, `providerURL`, `patchRequiredSecrets`, `patchMCPServers`, `patchSkillsImage`, `patchSkillsPaths`, `patchProbes`, unstructured helpers (`firstContainer`, `setEnvVar`, `addEnvFromSecret`, …) |
 | `client.go` | `AgentHTTPClientInterface`, `AgentHTTPClient`; `agentRunRequest`, `agentContext`, `agentExecutionResult`, `agentPreviousAttempt`, `agentRunResponse` | `NewAgentHTTPClient`, `(*AgentHTTPClient).Run`, `executionOutputToAgentResult` |
@@ -74,7 +79,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 7. **Shared prelude:** `getApprovalPolicy` (cluster singleton name `cluster`), `ensureProposalApproval`, `resolveProposal`. Resolution failure → set `ProposalConditionAnalyzed=False` with `reasonWorkflowFailed`, status patch, return (no requeue).
 8. **Phase switch:** Routes to `handleRevision` (if `needsRevision`) before analysis/execution/escalation arms; otherwise `handleAnalysis`, `handleExecution`, `handleVerification`, `handleEscalation`, or no-op.
 9. **Handlers** set step conditions (`Unknown` → agent call → `True`/`False`), create result CRs, append `Status.Steps.*.Results`, `statusPatch` proposal.
-10. **Agent path:** All agent steps go through `r.Agent.*` which (in production) is `SandboxAgentCaller`: template + `EnsureAgentTemplate` → `Sandbox.Claim` → early `patchSandboxInfo` on proposal → `WaitReady` → `AgentHTTPClient.Run` → JSON unmarshal into outputs.
+10. **Agent path:** All agent steps go through `r.Agent.*` which (in production) is `SandboxAgentCaller`: `callWithSandbox` calls `SetStep` on the provider → `Claim` (provider-specific: `SandboxManager.Claim` handles template derivation, `BarePodManager.Claim` builds pod directly) → `patchSandboxInfo` on proposal → `WaitReady` → normalize URL → `outputSchemaForStep` → `ClientFactory(endpoint).Run` → JSON unmarshal into outputs.
 
 ---
 
@@ -87,20 +92,38 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 ---
 
-## `SandboxManager` (pod CRUD, readiness, release)
+## `SandboxProvider` implementations
+
+### `SandboxManager` (sandbox-claim mode)
 
 - Implements `SandboxProvider`.
-- **Claim:** Builds unstructured `SandboxClaim` (`extensions.agents.x-k8s.io/v1alpha1`, kind `SandboxClaim`) with labels `agentic.openshift.io/proposal`, `agentic.openshift.io/step`, `spec.sandboxTemplateRef`, `lifecycle.shutdownPolicy=Delete`. Name pattern `ls-{step}-{proposal}` truncated.
+- **SetStep:** Stores resolved step config (Agent, LLMProvider, Tools) for the next `Claim` call.
+- **Claim:** Calls `EnsureAgentTemplate` internally (template derivation is encapsulated), then builds unstructured `SandboxClaim` (`extensions.agents.x-k8s.io/v1alpha1`, kind `SandboxClaim`) with labels `agentic.openshift.io/proposal`, `agentic.openshift.io/step`, `spec.sandboxTemplateRef`, `lifecycle.shutdownPolicy=Delete`. Name pattern `ls-{step}-{proposal}` truncated.
 - **WaitReady:** Polls claim → reads `status.sandbox.name` → loads `Sandbox` (`agents.x-k8s.io/v1alpha1`) until `status.conditions` contains `Ready=True`, then returns `status.serviceFQDN`.
 - **Release:** Deletes claim; treats NotFound as success.
-- **No log streaming in controller:** logs are cluster-side (`kubectl` / CLI); manager only waits for FQDN.
+
+### `BarePodManager` (bare-pod mode)
+
+- Implements `SandboxProvider`.
+- **SetStep:** Stores resolved step config (Agent, LLMProvider, Tools) for the next `Claim` call.
+- **Claim:** Builds pod spec via `PodSpecBuilder`, creates a `Pod` in the operator namespace. Name pattern `ls-{step}-{proposal}` truncated. Labels include proposal name and step. Idempotent via `AlreadyExists`.
+- **WaitReady:** Polls Pod conditions until `Ready=True`, returns `status.podIP`.
+- **Release:** Deletes Pod; treats NotFound as success.
+
+### `PodSpecBuilder` (shared)
+
+- Used by `BarePodManager` directly and by `EnsureAgentTemplate` (via shared helper functions).
+- **Build:** Produces `corev1.PodSpec` with agent container, LLM env vars, credential mounts, skills volumes, MCP config, required secrets, probes, security context, SA.
+- Shared helper functions (`providerTypeString`, `credentialsSecretName`, `providerURL`, MCP DTOs) are also called by the unstructured template patchers in `sandbox_templates.go`.
+
+**No log streaming in controller:** logs are cluster-side (`kubectl` / CLI); manager only waits for endpoint.
 
 ---
 
 ## `SandboxAgentCaller` and HTTP
 
 - **Constructor:** Accepts `SandboxProvider`, `client.Client`, `ClientFactory func(endpoint string) AgentHTTPClientInterface`, operator namespace. `Timeout` defaults to `defaultSandboxTimeout` const.
-- **`callWithSandbox` order:** `EnsureAgentTemplate` → `Claim` → `patchSandboxInfo` (status subresource merge) → `WaitReady` → normalize URL (`http://{fqdn}:8080` if no scheme) → `outputSchemaForStep` → `ClientFactory(endpoint).Run(ctx, "", query, schema, agentCtx)`.
+- **`callWithSandbox` order:** `SetStep` on provider → `Claim` → `patchSandboxInfo` (status subresource merge) → `WaitReady` → normalize URL (`http://{endpoint}:8080` if no scheme) → `outputSchemaForStep` → `ClientFactory(endpoint).Run(ctx, "", query, schema, agentCtx)`. Template derivation (sandbox-claim mode) happens inside `SandboxManager.Claim`; bare-pod mode builds the pod spec inside `BarePodManager.Claim`.
 - **`Run` contract:** Empty `systemPrompt`; full payload in POST body per `client.go` (`query`, `outputSchema`, `context`). Path constant `/v1/agent/run`.
 - **`buildAgentContext`:** `TargetNamespaces`, `ApprovedOption` / `ExecutionResult` per step, `PreviousAttempts` from failed `StepResultRef` outcomes across analysis/execution/verification result lists.
 - **`ReleaseSandboxes`:** Iterates `Status.Steps.{Analysis,Execution,Verification,Escalation}.Sandbox.ClaimName` and calls `Release` for each non-empty.
@@ -144,7 +167,8 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 ## Key abstractions
 
 - **`AgentCaller`:** Boundary between reconciler and runtime (stub vs sandbox+HTTP). Methods mirror workflow steps plus `ReleaseSandboxes`.
-- **`SandboxProvider`:** Swappable claim/wait/release (tests can fake).
+- **`SandboxProvider`:** Swappable claim/wait/release (tests can fake). Implementations: `SandboxManager` (sandbox-claim mode), `BarePodManager` (bare-pod mode). `SetStep` provides resolved step config before each `Claim` call.
+- **`PodSpecBuilder`:** Shared pod-spec assembly. Produces typed `corev1.PodSpec` from image + resolved step config. Used directly by `BarePodManager`; shared helper functions also used by `EnsureAgentTemplate` (unstructured path).
 - **`resolveProposal`:** Produces `resolvedWorkflow` with cached `Agent` + `LLMProvider` per name; applies per-stage agent overrides from `ProposalApproval` via `getStageOverrideAgent`; `Execution`/`Verification` steps nil when corresponding spec sections are zero.
 - **`EnsureAgentTemplate`:** Deterministic derived `SandboxTemplate` name from hash of LLM spec, model, skills, MCP servers, required secrets, step, and **base template resourceVersion**. Patches pod template env/volumes for credentials, Vertex/Bedrock/Azure extras, skills image/paths, and MCP JSON env. GC older templates labeled for same agent+step.
 
@@ -153,15 +177,19 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 ## Integration points (who calls whom)
 
 ```
-cmd/main
-  └─ NewSandboxManager / NewSandboxAgentCaller / ProposalReconciler.SetupWithManager
+cmd/main (--sandbox-mode)
+  └─ controller.Setup
+       ├─ bare-pod: NewBarePodManager + PodSpecBuilder
+       └─ sandbox-claim: NewSandboxManager
+       └─ NewSandboxAgentCaller / ProposalReconciler.SetupWithManager
 
 ProposalReconciler.Reconcile
   └─ approval.go, resolve.go
   └─ handlers.go → results.go, rbac.go, helpers.go (status, option trim)
   └─ Agent (SandboxAgentCaller)
-        └─ sandbox_templates.go (EnsureAgentTemplate)
-        └─ sandbox.go (Claim/WaitReady/Release)
+        └─ SandboxProvider.SetStep → SandboxProvider.Claim/WaitReady/Release
+        │   ├─ SandboxManager.Claim → sandbox_templates.go (EnsureAgentTemplate)
+        │   └─ BarePodManager.Claim → podspec_builder.go (PodSpecBuilder.Build)
         └─ helpers.go (query templates), schemas.go (outputSchemaForStep)
         └─ client.go (HTTP Run)
 ```
