@@ -15,14 +15,23 @@ type Options struct {
 	Namespace           string
 	AgenticConsoleImage string
 	AgenticSandboxImage string
+	SandboxMode         string
 }
 
 func Setup(mgr ctrl.Manager, opts Options) error {
 	log := ctrl.Log.WithName("agentic-setup")
 
-	sandboxMgr := proposal.NewSandboxManager(mgr.GetClient(), opts.Namespace, "lightspeed-agent")
+	var sandboxProvider proposal.SandboxProvider
+	switch opts.SandboxMode {
+	case "sandbox-claim":
+		sandboxProvider = proposal.NewSandboxManager(mgr.GetClient(), opts.Namespace, "lightspeed-agent")
+	default:
+		builder := &proposal.PodSpecBuilder{Image: opts.AgenticSandboxImage}
+		sandboxProvider = proposal.NewBarePodManager(mgr.GetClient(), builder, opts.Namespace)
+	}
+
 	agentCaller := proposal.NewSandboxAgentCaller(
-		sandboxMgr,
+		sandboxProvider,
 		mgr.GetClient(),
 		proposal.NewAgentHTTPClient,
 		opts.Namespace,
@@ -36,7 +45,7 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 	}).SetupWithManager(mgr); err != nil {
 		return err
 	}
-	log.Info("Proposal controller registered")
+	log.Info("Proposal controller registered", "sandboxMode", opts.SandboxMode)
 
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		return agenticconsole.EnsureAgenticConsole(ctx, mgr.GetClient(), agenticconsole.AgenticConsoleConfig{
@@ -49,14 +58,15 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 	log.Info("Agentic console runnable registered")
 
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		return agenticsandbox.EnsureBaseSandboxTemplate(ctx, mgr.GetClient(), agenticsandbox.BaseSandboxConfig{
-			Image:     opts.AgenticSandboxImage,
-			Namespace: opts.Namespace,
+		return agenticsandbox.EnsureBootstrapResources(ctx, mgr.GetClient(), agenticsandbox.BootstrapConfig{
+			Image:       opts.AgenticSandboxImage,
+			Namespace:   opts.Namespace,
+			SandboxMode: opts.SandboxMode,
 		})
 	})); err != nil {
 		return err
 	}
-	log.Info("Sandbox template bootstrap runnable registered")
+	log.Info("Sandbox bootstrap runnable registered", "sandboxMode", opts.SandboxMode)
 
 	return nil
 }

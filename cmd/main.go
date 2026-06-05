@@ -38,6 +38,7 @@ func main() {
 		namespace           string
 		agenticConsoleImage string
 		agenticSandboxImage string
+		sandboxMode         string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
@@ -45,6 +46,7 @@ func main() {
 	flag.StringVar(&namespace, "namespace", "", "The namespace where the operator runs (required).")
 	flag.StringVar(&agenticConsoleImage, "agentic-console-image", "", "The image of the agentic console plugin container.")
 	flag.StringVar(&agenticSandboxImage, "agentic-sandbox-image", "", "The image of the agentic sandbox container.")
+	flag.StringVar(&sandboxMode, "sandbox-mode", "bare-pod", "Sandbox mode: bare-pod (default) or sandbox-claim.")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -79,6 +81,7 @@ func main() {
 		Namespace:           namespace,
 		AgenticConsoleImage: agenticConsoleImage,
 		AgenticSandboxImage: agenticSandboxImage,
+		SandboxMode:         sandboxMode,
 	}); err != nil {
 		log.Error(err, "unable to set up agentic controllers")
 		os.Exit(1)
