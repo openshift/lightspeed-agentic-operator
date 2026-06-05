@@ -255,18 +255,67 @@ type statusHolder interface {
 	SetConditions([]metav1.Condition)
 }
 
+// copyResultStatus copies result-specific status fields from src to dst.
+// Both must be the same concrete type (guaranteed by callers which derive
+// both from the same obj via DeepCopyObject).
+func copyResultStatus(dst, src client.Object) {
+	switch d := dst.(type) {
+	case *agenticv1alpha1.AnalysisResult:
+		if s, ok := src.(*agenticv1alpha1.AnalysisResult); ok {
+			d.Status.Options = s.Status.Options
+			d.Status.FailureReason = s.Status.FailureReason
+			d.Status.Sandbox = s.Status.Sandbox
+		}
+	case *agenticv1alpha1.ExecutionResult:
+		if s, ok := src.(*agenticv1alpha1.ExecutionResult); ok {
+			d.Status.ActionsTaken = s.Status.ActionsTaken
+			d.Status.Verification = s.Status.Verification
+			d.Status.FailureReason = s.Status.FailureReason
+			d.Status.Sandbox = s.Status.Sandbox
+		}
+	case *agenticv1alpha1.VerificationResult:
+		if s, ok := src.(*agenticv1alpha1.VerificationResult); ok {
+			d.Status.Checks = s.Status.Checks
+			d.Status.Summary = s.Status.Summary
+			d.Status.FailureReason = s.Status.FailureReason
+			d.Status.Sandbox = s.Status.Sandbox
+		}
+	case *agenticv1alpha1.EscalationResult:
+		if s, ok := src.(*agenticv1alpha1.EscalationResult); ok {
+			d.Status.Summary = s.Status.Summary
+			d.Status.Content = s.Status.Content
+			d.Status.FailureReason = s.Status.FailureReason
+			d.Status.Sandbox = s.Status.Sandbox
+		}
+	}
+}
+
 // createIdempotent creates obj then patches its full status. The Create
 // call writes identity fields (proposalName, etc.) but the API
 // server ignores .status on Create (status subresource). A follow-up
 // Status().Patch writes the complete status including result data and
-// conditions. On AlreadyExists the CR is assumed to already have its
-// status from the original create.
+// conditions. On AlreadyExists the existing CR's status is updated
+// to reflect the latest result.
 func createIdempotent(ctx context.Context, c client.Client, obj client.Object, kind string) error {
 	// Save full object with status before Create strips it.
 	withStatus := obj.DeepCopyObject().(client.Object)
 
 	if err := c.Create(ctx, obj); err != nil {
 		if apierrors.IsAlreadyExists(err) {
+			existing := obj.DeepCopyObject().(client.Object)
+			if getErr := c.Get(ctx, client.ObjectKeyFromObject(obj), existing); getErr != nil {
+				return fmt.Errorf("get existing %s %s: %w", kind, obj.GetName(), getErr)
+			}
+			patched := existing.DeepCopyObject().(client.Object)
+			if sh, ok := patched.(statusHolder); ok {
+				if src, ok := withStatus.(statusHolder); ok {
+					sh.SetConditions(src.GetConditions())
+				}
+			}
+			copyResultStatus(patched, withStatus)
+			if patchErr := c.Status().Patch(ctx, patched, client.MergeFrom(existing)); patchErr != nil {
+				return fmt.Errorf("update existing %s %s status: %w", kind, obj.GetName(), patchErr)
+			}
 			return nil
 		}
 		return fmt.Errorf("create %s %s: %w", kind, obj.GetName(), err)

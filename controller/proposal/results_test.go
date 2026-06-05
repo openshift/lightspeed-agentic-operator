@@ -95,7 +95,7 @@ func TestCreateIdempotent_AlreadyExists(t *testing.T) {
 		},
 		Status: agenticv1alpha1.AnalysisResultStatus{
 			Options: []agenticv1alpha1.RemediationOption{
-				{Title: "Should not overwrite"},
+				{Title: "Updated option from retry"},
 			},
 		},
 	}
@@ -109,8 +109,70 @@ func TestCreateIdempotent_AlreadyExists(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 
-	if len(got.Status.Options) != 0 {
-		t.Error("AlreadyExists should not overwrite status")
+	if len(got.Status.Options) != 1 || got.Status.Options[0].Title != "Updated option from retry" {
+		t.Error("AlreadyExists should update status with latest result")
+	}
+}
+
+func TestCreateIdempotent_AlreadyExists_OverwritesStaleFailure(t *testing.T) {
+	scheme := testScheme()
+
+	existing := &agenticv1alpha1.AnalysisResult{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-analysis-1",
+			Namespace: "default",
+		},
+		Spec: agenticv1alpha1.AnalysisResultSpec{
+			ProposalName: "test-proposal",
+		},
+		Status: agenticv1alpha1.AnalysisResultStatus{
+			Conditions: []metav1.Condition{
+				{Type: "Completed", Status: metav1.ConditionTrue, Reason: "Failed", LastTransitionTime: metav1.Now()},
+			},
+			FailureReason: "sandbox DNS unreachable",
+		},
+	}
+
+	fc := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(existing).
+		WithStatusSubresource(&agenticv1alpha1.AnalysisResult{}).Build()
+
+	cr := &agenticv1alpha1.AnalysisResult{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-analysis-1",
+			Namespace: "default",
+		},
+		Spec: agenticv1alpha1.AnalysisResultSpec{
+			ProposalName: "test-proposal",
+		},
+		Status: agenticv1alpha1.AnalysisResultStatus{
+			Conditions: []metav1.Condition{
+				{Type: "Completed", Status: metav1.ConditionTrue, Reason: "Succeeded", LastTransitionTime: metav1.Now()},
+			},
+			Options: []agenticv1alpha1.RemediationOption{
+				{Title: "Increase memory limit"},
+			},
+			FailureReason: "",
+		},
+	}
+
+	if err := createIdempotent(context.Background(), fc, cr, "AnalysisResult"); err != nil {
+		t.Fatalf("createIdempotent: %v", err)
+	}
+
+	var got agenticv1alpha1.AnalysisResult
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "test-analysis-1", Namespace: "default"}, &got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	if len(got.Status.Options) != 1 || got.Status.Options[0].Title != "Increase memory limit" {
+		t.Errorf("expected success options, got %v", got.Status.Options)
+	}
+	if got.Status.FailureReason != "" {
+		t.Errorf("stale FailureReason not cleared: %q", got.Status.FailureReason)
+	}
+	if len(got.Status.Conditions) != 1 || got.Status.Conditions[0].Reason != "Succeeded" {
+		t.Errorf("condition not updated: %v", got.Status.Conditions)
 	}
 }
 
