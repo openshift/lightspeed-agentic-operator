@@ -23,13 +23,11 @@ func TestBarePodManager_Claim_Creates(t *testing.T) {
 	fc := newBarePodClient().Build()
 	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}
 	m := NewBarePodManager(fc, builder, "test-ns")
-	m.SetStep(
-		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}},
-		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
-		nil,
-	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	name, err := m.Claim(context.Background(), "my-proposal", "analysis", agent, llm, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -60,13 +58,11 @@ func TestBarePodManager_Claim_AlreadyExists(t *testing.T) {
 	fc := newBarePodClient().WithObjects(existing).Build()
 	builder := &PodSpecBuilder{Image: "img"}
 	m := NewBarePodManager(fc, builder, "test-ns")
-	m.SetStep(
-		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}},
-		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
-		nil,
-	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	name, err := m.Claim(context.Background(), "my-proposal", "analysis", agent, llm, nil)
 	if err != nil {
 		t.Fatalf("Claim should succeed for existing pod: %v", err)
 	}

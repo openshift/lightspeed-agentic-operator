@@ -165,9 +165,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	query string,
 	agentCtx *agentContext,
 ) (json.RawMessage, error) {
-	s.Sandbox.SetStep(step.Agent, step.LLM, step.Tools)
-
-	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, "")
+	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, step.Agent, step.LLM, step.Tools)
 	if err != nil {
 		return nil, fmt.Errorf("claim sandbox: %w", err)
 	}

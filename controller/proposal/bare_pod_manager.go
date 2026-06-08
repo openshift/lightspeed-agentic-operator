@@ -23,10 +23,6 @@ type BarePodManager struct {
 	Client    client.Client
 	Builder   *PodSpecBuilder
 	Namespace string
-
-	agent *agenticv1alpha1.Agent
-	llm   *agenticv1alpha1.LLMProvider
-	tools *agenticv1alpha1.ToolsSpec
 }
 
 // NewBarePodManager creates a BarePodManager that manages bare Pods in the given namespace.
@@ -38,23 +34,14 @@ func NewBarePodManager(c client.Client, builder *PodSpecBuilder, namespace strin
 	}
 }
 
-// SetStep stores the resolved step configuration so that the next Claim
-// call can build the correct PodSpec.
-func (m *BarePodManager) SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec) {
-	m.agent = agent
-	m.llm = llm
-	m.tools = tools
-}
-
-// Claim creates a bare Pod for the given proposal step. The templateName
-// parameter is ignored (bare pods use PodSpecBuilder instead of templates).
-// Returns the pod name. Idempotent: returns the name if the pod already exists.
-func (m *BarePodManager) Claim(ctx context.Context, proposalName, step, _ string) (string, error) {
+// Claim creates a bare Pod for the given proposal step. Returns the pod
+// name. Idempotent: returns the name if the pod already exists.
+func (m *BarePodManager) Claim(ctx context.Context, proposalName, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec) (string, error) {
 	log := logf.FromContext(ctx)
 
 	podName := truncateK8sName(fmt.Sprintf("ls-%s-%s", step, proposalName))
 
-	podSpec, err := m.Builder.Build(m.agent, m.llm, m.tools, step)
+	podSpec, err := m.Builder.Build(agent, llm, tools, step)
 	if err != nil {
 		return "", fmt.Errorf("build pod spec: %w", err)
 	}

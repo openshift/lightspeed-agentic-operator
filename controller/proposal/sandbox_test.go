@@ -66,14 +66,9 @@ func baseSandboxTemplate(name, namespace string) *unstructured.Unstructured {
 	}
 }
 
-// setTestStep configures the SandboxManager with minimal agent/llm for tests.
-func setTestStep(m *SandboxManager) {
-	m.SetStep(
-		&agenticv1alpha1.Agent{},
-		&agenticv1alpha1.LLMProvider{},
-		nil,
-	)
-}
+func testStepAgent() *agenticv1alpha1.Agent     { return &agenticv1alpha1.Agent{} }
+func testStepLLM() *agenticv1alpha1.LLMProvider { return &agenticv1alpha1.LLMProvider{} }
+func testStepTools() *agenticv1alpha1.ToolsSpec { return nil }
 
 func TestBuildClaim_Structure(t *testing.T) {
 	m := NewSandboxManager(nil, "test-ns", "")
@@ -125,9 +120,8 @@ func TestClaim_Creates(t *testing.T) {
 	baseTpl := baseSandboxTemplate("base-tpl", "test-ns")
 	c := newSandboxClient(baseTpl)
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
-	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	claimName, err := m.Claim(context.Background(), "my-proposal", "analysis", testStepAgent(), testStepLLM(), testStepTools())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,9 +156,8 @@ func TestClaim_AlreadyExists(t *testing.T) {
 
 	c := newSandboxClient(existing, baseTpl)
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
-	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	claimName, err := m.Claim(context.Background(), "my-proposal", "analysis", testStepAgent(), testStepLLM(), testStepTools())
 	if err != nil {
 		t.Fatalf("unexpected error for already-existing claim: %v", err)
 	}
@@ -177,10 +170,9 @@ func TestClaim_LongName(t *testing.T) {
 	baseTpl := baseSandboxTemplate("base-tpl", "test-ns")
 	c := newSandboxClient(baseTpl)
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
-	setTestStep(m)
 
 	longProposalName := strings.Repeat("a", 100)
-	claimName, err := m.Claim(context.Background(), longProposalName, "analysis", "")
+	claimName, err := m.Claim(context.Background(), longProposalName, "analysis", testStepAgent(), testStepLLM(), testStepTools())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -193,9 +185,8 @@ func TestClaim_ExecutionPhase(t *testing.T) {
 	baseTpl := baseSandboxTemplate("base-tpl", "test-ns")
 	c := newSandboxClient(baseTpl)
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
-	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-proposal", "execution", "")
+	claimName, err := m.Claim(context.Background(), "my-proposal", "execution", testStepAgent(), testStepLLM(), testStepTools())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,9 +212,8 @@ func TestClaim_VerificationPhase(t *testing.T) {
 	baseTpl := baseSandboxTemplate("base-tpl", "test-ns")
 	c := newSandboxClient(baseTpl)
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
-	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-proposal", "verification", "")
+	claimName, err := m.Claim(context.Background(), "my-proposal", "verification", testStepAgent(), testStepLLM(), testStepTools())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

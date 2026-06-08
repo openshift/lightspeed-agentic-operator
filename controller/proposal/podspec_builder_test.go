@@ -183,7 +183,31 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 		t.Errorf("serviceAccountName = %q, want %q", podSpec.ServiceAccountName, defaultSandboxSA)
 	}
 	if podSpec.AutomountServiceAccountToken == nil || *podSpec.AutomountServiceAccountToken {
-		t.Error("automountServiceAccountToken should be false")
+		t.Error("automountServiceAccountToken should be false for analysis step")
+	}
+}
+
+func TestPodSpecBuilder_ExecutionMountsToken(t *testing.T) {
+	builder := PodSpecBuilder{Image: "img"}
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	for _, step := range []string{"execution", "verification"} {
+		podSpec, err := builder.Build(agent, llm, nil, step)
+		if err != nil {
+			t.Fatalf("Build(%s): %v", step, err)
+		}
+		if podSpec.AutomountServiceAccountToken == nil || !*podSpec.AutomountServiceAccountToken {
+			t.Errorf("step=%s: automountServiceAccountToken should be true", step)
+		}
+	}
+
+	podSpec, err := builder.Build(agent, llm, nil, "analysis")
+	if err != nil {
+		t.Fatalf("Build(analysis): %v", err)
+	}
+	if podSpec.AutomountServiceAccountToken == nil || *podSpec.AutomountServiceAccountToken {
+		t.Error("step=analysis: automountServiceAccountToken should be false")
 	}
 }
 

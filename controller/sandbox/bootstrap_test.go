@@ -22,7 +22,7 @@ func testConfig() BootstrapConfig {
 	return BootstrapConfig{
 		Image:       "quay.io/test/agentic-sandbox:latest",
 		Namespace:   "openshift-lightspeed",
-		SandboxMode: "sandbox-claim",
+		SandboxMode: SandboxModeSandboxClaim,
 	}
 }
 
@@ -146,7 +146,7 @@ func TestEnsureBootstrapResources_BarePod_SAOnly(t *testing.T) {
 	cfg := BootstrapConfig{
 		Image:       "quay.io/test/sandbox:latest",
 		Namespace:   "openshift-lightspeed",
-		SandboxMode: "bare-pod",
+		SandboxMode: SandboxModeBarePod,
 	}
 
 	if err := EnsureBootstrapResources(context.Background(), fc, cfg); err != nil {
@@ -177,7 +177,7 @@ func TestEnsureBootstrapResources_SandboxClaim_CreatesAll(t *testing.T) {
 	cfg := BootstrapConfig{
 		Image:       "quay.io/test/sandbox:latest",
 		Namespace:   "openshift-lightspeed",
-		SandboxMode: "sandbox-claim",
+		SandboxMode: SandboxModeSandboxClaim,
 	}
 
 	if err := EnsureBootstrapResources(context.Background(), fc, cfg); err != nil {

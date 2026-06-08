@@ -14,7 +14,12 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-const templateName = "lightspeed-agent"
+const (
+	templateName = "lightspeed-agent"
+
+	SandboxModeBarePod      = "bare-pod"
+	SandboxModeSandboxClaim = "sandbox-claim"
+)
 
 var sandboxTemplateGVK = schema.GroupVersionKind{
 	Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxTemplate",
@@ -41,7 +46,7 @@ func EnsureBootstrapResources(ctx context.Context, c client.Client, cfg Bootstra
 	}
 	log.V(1).Info("ServiceAccount ready")
 
-	if cfg.SandboxMode == "sandbox-claim" {
+	if cfg.SandboxMode == SandboxModeSandboxClaim {
 		if err := ensureSandboxTemplate(ctx, c, cfg.Image, cfg.Namespace); err != nil {
 			return fmt.Errorf("ensure SandboxTemplate: %w", err)
 		}

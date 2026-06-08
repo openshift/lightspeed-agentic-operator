@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -21,9 +22,15 @@ type Options struct {
 func Setup(mgr ctrl.Manager, opts Options) error {
 	log := ctrl.Log.WithName("agentic-setup")
 
+	switch opts.SandboxMode {
+	case agenticsandbox.SandboxModeBarePod, agenticsandbox.SandboxModeSandboxClaim:
+	default:
+		return fmt.Errorf("invalid --sandbox-mode %q: must be %q or %q", opts.SandboxMode, agenticsandbox.SandboxModeBarePod, agenticsandbox.SandboxModeSandboxClaim)
+	}
+
 	var sandboxProvider proposal.SandboxProvider
 	switch opts.SandboxMode {
-	case "sandbox-claim":
+	case agenticsandbox.SandboxModeSandboxClaim:
 		sandboxProvider = proposal.NewSandboxManager(mgr.GetClient(), opts.Namespace, "lightspeed-agent")
 	default:
 		builder := &proposal.PodSpecBuilder{Image: opts.AgenticSandboxImage}

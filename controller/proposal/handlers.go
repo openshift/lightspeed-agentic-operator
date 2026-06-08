@@ -218,6 +218,9 @@ func (r *ProposalReconciler) handleExecution(
 	}
 
 	base := proposal.DeepCopy()
+	if selectedOption != nil {
+		log.Info("execution RBAC check", "nsRules", len(selectedOption.RBAC.NamespaceScoped), "clusterRules", len(selectedOption.RBAC.ClusterScoped))
+	}
 	if selectedOption != nil && (len(selectedOption.RBAC.NamespaceScoped) > 0 || len(selectedOption.RBAC.ClusterScoped) > 0) {
 		if err := ensureExecutionRBAC(ctx, r.Client, proposal, &selectedOption.RBAC, defaultSandboxSA, r.Namespace); err != nil {
 			return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionExecuted, fmt.Errorf("ensure execution RBAC: %w", err))

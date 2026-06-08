@@ -20,6 +20,7 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	agenticcontroller "github.com/openshift/lightspeed-agentic-operator/controller"
+	agenticsandbox "github.com/openshift/lightspeed-agentic-operator/controller/sandbox"
 )
 
 var scheme = runtime.NewScheme()
@@ -46,7 +47,7 @@ func main() {
 	flag.StringVar(&namespace, "namespace", "", "The namespace where the operator runs (required).")
 	flag.StringVar(&agenticConsoleImage, "agentic-console-image", "", "The image of the agentic console plugin container.")
 	flag.StringVar(&agenticSandboxImage, "agentic-sandbox-image", "", "The image of the agentic sandbox container.")
-	flag.StringVar(&sandboxMode, "sandbox-mode", "bare-pod", "Sandbox mode: bare-pod (default) or sandbox-claim.")
+	flag.StringVar(&sandboxMode, "sandbox-mode", agenticsandbox.SandboxModeBarePod, "Sandbox mode: bare-pod (default) or sandbox-claim.")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))

@@ -31,8 +31,7 @@ var (
 
 // SandboxProvider abstracts sandbox lifecycle for testability.
 type SandboxProvider interface {
-	SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec)
-	Claim(ctx context.Context, proposalName, step, templateName string) (claimName string, err error)
+	Claim(ctx context.Context, proposalName, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec) (claimName string, err error)
 	WaitReady(ctx context.Context, claimName string, timeout time.Duration) (endpoint string, err error)
 	Release(ctx context.Context, claimName string) error
 }
@@ -42,22 +41,10 @@ type SandboxManager struct {
 	Client           client.Client
 	Namespace        string
 	BaseTemplateName string
-
-	agent *agenticv1alpha1.Agent
-	llm   *agenticv1alpha1.LLMProvider
-	tools *agenticv1alpha1.ToolsSpec
 }
 
 func NewSandboxManager(c client.Client, namespace, baseTemplateName string) *SandboxManager {
 	return &SandboxManager{Client: c, Namespace: namespace, BaseTemplateName: baseTemplateName}
-}
-
-// SetStep stores the per-step agent configuration so that Claim can
-// derive the correct SandboxTemplate automatically.
-func (m *SandboxManager) SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec) {
-	m.agent = agent
-	m.llm = llm
-	m.tools = tools
 }
 
 func (m *SandboxManager) buildClaim(claimName, proposalName, step, templateName string) *unstructured.Unstructured {
@@ -85,10 +72,10 @@ func (m *SandboxManager) buildClaim(claimName, proposalName, step, templateName 
 	}
 }
 
-func (m *SandboxManager) Claim(ctx context.Context, proposalName, step, _ string) (string, error) {
+func (m *SandboxManager) Claim(ctx context.Context, proposalName, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec) (string, error) {
 	log := logf.FromContext(ctx)
 
-	templateName, err := EnsureAgentTemplate(ctx, m.Client, m.BaseTemplateName, m.Namespace, step, m.agent, m.llm, m.tools)
+	templateName, err := EnsureAgentTemplate(ctx, m.Client, m.BaseTemplateName, m.Namespace, step, agent, llm, tools)
 	if err != nil {
 		return "", fmt.Errorf("ensure agent template: %w", err)
 	}

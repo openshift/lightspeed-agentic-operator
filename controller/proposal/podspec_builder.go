@@ -40,7 +40,7 @@ func (b *PodSpecBuilder) Build(
 		}},
 		SecurityContext: &corev1.SecurityContext{
 			AllowPrivilegeEscalation: ptr.To(false),
-			Capabilities:            &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		},
 	}
 
@@ -110,9 +110,11 @@ func (b *PodSpecBuilder) Build(
 		container.Env = append(container.Env, secEnv...)
 	}
 
+	mountToken := step == "execution" || step == "verification"
+
 	return &corev1.PodSpec{
 		ServiceAccountName:           defaultSandboxSA,
-		AutomountServiceAccountToken: ptr.To(false),
+		AutomountServiceAccountToken: ptr.To(mountToken),
 		Containers:                   []corev1.Container{container},
 		Volumes:                      volumes,
 	}, nil
