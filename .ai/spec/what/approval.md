@@ -42,10 +42,16 @@ Behavioral specification for gating asynchronous workflow steps. **Phase derivat
 - `ProposalApproval.spec.stages[].verification.agent`
 - `ProposalApproval.spec.stages[].escalation.agent`
 
+### Approval Authorization
+
+26. **Cluster-admin gate.** Only users bound to the `cluster-admin` ClusterRole (or `kubeadmin`) MAY approve proposal execution via `patch` on `proposalapprovals`. This is enforced by Kubernetes RBAC — no webhook or operator-side check is required. See parent spec `agentic-security.md` rules 1-6 for full specification.
+27. **Dedicated approver ClusterRole.** The operator MUST ship a ClusterRole `agentic-proposal-approver` granting `get`, `list`, `watch`, and `patch` on `proposalapprovals`, bound to `cluster-admin` subjects via a ClusterRoleBinding. No other binding MAY grant `patch proposalapprovals` to human actors.
+
 ## Constraints
 
 - Product documentation that speaks in terms such as “always approve”, “always require approval”, or “require approval only for execution” MUST be translated into explicit `Automatic`/`Manual` combinations on `ApprovalPolicy.spec.stages`; the CRD does **not** encode those phrases as enumerated `ApprovalMode` values.
 - Policy MUST NOT be namespace-scoped in the current API — only the cluster singleton is read by name `cluster`.
+- The cluster-admin approval gate is binary. Namespace-scoped approval delegation is out of scope for the current release (see `agentic-security.md` Planned Changes).
 
 ## Planned Changes
 
