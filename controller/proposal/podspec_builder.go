@@ -22,12 +22,16 @@ func (b *PodSpecBuilder) Build(
 	llm *agenticv1alpha1.LLMProvider,
 	tools *agenticv1alpha1.ToolsSpec,
 	step string,
+	serviceAccount string,
 ) (*corev1.PodSpec, error) {
 	if agent == nil {
 		return nil, fmt.Errorf("agent is required")
 	}
 	if llm == nil {
 		return nil, fmt.Errorf("LLMProvider is required")
+	}
+	if serviceAccount == "" {
+		return nil, fmt.Errorf("serviceAccount is required")
 	}
 
 	container := corev1.Container{
@@ -111,7 +115,7 @@ func (b *PodSpecBuilder) Build(
 	}
 
 	return &corev1.PodSpec{
-		ServiceAccountName:           defaultSandboxSA,
+		ServiceAccountName:           serviceAccount,
 		AutomountServiceAccountToken: ptr.To(false),
 		Containers:                   []corev1.Container{container},
 		Volumes:                      volumes,

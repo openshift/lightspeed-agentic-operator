@@ -72,6 +72,7 @@ func setTestStep(m *SandboxManager) {
 		&agenticv1alpha1.Agent{},
 		&agenticv1alpha1.LLMProvider{},
 		nil,
+		"",
 	)
 }
 
@@ -215,6 +216,44 @@ func TestClaim_ExecutionPhase(t *testing.T) {
 	if labels[LabelStep] != "execution" {
 		t.Errorf("phase label = %q, want 'execution'", labels[LabelStep])
 	}
+}
+
+func TestClaim_ExecutionUsesPerProposalSA(t *testing.T) {
+	baseTpl := baseSandboxTemplate("base-tpl", "test-ns")
+	c := newSandboxClient(baseTpl)
+	m := NewSandboxManager(c, "test-ns", "base-tpl")
+	m.SetStep(
+		&agenticv1alpha1.Agent{},
+		&agenticv1alpha1.LLMProvider{},
+		nil,
+		"ls-exec-default-my-proposal",
+	)
+
+	_, err := m.Claim(context.Background(), "my-proposal", "execution", "")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	// Verify the derived template has the per-proposal SA patched.
+	var tplList unstructured.UnstructuredList
+	tplList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxTemplate",
+	})
+	if err := c.List(context.Background(), &tplList); err != nil {
+		t.Fatalf("list templates: %v", err)
+	}
+	// Find derived template (not the base).
+	for _, tpl := range tplList.Items {
+		if tpl.GetName() == "base-tpl" {
+			continue
+		}
+		sa, _, _ := unstructured.NestedString(tpl.Object, "spec", "podTemplate", "spec", "serviceAccountName")
+		if sa != "ls-exec-default-my-proposal" {
+			t.Errorf("derived template SA = %q, want %q", sa, "ls-exec-default-my-proposal")
+		}
+		return
+	}
+	t.Fatal("no derived template found")
 }
 
 func TestClaim_VerificationPhase(t *testing.T) {

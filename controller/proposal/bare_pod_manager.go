@@ -24,9 +24,10 @@ type BarePodManager struct {
 	Builder   *PodSpecBuilder
 	Namespace string
 
-	agent *agenticv1alpha1.Agent
-	llm   *agenticv1alpha1.LLMProvider
-	tools *agenticv1alpha1.ToolsSpec
+	agent          *agenticv1alpha1.Agent
+	llm            *agenticv1alpha1.LLMProvider
+	tools          *agenticv1alpha1.ToolsSpec
+	serviceAccount string
 }
 
 // NewBarePodManager creates a BarePodManager that manages bare Pods in the given namespace.
@@ -40,10 +41,11 @@ func NewBarePodManager(c client.Client, builder *PodSpecBuilder, namespace strin
 
 // SetStep stores the resolved step configuration so that the next Claim
 // call can build the correct PodSpec.
-func (m *BarePodManager) SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec) {
+func (m *BarePodManager) SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, serviceAccount string) {
 	m.agent = agent
 	m.llm = llm
 	m.tools = tools
+	m.serviceAccount = serviceAccount
 }
 
 // Claim creates a bare Pod for the given proposal step. The templateName
@@ -54,7 +56,7 @@ func (m *BarePodManager) Claim(ctx context.Context, proposalName, step, _ string
 
 	podName := truncateK8sName(fmt.Sprintf("ls-%s-%s", step, proposalName))
 
-	podSpec, err := m.Builder.Build(m.agent, m.llm, m.tools, step)
+	podSpec, err := m.Builder.Build(m.agent, m.llm, m.tools, step, m.serviceAccount)
 	if err != nil {
 		return "", fmt.Errorf("build pod spec: %w", err)
 	}

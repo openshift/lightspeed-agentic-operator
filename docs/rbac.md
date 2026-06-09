@@ -117,7 +117,7 @@ Created by the operator during the execution phase, deleted on terminal state or
 | ClusterRole | `ls-exec-cluster-<proposal>` | Cluster | Permissions from `rbac.clusterScoped` |
 | ClusterRoleBinding | `ls-exec-cluster-<proposal>` | Cluster | Binds ClusterRole to sandbox SA |
 
-Subject: `ServiceAccount lightspeed-agent` in the operator namespace.
+Subject: per-proposal `ServiceAccount ls-exec-{namespace}-{name}` in the operator namespace.
 
 Lifecycle:
 - **Created**: just before execution agent call (`ensureExecutionRBAC`)

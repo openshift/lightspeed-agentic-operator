@@ -31,7 +31,7 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 	}
 	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderAnthropic, "https://custom.api")
 
-	podSpec, err := builder.Build(agent, llm, nil, "analysis")
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestPodSpecBuilder_Vertex(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "gemini-2.0-flash-exp"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 
-	podSpec, err := builder.Build(agent, llm, nil, "analysis")
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestPodSpecBuilder_Azure(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "gpt-4o"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAzureOpenAI)
 
-	podSpec, err := builder.Build(agent, llm, nil, "analysis")
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -244,7 +244,7 @@ func TestPodSpecBuilder_Bedrock(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "anthropic.claude-3-opus-20240229-v1:0"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAWSBedrock)
 
-	podSpec, err := builder.Build(agent, llm, nil, "analysis")
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestPodSpecBuilder_OpenAI(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "gpt-4o"}}
 	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderOpenAI, "https://api.example.com")
 
-	podSpec, err := builder.Build(agent, llm, nil, "analysis")
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestPodSpecBuilder_NilAgent(t *testing.T) {
 	builder := PodSpecBuilder{Image: "quay.io/lightspeed/agent:latest"}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 
-	_, err := builder.Build(nil, llm, nil, "analysis")
+	_, err := builder.Build(nil, llm, nil, "analysis", defaultSandboxSA)
 	if err == nil {
 		t.Fatal("expected error when agent is nil")
 	}
@@ -296,7 +296,7 @@ func TestPodSpecBuilder_NilLLM(t *testing.T) {
 	builder := PodSpecBuilder{Image: "quay.io/lightspeed/agent:latest"}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}}
 
-	_, err := builder.Build(agent, nil, nil, "analysis")
+	_, err := builder.Build(agent, nil, nil, "analysis", defaultSandboxSA)
 	if err == nil {
 		t.Fatal("expected error when LLM is nil")
 	}
@@ -315,7 +315,7 @@ func TestPodSpecBuilder_Skills(t *testing.T) {
 		},
 	}
 
-	podSpec, err := builder.Build(agent, llm, tools, "analysis")
+	podSpec, err := builder.Build(agent, llm, tools, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestPodSpecBuilder_SkillsWithPaths(t *testing.T) {
 		},
 	}
 
-	podSpec, err := builder.Build(agent, llm, tools, "analysis")
+	podSpec, err := builder.Build(agent, llm, tools, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestPodSpecBuilder_RequiredSecrets_EnvVar(t *testing.T) {
 		},
 	}
 
-	podSpec, err := builder.Build(agent, llm, tools, "analysis")
+	podSpec, err := builder.Build(agent, llm, tools, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -453,7 +453,7 @@ func TestPodSpecBuilder_RequiredSecrets_FileMount(t *testing.T) {
 		},
 	}
 
-	podSpec, err := builder.Build(agent, llm, tools, "analysis")
+	podSpec, err := builder.Build(agent, llm, tools, "analysis", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}

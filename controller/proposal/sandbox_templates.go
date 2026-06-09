@@ -47,6 +47,7 @@ type templateHashInput struct {
 	RequiredSecrets     []agenticv1alpha1.SecretRequirement `json:"requiredSecrets,omitempty"`
 	Step                string                              `json:"step"`
 	BaseResourceVersion string                              `json:"baseRV"`
+	ServiceAccount      string                              `json:"serviceAccount"`
 }
 
 func computeTemplateHash(
@@ -57,6 +58,7 @@ func computeTemplateHash(
 	requiredSecrets []agenticv1alpha1.SecretRequirement,
 	step string,
 	baseResourceVersion string,
+	serviceAccount string,
 ) (string, error) {
 	input := templateHashInput{
 		LLM:                 llm.Spec,
@@ -66,6 +68,7 @@ func computeTemplateHash(
 		RequiredSecrets:     requiredSecrets,
 		Step:                step,
 		BaseResourceVersion: baseResourceVersion,
+		ServiceAccount:      serviceAccount,
 	}
 	data, err := json.Marshal(input)
 	if err != nil {
@@ -92,6 +95,7 @@ func EnsureAgentTemplate(
 	agent *agenticv1alpha1.Agent,
 	llm *agenticv1alpha1.LLMProvider,
 	tools *agenticv1alpha1.ToolsSpec,
+	serviceAccount string,
 ) (string, error) {
 	log := logf.FromContext(ctx).WithName("sandbox-templates")
 
@@ -117,7 +121,7 @@ func EnsureAgentTemplate(
 		requiredSecrets = tools.RequiredSecrets
 	}
 
-	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, step, base.GetResourceVersion())
+	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, step, base.GetResourceVersion(), serviceAccount)
 	if err != nil {
 		return "", fmt.Errorf("compute template hash: %w", err)
 	}
@@ -185,6 +189,12 @@ func EnsureAgentTemplate(
 
 	if err := patchProbes(derived); err != nil {
 		return "", fmt.Errorf("patch probes: %w", err)
+	}
+
+	if serviceAccount != "" {
+		if err := unstructured.SetNestedField(derived.Object, serviceAccount, "spec", "podTemplate", "spec", "serviceAccountName"); err != nil {
+			return "", fmt.Errorf("set serviceAccountName on template: %w", err)
+		}
 	}
 
 	if err := c.Create(ctx, derived); err != nil {
@@ -422,6 +432,7 @@ func gcOldTemplates(
 	}
 	return nil
 }
+
 
 // SandboxTemplateServiceAccount reads the service account name from a SandboxTemplate.
 func SandboxTemplateServiceAccount(ctx context.Context, c client.Client, templateName, namespace string) (string, error) {

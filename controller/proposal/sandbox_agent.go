@@ -64,9 +64,9 @@ func stepString(step agenticv1alpha1.SandboxStep) string {
 	return strings.ToLower(string(step))
 }
 
-func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string) (*AnalysisOutput, error) {
+func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string, serviceAccount string) (*AnalysisOutput, error) {
 	query := buildAnalysisQuery(requestText, proposal)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(proposal))
+	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(proposal), serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("analysis agent call: %w", err)
 	}
@@ -82,14 +82,14 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alp
 	}, nil
 }
 
-func (s *SandboxAgentCaller) Execute(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption) (*ExecutionOutput, error) {
+func (s *SandboxAgentCaller) Execute(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption, serviceAccount string) (*ExecutionOutput, error) {
 	agentCtx := buildAgentContext(proposal)
 	if option != nil {
 		agentCtx.ApprovedOption = option
 	}
 
 	query := buildExecutionQuery(option)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx)
+	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx, serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("execution agent call: %w", err)
 	}
@@ -109,7 +109,7 @@ func (s *SandboxAgentCaller) Execute(ctx context.Context, proposal *agenticv1alp
 	return out, nil
 }
 
-func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) (*VerificationOutput, error) {
+func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput, serviceAccount string) (*VerificationOutput, error) {
 	agentCtx := buildAgentContext(proposal)
 	if option != nil {
 		agentCtx.ApprovedOption = option
@@ -117,7 +117,7 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alph
 	agentCtx.ExecutionResult = executionOutputToAgentResult(exec)
 
 	query := buildVerificationQuery(option, exec)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx)
+	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx, serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("verification agent call: %w", err)
 	}
@@ -134,9 +134,9 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alph
 	}, nil
 }
 
-func (s *SandboxAgentCaller) Escalate(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string) (*EscalationOutput, error) {
+func (s *SandboxAgentCaller) Escalate(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string, serviceAccount string) (*EscalationOutput, error) {
 	agentCtx := buildAgentContext(proposal)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx)
+	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx, serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("escalation agent call: %w", err)
 	}
@@ -164,8 +164,9 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	step resolvedStep,
 	query string,
 	agentCtx *agentContext,
+	serviceAccount string,
 ) (json.RawMessage, error) {
-	s.Sandbox.SetStep(step.Agent, step.LLM, step.Tools)
+	s.Sandbox.SetStep(step.Agent, step.LLM, step.Tools, serviceAccount)
 
 	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, "")
 	if err != nil {

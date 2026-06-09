@@ -58,7 +58,7 @@ func (r *ProposalReconciler) handleAnalysis(
 		return ctrl.Result{}, fmt.Errorf("update to Analyzing: %w", err)
 	}
 
-	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request)
+	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, proposal.Spec.Request, defaultSandboxSA)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
@@ -124,7 +124,7 @@ func (r *ProposalReconciler) handleRevision(
 	revisionSuffix := buildRevisionContext(proposal)
 	requestWithRevision := proposal.Spec.Request + "\n\n" + revisionSuffix
 
-	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision)
+	analysisResult, err := r.Agent.Analyze(ctx, proposal, resolved.Analysis, requestWithRevision, defaultSandboxSA)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionAnalyzed, err)
 	}
@@ -217,6 +217,8 @@ func (r *ProposalReconciler) handleExecution(
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionExecuted, trimErr)
 	}
 
+	// Determine which SA the execution pod should run as.
+	execSA := defaultSandboxSA
 	base := proposal.DeepCopy()
 	if selectedOption != nil && (len(selectedOption.RBAC.NamespaceScoped) > 0 || len(selectedOption.RBAC.ClusterScoped) > 0) {
 		if err := ensureExecutionRBAC(ctx, r.Client, proposal, &selectedOption.RBAC, r.Namespace); err != nil {
@@ -226,6 +228,7 @@ func (r *ProposalReconciler) handleExecution(
 			return ctrl.Result{}, fmt.Errorf("persist RBAC annotation: %w", err)
 		}
 		base = proposal.DeepCopy()
+		execSA = executionSAName(proposal)
 	}
 
 	meta.RemoveStatusCondition(&proposal.Status.Conditions, agenticv1alpha1.ProposalConditionVerified)
@@ -240,7 +243,7 @@ func (r *ProposalReconciler) handleExecution(
 		return ctrl.Result{}, fmt.Errorf("update to Executing: %w", err)
 	}
 
-	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption)
+	execResult, err := r.Agent.Execute(ctx, proposal, *resolved.Execution, selectedOption, execSA)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionExecuted, err)
 	}
@@ -269,28 +272,22 @@ func (r *ProposalReconciler) handleExecution(
 		if err := r.statusPatch(ctx, proposal, base); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update to Completed (trust-mode): %w", err)
 		}
-		// Clean up execution RBAC (SA + Roles) after persisting terminal state.
-		// Always attempt — idempotent; handles both namespace-scoped and cluster-scoped-only cases.
+		log.Info("execution complete, verification skipped")
+	} else {
+		if err := r.statusPatch(ctx, proposal, base); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update to Verifying: %w", err)
+		}
+		log.Info("execution complete, verifying")
+	}
+
+	// Clean up per-proposal execution SA + Roles if one was created.
+	if execSA != defaultSandboxSA {
 		if err := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); err != nil {
-			log.Error(err, "RBAC cleanup after execution (trust-mode), retrying")
+			log.Error(err, "RBAC cleanup after execution, retrying")
 			return ctrl.Result{Requeue: true}, nil
 		}
-		log.Info("execution complete, verification skipped")
-		return ctrl.Result{}, nil
 	}
 
-	if err := r.statusPatch(ctx, proposal, base); err != nil {
-		return ctrl.Result{}, fmt.Errorf("update to Verifying: %w", err)
-	}
-
-	// Clean up execution RBAC (SA + Roles) after persisting Verifying state.
-	// Always attempt — idempotent; handles both namespace-scoped and cluster-scoped-only cases.
-	if err := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); err != nil {
-		log.Error(err, "RBAC cleanup after execution, retrying")
-		return ctrl.Result{Requeue: true}, nil
-	}
-
-	log.Info("execution complete, verifying")
 	return ctrl.Result{}, nil
 }
 
@@ -363,7 +360,7 @@ func (r *ProposalReconciler) handleVerification(
 		}
 	}
 
-	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput)
+	verifyResult, err := r.Agent.Verify(ctx, proposal, *resolved.Verification, selectedOption, execOutput, defaultSandboxSA)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionVerified, err)
 	}
@@ -523,7 +520,7 @@ func (r *ProposalReconciler) handleEscalation(
 	}
 
 	escalationText := buildEscalationRequest(proposal)
-	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText)
+	escalationResult, err := r.Agent.Escalate(ctx, proposal, step, escalationText, defaultSandboxSA)
 	if err != nil {
 		return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionEscalated, err)
 	}

@@ -27,7 +27,7 @@ type mockSandboxProvider struct {
 	releaseCalls int
 }
 
-func (m *mockSandboxProvider) SetStep(_ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec) {
+func (m *mockSandboxProvider) SetStep(_ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ string) {
 }
 func (m *mockSandboxProvider) Claim(_ context.Context, _, _, _ string) (string, error) {
 	m.claimCalls++
@@ -107,7 +107,7 @@ func TestSandboxAgentCaller_Analyze_HappyPath(t *testing.T) {
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	result, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "Pod crashing")
+	result, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "Pod crashing", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestSandboxAgentCaller_Execute_HappyPath(t *testing.T) {
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
 	option := &agenticv1alpha1.RemediationOption{Title: "Fix it"}
-	result, err := caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), option)
+	result, err := caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), option, defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestSandboxAgentCaller_Verify_HappyPath(t *testing.T) {
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	result, err := caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, nil)
+	result, err := caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, nil, defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -178,7 +178,7 @@ func TestSandboxAgentCaller_ClaimError(t *testing.T) {
 	httpClient := &mockHTTPClient{}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test")
+	_, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test", defaultSandboxSA)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -195,7 +195,7 @@ func TestSandboxAgentCaller_WaitReadyError(t *testing.T) {
 	httpClient := &mockHTTPClient{}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, err := caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), nil)
+	_, err := caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), nil, defaultSandboxSA)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -209,7 +209,7 @@ func TestSandboxAgentCaller_HTTPError(t *testing.T) {
 	httpClient := &mockHTTPClient{err: fmt.Errorf("connection refused")}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, err := caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, nil)
+	_, err := caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, nil, defaultSandboxSA)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -225,7 +225,7 @@ func TestSandboxAgentCaller_ParseError(t *testing.T) {
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test")
+	_, err := caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test", defaultSandboxSA)
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
@@ -241,7 +241,7 @@ func TestSandboxAgentCaller_SandboxNotReleasedAfterCall(t *testing.T) {
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, _ = caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test")
+	_, _ = caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "test", defaultSandboxSA)
 
 	if sandbox.claimCalls != 1 {
 		t.Errorf("Claim calls = %d, want 1", sandbox.claimCalls)
@@ -282,7 +282,7 @@ func TestSandboxAgentCaller_ContextPropagation(t *testing.T) {
 		},
 	}
 
-	_, _ = caller.Analyze(context.Background(), proposal, testSandboxStep(), "test")
+	_, _ = caller.Analyze(context.Background(), proposal, testSandboxStep(), "test", defaultSandboxSA)
 
 	if httpClient.lastCtx == nil {
 		t.Fatal("expected context to be set")
@@ -318,7 +318,7 @@ func TestSandboxAgentCaller_VerifyPassesExecutionResult(t *testing.T) {
 		},
 	}
 
-	_, _ = caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), option, exec)
+	_, _ = caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), option, exec, defaultSandboxSA)
 
 	if httpClient.lastCtx == nil {
 		t.Fatal("expected context to be set")
@@ -353,7 +353,7 @@ func TestSandboxAgentCaller_VerifyNilExecLeavesExecutionResultNil(t *testing.T) 
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, _ = caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, nil)
+	_, _ = caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, nil, defaultSandboxSA)
 
 	if httpClient.lastCtx == nil {
 		t.Fatal("expected context to be set")
@@ -377,7 +377,7 @@ func TestSandboxAgentCaller_VerifyExecWithoutInlineVerification(t *testing.T) {
 		},
 	}
 
-	_, _ = caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, exec)
+	_, _ = caller.Verify(context.Background(), testSandboxProposal(), testSandboxStep(), nil, exec, defaultSandboxSA)
 
 	if httpClient.lastCtx.ExecutionResult == nil {
 		t.Fatal("expected executionResult in context")
@@ -395,7 +395,7 @@ func TestSandboxAgentCaller_ExecutePassesApprovedOption(t *testing.T) {
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
 	option := &agenticv1alpha1.RemediationOption{Title: "Scale up replicas"}
-	_, _ = caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), option)
+	_, _ = caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), option, defaultSandboxSA)
 
 	if httpClient.lastCtx == nil || httpClient.lastCtx.ApprovedOption == nil {
 		t.Fatal("expected approved option in context")
@@ -414,7 +414,7 @@ func TestSandboxAgentCaller_AnalysisQueryFraming(t *testing.T) {
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, _ = caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "Pod crashing with OOMKilled")
+	_, _ = caller.Analyze(context.Background(), testSandboxProposal(), testSandboxStep(), "Pod crashing with OOMKilled", defaultSandboxSA)
 
 	if !strings.Contains(httpClient.lastQuery, "analysis agent") {
 		t.Error("analysis query should contain role framing")
@@ -444,7 +444,7 @@ func TestSandboxAgentCaller_ExecutionQueryFraming(t *testing.T) {
 	}
 	proposal := testSandboxProposal()
 	proposal.Spec.Request = "Pod crashing with OOMKilled"
-	_, _ = caller.Execute(context.Background(), proposal, testSandboxStep(), option)
+	_, _ = caller.Execute(context.Background(), proposal, testSandboxStep(), option, defaultSandboxSA)
 
 	if !strings.Contains(httpClient.lastQuery, "execution agent") {
 		t.Error("execution query should contain role framing")
@@ -473,7 +473,7 @@ func TestSandboxAgentCaller_VerificationQueryFraming(t *testing.T) {
 	}
 	proposal := testSandboxProposal()
 	proposal.Spec.Request = "Pod crashing with OOMKilled"
-	_, _ = caller.Verify(context.Background(), proposal, testSandboxStep(), option, exec)
+	_, _ = caller.Verify(context.Background(), proposal, testSandboxStep(), option, exec, defaultSandboxSA)
 
 	if !strings.Contains(httpClient.lastQuery, "verification agent") {
 		t.Error("verification query should contain role framing")
@@ -496,7 +496,7 @@ func TestSandboxAgentCaller_ExecutionQueryNilOption(t *testing.T) {
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
-	_, _ = caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), nil)
+	_, _ = caller.Execute(context.Background(), testSandboxProposal(), testSandboxStep(), nil, defaultSandboxSA)
 
 	if !strings.Contains(httpClient.lastQuery, "execution agent") {
 		t.Error("execution query should still contain role framing with nil option")
@@ -519,7 +519,7 @@ func TestSandboxAgentCaller_Analyze_PatchesSandboxInfo(t *testing.T) {
 	proposal := testSandboxProposal()
 	caller := newTestSandboxAgentCallerWithProposal(sandbox, httpClient, proposal)
 
-	_, err := caller.Analyze(context.Background(), proposal, testSandboxStep(), "Pod crashing")
+	_, err := caller.Analyze(context.Background(), proposal, testSandboxStep(), "Pod crashing", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -548,7 +548,7 @@ func TestSandboxAgentCaller_Execute_PatchesSandboxInfo(t *testing.T) {
 	proposal := testSandboxProposal()
 	caller := newTestSandboxAgentCallerWithProposal(sandbox, httpClient, proposal)
 
-	_, err := caller.Execute(context.Background(), proposal, testSandboxStep(), nil)
+	_, err := caller.Execute(context.Background(), proposal, testSandboxStep(), nil, defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -574,7 +574,7 @@ func TestSandboxAgentCaller_Verify_PatchesSandboxInfo(t *testing.T) {
 	proposal := testSandboxProposal()
 	caller := newTestSandboxAgentCallerWithProposal(sandbox, httpClient, proposal)
 
-	_, err := caller.Verify(context.Background(), proposal, testSandboxStep(), nil, nil)
+	_, err := caller.Verify(context.Background(), proposal, testSandboxStep(), nil, nil, defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestSandboxAgentCaller_SandboxInfoPatch_DoesNotBlockOnError(t *testing.T) {
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
 	proposal := testSandboxProposal()
 
-	_, err := caller.Analyze(context.Background(), proposal, testSandboxStep(), "test")
+	_, err := caller.Analyze(context.Background(), proposal, testSandboxStep(), "test", defaultSandboxSA)
 	if err != nil {
 		t.Fatalf("analysis should succeed even when sandbox info patch fails: %v", err)
 	}
@@ -715,7 +715,7 @@ type trackingMockSandbox struct {
 	errOnClaim string
 }
 
-func (m *trackingMockSandbox) SetStep(_ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec) {
+func (m *trackingMockSandbox) SetStep(_ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ string) {
 }
 func (m *trackingMockSandbox) Claim(_ context.Context, _, _, _ string) (string, error) {
 	return "", nil

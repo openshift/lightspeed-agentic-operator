@@ -27,6 +27,7 @@ func TestBarePodManager_Claim_Creates(t *testing.T) {
 		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}},
 		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
 		nil,
+		defaultSandboxSA,
 	)
 
 	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
@@ -52,6 +53,31 @@ func TestBarePodManager_Claim_Creates(t *testing.T) {
 	}
 }
 
+func TestBarePodManager_Claim_UsesPerProposalSA(t *testing.T) {
+	fc := newBarePodClient().Build()
+	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}
+	m := NewBarePodManager(fc, builder, "test-ns")
+	m.SetStep(
+		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}},
+		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
+		nil,
+		"ls-exec-default-my-proposal",
+	)
+
+	name, err := m.Claim(context.Background(), "my-proposal", "execution", "")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	var pod corev1.Pod
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+		t.Fatalf("pod not created: %v", err)
+	}
+	if pod.Spec.ServiceAccountName != "ls-exec-default-my-proposal" {
+		t.Errorf("serviceAccountName = %q, want %q", pod.Spec.ServiceAccountName, "ls-exec-default-my-proposal")
+	}
+}
+
 func TestBarePodManager_Claim_AlreadyExists(t *testing.T) {
 	existing := &corev1.Pod{}
 	existing.Name = "ls-analysis-my-proposal"
@@ -64,6 +90,7 @@ func TestBarePodManager_Claim_AlreadyExists(t *testing.T) {
 		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}},
 		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
 		nil,
+		defaultSandboxSA,
 	)
 
 	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
