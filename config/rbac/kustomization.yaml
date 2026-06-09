@@ -4,3 +4,5 @@ resources:
   - role.yaml
   - service_account.yaml
   - role_binding.yaml
+  - proposal_approver_role.yaml
+  - proposal_approver_binding.yaml

@@ -44,8 +44,9 @@ Behavioral specification for gating asynchronous workflow steps. **Phase derivat
 
 ### Approval Authorization
 
-26. **Cluster-admin gate.** Only users bound to the `cluster-admin` ClusterRole (or `kubeadmin`) MAY approve proposal execution via `patch` on `proposalapprovals`. This is enforced by Kubernetes RBAC — no webhook or operator-side check is required. See parent spec `agentic-security.md` rules 1-6 for full specification.
-27. **Dedicated approver ClusterRole.** The operator MUST ship a ClusterRole `agentic-proposal-approver` granting `get`, `list`, `watch`, and `patch` on `proposalapprovals`, bound to `cluster-admin` subjects via a ClusterRoleBinding. No other binding MAY grant `patch proposalapprovals` to human actors.
+26. **Cluster-admin gate.** Only users in the `system:cluster-admins` group MAY approve proposal execution via `patch` on `proposalapprovals`. This is enforced by Kubernetes RBAC.
+27. **Dedicated approver ClusterRole.** The operator ships a ClusterRole `agentic-proposal-approver` granting `get`, `list`, `watch`, and `patch` on `proposalapprovals`, plus `get`, `list`, `watch` on `proposals` (so approvers can see what they're approving). A ClusterRoleBinding `agentic-proposal-approver-binding` binds this role to the `system:cluster-admins` group. No other operator-shipped binding grants `patch proposalapprovals` to human actors. The operator's own `agentic-operator-manager-role` retains `patch` since it seeds ProposalApproval CRs programmatically (bound to the `controller-manager` ServiceAccount, not a human).
+28. **Implementation.** Manifests live in `config/rbac/proposal_approver_role.yaml` and `config/rbac/proposal_approver_binding.yaml`, included via `config/rbac/kustomization.yaml`. Applied automatically on `make deploy`.
 
 ## Constraints
 
