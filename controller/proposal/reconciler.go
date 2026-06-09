@@ -53,10 +53,14 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// --- Deletion ---
 	if !proposal.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(&proposal, rbacCleanupFinalizer) {
+			// Sandbox release is fatal — if it fails, retry with backoff. This prevents
+			// orphaned sandbox pods/claims. Trade-off: if sandbox API is permanently down,
+			// the Proposal stays in Terminating until resolved (or finalizer is manually removed).
 			if err := r.Agent.ReleaseSandboxes(ctx, &proposal); err != nil {
-				log.Error(err, "sandbox cleanup failed during deletion")
+				log.Error(err, "sandbox cleanup failed during deletion, retrying")
+				return ctrl.Result{}, err
 			}
-			if err := cleanupExecutionRBAC(ctx, r.Client, &proposal); err != nil {
+			if err := cleanupExecutionRBAC(ctx, r.Client, &proposal, r.Namespace); err != nil {
 				log.Error(err, "RBAC cleanup failed, retrying")
 				return ctrl.Result{}, err
 			}

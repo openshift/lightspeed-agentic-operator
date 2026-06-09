@@ -219,7 +219,7 @@ func (r *ProposalReconciler) handleExecution(
 
 	base := proposal.DeepCopy()
 	if selectedOption != nil && (len(selectedOption.RBAC.NamespaceScoped) > 0 || len(selectedOption.RBAC.ClusterScoped) > 0) {
-		if err := ensureExecutionRBAC(ctx, r.Client, proposal, &selectedOption.RBAC, defaultSandboxSA, r.Namespace); err != nil {
+		if err := ensureExecutionRBAC(ctx, r.Client, proposal, &selectedOption.RBAC, r.Namespace); err != nil {
 			return r.failStep(ctx, log, proposal, agenticv1alpha1.ProposalConditionExecuted, fmt.Errorf("ensure execution RBAC: %w", err))
 		}
 		if err := r.Patch(ctx, proposal, client.MergeFrom(base)); err != nil {
@@ -269,12 +269,25 @@ func (r *ProposalReconciler) handleExecution(
 		if err := r.statusPatch(ctx, proposal, base); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update to Completed (trust-mode): %w", err)
 		}
+		// Clean up execution RBAC (SA + Roles) after persisting terminal state.
+		// Always attempt — idempotent; handles both namespace-scoped and cluster-scoped-only cases.
+		if err := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); err != nil {
+			log.Error(err, "RBAC cleanup after execution (trust-mode), retrying")
+			return ctrl.Result{Requeue: true}, nil
+		}
 		log.Info("execution complete, verification skipped")
 		return ctrl.Result{}, nil
 	}
 
 	if err := r.statusPatch(ctx, proposal, base); err != nil {
 		return ctrl.Result{}, fmt.Errorf("update to Verifying: %w", err)
+	}
+
+	// Clean up execution RBAC (SA + Roles) after persisting Verifying state.
+	// Always attempt — idempotent; handles both namespace-scoped and cluster-scoped-only cases.
+	if err := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); err != nil {
+		log.Error(err, "RBAC cleanup after execution, retrying")
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	log.Info("execution complete, verifying")
@@ -290,6 +303,13 @@ func (r *ProposalReconciler) handleVerification(
 	approval *agenticv1alpha1.ProposalApproval,
 	policy *agenticv1alpha1.ApprovalPolicy,
 ) (ctrl.Result, error) {
+	// Retry execution RBAC cleanup if it failed during handleExecution transition.
+	// Always attempt — idempotent; covers both namespace-scoped and cluster-scoped-only cases.
+	if err := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); err != nil {
+		log.Error(err, "RBAC cleanup retry in verification, requeuing")
+		return ctrl.Result{Requeue: true}, nil
+	}
+
 	log.Info("verifying")
 
 	base := proposal.DeepCopy()
@@ -436,7 +456,7 @@ func (r *ProposalReconciler) handleFailed(
 	log.Info("handling system failure (terminal)")
 
 	if proposal.Annotations[rbacNamespacesAnnotation] != "" {
-		if err := cleanupExecutionRBAC(ctx, r.Client, proposal); err != nil {
+		if err := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); err != nil {
 			log.Error(err, "RBAC cleanup on failure")
 		}
 	}
@@ -518,7 +538,7 @@ func (r *ProposalReconciler) handleEscalation(
 	proposal.Status.Steps.Escalation.Results = append(proposal.Status.Steps.Escalation.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFromBool(escalationResult.Success)})
 
 	if proposal.Annotations[rbacNamespacesAnnotation] != "" {
-		if cleanErr := cleanupExecutionRBAC(ctx, r.Client, proposal); cleanErr != nil {
+		if cleanErr := cleanupExecutionRBAC(ctx, r.Client, proposal, r.Namespace); cleanErr != nil {
 			log.Error(cleanErr, "RBAC cleanup on escalation")
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,8 +35,21 @@ func TestEnsureExecutionRBAC_NamespaceScopedOnly(t *testing.T) {
 		}},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensureExecutionRBAC: %v", err)
+	}
+
+	// Verify per-proposal SA created with correct labels
+	var sa corev1.ServiceAccount
+	saName := executionSAName(proposal)
+	if err := fc.Get(ctx, types.NamespacedName{Name: saName, Namespace: "default"}, &sa); err != nil {
+		t.Fatalf("per-proposal SA not found: %v", err)
+	}
+	if sa.Labels[LabelProposal] != proposal.Name {
+		t.Fatalf("SA label %s = %q, want %q", LabelProposal, sa.Labels[LabelProposal], proposal.Name)
+	}
+	if sa.Labels[LabelComponent] != "execution-sa" {
+		t.Fatalf("SA label %s = %q, want execution-sa", LabelComponent, sa.Labels[LabelComponent])
 	}
 
 	roleName := executionRoleName("fix-oom")
@@ -69,7 +83,7 @@ func TestEnsureExecutionRBAC_NamespaceScopedOnly(t *testing.T) {
 	if len(binding.Subjects) != 1 {
 		t.Fatalf("expected 1 subject, got %d", len(binding.Subjects))
 	}
-	if binding.Subjects[0].Name != "lightspeed-agent" {
+	if binding.Subjects[0].Name != executionSAName(proposal) {
 		t.Fatalf("unexpected subject: %s", binding.Subjects[0].Name)
 	}
 	if binding.Subjects[0].Namespace != "default" {
@@ -108,7 +122,7 @@ func TestEnsureExecutionRBAC_ClusterScopedOnly(t *testing.T) {
 		}},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensureExecutionRBAC: %v", err)
 	}
 
@@ -131,7 +145,7 @@ func TestEnsureExecutionRBAC_ClusterScopedOnly(t *testing.T) {
 	if crb.RoleRef.Kind != "ClusterRole" || crb.RoleRef.Name != crName {
 		t.Fatalf("unexpected roleRef: %+v", crb.RoleRef)
 	}
-	if crb.Subjects[0].Name != "lightspeed-agent" {
+	if crb.Subjects[0].Name != executionSAName(proposal) {
 		t.Fatalf("unexpected subject: %s", crb.Subjects[0].Name)
 	}
 }
@@ -155,7 +169,7 @@ func TestEnsureExecutionRBAC_BothScopes(t *testing.T) {
 		}},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensureExecutionRBAC: %v", err)
 	}
 
@@ -187,7 +201,7 @@ func TestEnsureExecutionRBAC_MultipleNamespaces(t *testing.T) {
 		}},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensureExecutionRBAC: %v", err)
 	}
 
@@ -229,10 +243,10 @@ func TestEnsureExecutionRBAC_Idempotent(t *testing.T) {
 		}},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("first call: %v", err)
 	}
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("idempotent second call should not error: %v", err)
 	}
 }
@@ -245,7 +259,7 @@ func TestEnsureExecutionRBAC_NilResult(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "no-rbac", Namespace: "default"},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, nil, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, nil, "default"); err != nil {
 		t.Fatalf("nil RBACResult should be no-op: %v", err)
 	}
 }
@@ -260,7 +274,7 @@ func TestEnsureExecutionRBAC_EmptyRules(t *testing.T) {
 	}
 	rbacResult := &agenticv1alpha1.RBACResult{}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("empty RBACResult should be no-op: %v", err)
 	}
 
@@ -287,7 +301,7 @@ func TestEnsureExecutionRBAC_NamespacesFromRBACRules(t *testing.T) {
 		},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensureExecutionRBAC: %v", err)
 	}
 
@@ -318,7 +332,7 @@ func TestEnsureExecutionRBAC_ResourceNames(t *testing.T) {
 		}},
 	}
 
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensureExecutionRBAC: %v", err)
 	}
 
@@ -359,7 +373,7 @@ func TestCleanupExecutionRBAC_NamespaceAndCluster(t *testing.T) {
 	}
 
 	// Create RBAC
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 
@@ -376,7 +390,7 @@ func TestCleanupExecutionRBAC_NamespaceAndCluster(t *testing.T) {
 	}
 
 	// Cleanup
-	if err := cleanupExecutionRBAC(ctx, fc, proposal); err != nil {
+	if err := cleanupExecutionRBAC(ctx, fc, proposal, "default"); err != nil {
 		t.Fatalf("cleanupExecutionRBAC: %v", err)
 	}
 
@@ -415,12 +429,12 @@ func TestCleanupExecutionRBAC_NoAnnotation(t *testing.T) {
 			Verbs: []string{"get"}, Justification: "Read nodes",
 		}},
 	}
-	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "lightspeed-agent", "default"); err != nil {
+	if err := ensureExecutionRBAC(ctx, fc, proposal, rbacResult, "default"); err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
 
 	// Cleanup with no namespace annotation — should still clean cluster resources
-	if err := cleanupExecutionRBAC(ctx, fc, proposal); err != nil {
+	if err := cleanupExecutionRBAC(ctx, fc, proposal, "default"); err != nil {
 		t.Fatalf("cleanupExecutionRBAC: %v", err)
 	}
 
@@ -444,7 +458,7 @@ func TestCleanupExecutionRBAC_MissingResources(t *testing.T) {
 	}
 
 	// Nothing created — cleanup should tolerate NotFound
-	if err := cleanupExecutionRBAC(ctx, fc, proposal); err != nil {
+	if err := cleanupExecutionRBAC(ctx, fc, proposal, "default"); err != nil {
 		t.Fatalf("cleanup of missing resources should succeed: %v", err)
 	}
 }

@@ -740,38 +740,23 @@ func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 		t.Fatalf("expected Verifying, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
 
-	// Verify namespace-scoped Role+RoleBinding were created
-	roleName := executionRoleName("fix-crash")
-	var role rbacv1.Role
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &role); err != nil {
-		t.Fatalf("execution Role not created in production: %v", err)
-	}
-	if role.Rules[0].Resources[0] != "deployments" {
-		t.Fatalf("unexpected Role rule: %+v", role.Rules)
-	}
-	var binding rbacv1.RoleBinding
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &binding); err != nil {
-		t.Fatalf("execution RoleBinding not created: %v", err)
-	}
-
-	// Verify cluster-scoped ClusterRole+ClusterRoleBinding were created
-	crName := clusterRoleName("fix-crash")
-	var cr rbacv1.ClusterRole
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: crName}, &cr); err != nil {
-		t.Fatalf("execution ClusterRole not created: %v", err)
-	}
-	if cr.Rules[0].Resources[0] != "nodes" {
-		t.Fatalf("unexpected ClusterRole rule: %+v", cr.Rules)
-	}
-	var crb rbacv1.ClusterRoleBinding
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: crName}, &crb); err != nil {
-		t.Fatalf("execution ClusterRoleBinding not created: %v", err)
-	}
-
-	// Verify rbac-namespaces annotation was set
+	// RBAC was created during execution and cleaned up immediately after.
+	// Verify via annotation (proves RBAC was materialized in "production" namespace).
 	p, _ = getProposal(r, "fix-crash")
 	if p.Annotations[rbacNamespacesAnnotation] != "production" {
 		t.Fatalf("expected rbac-namespaces annotation 'production', got %q", p.Annotations[rbacNamespacesAnnotation])
+	}
+
+	// Verify RBAC is already cleaned up (deleted immediately after execution completes).
+	roleName := executionRoleName("fix-crash")
+	var role rbacv1.Role
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &role); err == nil {
+		t.Fatal("Role should be cleaned up after execution completes")
+	}
+	crName := clusterRoleName("fix-crash")
+	var cr rbacv1.ClusterRole
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: crName}, &cr); err == nil {
+		t.Fatal("ClusterRole should be cleaned up after execution completes")
 	}
 
 	// Complete lifecycle
@@ -826,31 +811,15 @@ func TestReconcile_ExecutionRBACCleanedOnFailure(t *testing.T) {
 		t.Fatalf("expected Verifying, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
 
-	// Verify RBAC exists before failure
+	// RBAC should already be cleaned up after execution completes (before verification starts)
 	roleName := executionRoleName("fix-crash")
 	var role rbacv1.Role
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &role); err != nil {
-		t.Fatalf("Role should exist before failure: %v", err)
-	}
-
-	// System failure during verification
-	agent.verifyErr = fmt.Errorf("sandbox pod crashed")
-	reconcileOnce(r, "fix-crash")
-	p, _ = getProposal(r, "fix-crash")
-	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.ProposalPhaseFailed {
-		t.Fatalf("expected Failed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
-	}
-
-	// handleFailed should clean up RBAC
-	reconcileOnce(r, "fix-crash")
-
-	// Verify RBAC was cleaned up
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &role); err == nil {
-		t.Fatal("Role should be cleaned up after failure")
+		t.Fatal("Role should be cleaned up immediately after execution completes")
 	}
 	var bindingCheck rbacv1.RoleBinding
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: roleName, Namespace: "production"}, &bindingCheck); err == nil {
-		t.Fatal("RoleBinding should be cleaned up after failure")
+		t.Fatal("RoleBinding should be cleaned up immediately after execution completes")
 	}
 }
 

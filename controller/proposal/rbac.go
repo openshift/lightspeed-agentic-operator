@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,19 +18,58 @@ const (
 	rbacNamespacesAnnotation = "agentic.openshift.io/rbac-namespaces"
 )
 
-// ensureExecutionRBAC creates Role+RoleBinding (namespace-scoped) and
-// ClusterRole+ClusterRoleBinding (cluster-scoped) from the selected
-// option's RBAC result. Idempotent — skips resources that already exist.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;delete;get
+
+// executionSAName returns the per-proposal ServiceAccount name for execution RBAC isolation.
+// Uses the same truncation pattern as executionRoleName. Collision is theoretically possible
+// for very long namespace+name combinations (>55 chars) that share the same prefix after
+// truncation, but is near-impossible in practice with typical naming conventions.
+func executionSAName(proposal *agenticv1alpha1.Proposal) string {
+	return truncateK8sName(fmt.Sprintf("ls-exec-%s-%s", proposal.Namespace, proposal.Name))
+}
+
+// ensureExecutionSA creates a per-proposal ServiceAccount for execution RBAC isolation.
+// No owner reference — cross-namespace owner refs are unsupported by Kubernetes GC.
+// Cleanup is handled explicitly by cleanupExecutionRBAC (via finalizer on Proposal deletion).
+func ensureExecutionSA(ctx context.Context, c client.Client, proposal *agenticv1alpha1.Proposal, operatorNS string) (string, error) {
+	saName := executionSAName(proposal)
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      saName,
+			Namespace: operatorNS,
+			Labels:    rbacLabels(proposal.Name, "execution-sa"),
+		},
+	}
+	if err := c.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		return "", fmt.Errorf("create execution SA %s: %w", saName, err)
+	}
+	return saName, nil
+}
+
+// deleteExecutionSA explicitly deletes the per-proposal ServiceAccount after execution completes.
+func deleteExecutionSA(ctx context.Context, c client.Client, proposal *agenticv1alpha1.Proposal, operatorNS string) error {
+	saName := executionSAName(proposal)
+	return deleteIfExists(ctx, c, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: operatorNS}})
+}
+
+// ensureExecutionRBAC creates a per-proposal SA, then Role+RoleBinding (namespace-scoped) and
+// ClusterRole+ClusterRoleBinding (cluster-scoped) from the selected option's RBAC result.
+// All bindings reference the per-proposal SA for isolation between concurrent Proposals.
+// Idempotent — skips resources that already exist.
 func ensureExecutionRBAC(
 	ctx context.Context,
 	c client.Client,
 	proposal *agenticv1alpha1.Proposal,
 	rbacResult *agenticv1alpha1.RBACResult,
-	sandboxSA string,
 	operatorNS string,
 ) error {
 	if rbacResult == nil {
 		return nil
+	}
+
+	saName, err := ensureExecutionSA(ctx, c, proposal, operatorNS)
+	if err != nil {
+		return err
 	}
 
 	roleName := executionRoleName(proposal.Name)
@@ -37,7 +77,7 @@ func ensureExecutionRBAC(
 
 	subjects := []rbacv1.Subject{{
 		Kind:      rbacv1.ServiceAccountKind,
-		Name:      sandboxSA,
+		Name:      saName,
 		Namespace: operatorNS,
 	}}
 
@@ -94,9 +134,9 @@ func ensureExecutionRBAC(
 	return nil
 }
 
-// cleanupExecutionRBAC removes all RBAC resources created for a proposal's
-// execution. Uses the annotation to find namespaces (survives retry clearing Steps).
-func cleanupExecutionRBAC(ctx context.Context, c client.Client, proposal *agenticv1alpha1.Proposal) error {
+// cleanupExecutionRBAC removes all RBAC resources and the per-proposal SA created for
+// a proposal's execution. Uses the annotation to find namespaces (survives retry clearing Steps).
+func cleanupExecutionRBAC(ctx context.Context, c client.Client, proposal *agenticv1alpha1.Proposal, operatorNS string) error {
 	roleName := executionRoleName(proposal.Name)
 
 	nsList := annotatedRBACNamespaces(proposal)
@@ -116,6 +156,10 @@ func cleanupExecutionRBAC(ctx context.Context, c client.Client, proposal *agenti
 	}
 	if err := deleteIfExists(ctx, c, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: crName}}); err != nil {
 		return fmt.Errorf("delete ClusterRole %s: %w", crName, err)
+	}
+
+	if err := deleteExecutionSA(ctx, c, proposal, operatorNS); err != nil {
+		return fmt.Errorf("delete execution SA: %w", err)
 	}
 	return nil
 }
