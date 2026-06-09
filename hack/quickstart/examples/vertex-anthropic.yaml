@@ -1,0 +1,32 @@
+# Vertex AI with Anthropic (Claude) models.
+#
+# Before applying, create the credentials secret:
+#   oc create secret generic llm-creds-vertex -n openshift-lightspeed \
+#     --from-file=GOOGLE_APPLICATION_CREDENTIALS=/path/to/your/adc.json
+#
+# Then edit this file: replace <YOUR_GCP_PROJECT_ID> with your GCP project ID.
+apiVersion: agentic.openshift.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: vertex-anthropic
+spec:
+  type: GoogleCloudVertex
+  googleCloudVertex:
+    projectID: "<YOUR_GCP_PROJECT_ID>"
+    region: "us-east5"
+    modelProvider: Anthropic
+    credentialsSecret:
+      name: llm-creds-vertex
+---
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Agent
+metadata:
+  name: default
+spec:
+  llmProvider:
+    name: vertex-anthropic
+  model: "claude-sonnet-4@20250514"
+  timeouts:
+    analysisSeconds: 120
+    executionSeconds: 120
+    verificationSeconds: 120

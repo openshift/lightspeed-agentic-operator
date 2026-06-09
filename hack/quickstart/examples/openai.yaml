@@ -1,0 +1,27 @@
+# OpenAI (direct API).
+#
+# Before applying, create the credentials secret:
+#   oc create secret generic llm-creds-openai -n openshift-lightspeed \
+#     --from-literal=OPENAI_API_KEY=sk-...
+apiVersion: agentic.openshift.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: openai
+spec:
+  type: OpenAI
+  openAI:
+    credentialsSecret:
+      name: llm-creds-openai
+---
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Agent
+metadata:
+  name: default
+spec:
+  llmProvider:
+    name: openai
+  model: "gpt-4.1"
+  timeouts:
+    analysisSeconds: 120
+    executionSeconds: 120
+    verificationSeconds: 120
