@@ -11,6 +11,9 @@
 #   - oc CLI on PATH
 #   - Logged into the target OpenShift cluster
 #   - cluster-admin privileges
+#
+# Note: The console plugin requires OpenShift 4.21+.
+#       Set CONSOLE_IMAGE="" to skip console deployment on older clusters.
 
 set -euo pipefail
 
@@ -203,11 +206,13 @@ cat <<DONE
 ════════════════════════════════════════════════════════════════
   Agentic OLS installed successfully!
 
-  Namespace:      ${NAMESPACE}
-  Sandbox mode:   ${SANDBOX_MODE}
+  Namespace     : ${NAMESPACE}
+  Sandbox mode  : ${SANDBOX_MODE}
   Operator image: ${OPERATOR_IMAGE}
-  Sandbox image:  ${SANDBOX_IMAGE}
-  Console image:  ${CONSOLE_IMAGE}
+  Sandbox image : ${SANDBOX_IMAGE}
+  Console image : ${CONSOLE_IMAGE}
+
+  > Console works only on OpenShift 4.21+
 ════════════════════════════════════════════════════════════════
 
   NEXT: Configure your LLM provider. Pick one:
