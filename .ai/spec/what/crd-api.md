@@ -6,7 +6,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 1. **Group/version**: All kinds in this specification use API group `agentic.openshift.io` and version `v1alpha1`.
 2. **Scope — namespaced**: `Proposal`, `ProposalApproval`, `AnalysisResult`, `ExecutionResult`, `VerificationResult`, `EscalationResult` MUST be namespace-scoped; their `metadata.namespace` is the tenant/workload namespace.
-3. **Scope — cluster**: `Agent`, `LLMProvider`, and `ApprovalPolicy` MUST be cluster-scoped; `metadata.name` is the global identifier.
+3. **Scope — cluster**: `Agent`, `LLMProvider`, `ApprovalPolicy`, and `AgenticOLSConfig` MUST be cluster-scoped; `metadata.name` is the global identifier.
 4. **Proposal identity**: A `Proposal` MUST include required immutable fields per CEL: at minimum `spec.request` and `spec.analysis`. Omitting `spec.execution` or `spec.verification` means those steps do not exist for that proposal (see `proposal-lifecycle.md`).
 5. **Proposal — `spec.request`**: Human/agent input text; immutable after creation; max length enforced by validation.
 6. **Proposal — `spec.revisionFeedback`**: Only mutable spec field; when set/non-empty and `metadata.generation` advances beyond the analyzed condition’s `observedGeneration`, operators MUST trigger re-analysis per `proposal-lifecycle.md`.
@@ -14,8 +14,8 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 8. **Proposal — `spec.analysisOutput`**: Immutable after set. `mode` defaults to full analysis schema when empty/default. `mode=Minimal` REQUIRES `schema` to be set, forbids `spec.execution` and `spec.verification`, and restricts option shape accordingly.
 9. **Proposal — `spec.tools`**: Default `ToolsSpec` for all steps; immutable once set. Per-step `tools` on `spec.analysis` / `spec.execution` / `spec.verification` replaces the default for that step only when non-zero.
 10. **Proposal — `spec.analysis|execution|verification`**: Immutable `ProposalStep` records after set. Each non-zero step MAY name `agent` (DNS subdomain) defaulting to `default` when empty; MAY carry per-step `tools`.
-11. **Proposal — `status`**: Observed-only. `status.conditions` holds map-merge conditions (types include `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`). `status.steps` holds per-step sandbox info, retry counter (execution), and result refs.
-12. **Phase display types**: `ProposalPhase` and `StepPhase` string enums in the API describe display labels only; they are not stored fields on `Proposal` (phase is derived — see `proposal-lifecycle.md`). `StepPhase` values include `PendingApproval`, `Running`, `Completed`, `Failed`, `Skipped`.
+11. **Proposal — `status`**: Observed-only. `status.conditions` holds map-merge conditions (types include `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`, `EmergencyStopped`). `status.steps` holds per-step sandbox info, retry counter (execution), and result refs.
+12. **Phase display types**: `ProposalPhase` and `StepPhase` string enums in the API describe display labels only; they are not stored fields on `Proposal` (phase is derived — see `proposal-lifecycle.md`). `ProposalPhase` values include `EmergencyStopped` (terminal, set by kill switch — see `system-config.md`). `StepPhase` values include `PendingApproval`, `Running`, `Completed`, `Failed`, `Skipped`.
 13. **Sandbox step enum**: `SandboxStep` values `Analysis`, `Execution`, `Verification`, `Escalation` identify workflow steps for approvals, sandbox labels, and policies.
 14. **Agent — `spec.llmProvider`**: Required reference by name to a cluster `LLMProvider`.
 15. **Agent — `spec.model`**: Required provider-specific model identifier string; validation restricts charset.
@@ -45,6 +45,9 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 39. **Result CR ownership**: Result CRs MUST declare controller `ownerReferences` to their `Proposal` for GC; naming follows operator conventions (see `sandbox-execution.md` for when they are created).
 40. **Label conventions**: Operator uses labels for proposal name, step, component, and managed template markers (exact keys are implementation-specific; behavior: selectors for GC/list, not duplicated here).
 41. **CEL immutability** (Proposal): Enforced transitions include: `request`, `targetNamespaces`, `analysisOutput`, `tools`, `analysis`, `execution`, `verification` immutability after initial set as encoded in API markers.
+42. **AgenticOLSConfig — singleton name**: CRD validation requires `metadata.name` equals `cluster` (same pattern as `ApprovalPolicy`).
+43. **AgenticOLSConfig — `spec.suspended`**: Bool, optional, default `false`. When `true`, halts all agentic operations cluster-wide and terminates in-flight proposals with `EmergencyStopped` condition. See `system-config.md` for full semantics.
+44. **AgenticOLSConfig — absence**: When no `AgenticOLSConfig` CR exists, the system MUST behave as if `spec.suspended` is `false`.
 
 ## Configuration Surface (by path)
 
@@ -61,6 +64,10 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 ### ApprovalPolicy
 - `metadata.name` (must be `cluster`), `spec.stages[]`, `spec.maxAttempts`, `spec.maxConcurrentProposals`
+
+### AgenticOLSConfig
+- `metadata.name` (must be `cluster`), `spec.suspended`
+- See `system-config.md` for full behavioral rules
 
 ### ProposalApproval
 - `metadata.name`, `metadata.namespace`, `spec.stages[]`, `status.stages[]`
@@ -84,3 +91,4 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 - [PLANNED: OLS-2940] Autonomous workflow CRD migrations may rename or reshape fields; specs MUST be updated when `v1alpha1` changes.
 - [PLANNED: OLS-2894] Explicit **Agent** fields for per-step system prompts if moved from template/runtime-only assembly (today prompts are composed outside `Agent` CR — see `sandbox-execution.md`).
+- [PLANNED: OLS-3018] `AgenticOLSConfig` CRD with `spec.suspended` kill switch, `EmergencyStopped` condition type on Proposal, console and CLI visibility. See `system-config.md` for full specification.

@@ -27,6 +27,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand the approval system | `what/approval.md` |
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
 | Navigate the project layout | `how/project-structure.md` |
+| Understand the kill switch / system config | `what/system-config.md` |
 | Navigate the controller codebase | `how/reconciler.md` |
 | Understand the CLI plugin | `how/cli.md` |
 
@@ -54,4 +55,4 @@ AI agents. Content is optimized for precision and machine consumption.
 
 This operator watches `Proposal` CRs and drives them through a multi-phase workflow (analysis, execution, verification) by calling the sandbox runtime's `POST /v1/agent/run` endpoint. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
 
-Jira tracking: Feature OCPSTRAT-3095, Epic OLS-2894.
+Jira tracking: Feature OCPSTRAT-3095, Epic OLS-2894, Kill Switch OLS-3018.

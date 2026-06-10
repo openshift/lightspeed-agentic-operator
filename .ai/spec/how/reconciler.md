@@ -70,16 +70,17 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 ## Data flow: reconcile loop
 
-1. **Watch / enqueue:** controller-runtime delivers `ctrl.Request` for a `Proposal` namespaced name. `SetupWithManager` also `Owns` child CRs (`ProposalApproval`, `AnalysisResult`, `ExecutionResult`, `VerificationResult`, `EscalationResult`) and **Watches** cluster `ApprovalPolicy` to enqueue all non-terminal proposals.
+1. **Watch / enqueue:** controller-runtime delivers `ctrl.Request` for a `Proposal` namespaced name. `SetupWithManager` also `Owns` child CRs (`ProposalApproval`, `AnalysisResult`, `ExecutionResult`, `VerificationResult`, `EscalationResult`) and **Watches** cluster `ApprovalPolicy` and `AgenticOLSConfig` to enqueue all non-terminal proposals when either changes.
 2. **`Reconcile` load:** `Get` `Proposal`; ignore not-found.
 3. **Deletion path:** If `DeletionTimestamp` set and finalizer `agentic.openshift.io/execution-rbac-cleanup` present: `Agent.ReleaseSandboxes`, `cleanupExecutionRBAC`, remove finalizer, return.
-4. **Phase:** `agenticv1alpha1.DerivePhase(proposal.Status.Conditions)` — see **what/** for semantics.
-5. **Finalizer add:** If not terminal and finalizer missing, add RBAC cleanup finalizer (re-fetch proposal after patch).
-6. **Terminal / failed shortcuts:** Completed/Denied/Escalated → optional sandbox release via `Agent.ReleaseSandboxes`. `ProposalPhaseFailed` → `handleFailed` (RBAC cleanup if annotation set).
-7. **Shared prelude:** `getApprovalPolicy` (cluster singleton name `cluster`), `ensureProposalApproval`, `resolveProposal`. Resolution failure → set `ProposalConditionAnalyzed=False` with `reasonWorkflowFailed`, status patch, return (no requeue).
-8. **Phase switch:** Routes to `handleRevision` (if `needsRevision`) before analysis/execution/escalation arms; otherwise `handleAnalysis`, `handleExecution`, `handleVerification`, `handleEscalation`, or no-op.
-9. **Handlers** set step conditions (`Unknown` → agent call → `True`/`False`), create result CRs, append `Status.Steps.*.Results`, `statusPatch` proposal.
-10. **Agent path:** All agent steps go through `r.Agent.*` which (in production) is `SandboxAgentCaller`: `callWithSandbox` calls `SetStep` on the provider → `Claim` (provider-specific: `SandboxManager.Claim` handles template derivation, `BarePodManager.Claim` builds pod directly) → `patchSandboxInfo` on proposal → `WaitReady` → normalize URL → `outputSchemaForStep` → `ClientFactory(endpoint).Run` → JSON unmarshal into outputs.
+4. **[PLANNED: OLS-3018] Suspension check:** Fetch `AgenticOLSConfig` singleton. If `spec.suspended == true` and proposal is non-terminal: release sandboxes, clean up RBAC, set `EmergencyStopped=True` condition, status patch, return. If CR not found, treat as not suspended. See **what/system-config.md**.
+5. **Phase:** `agenticv1alpha1.DerivePhase(proposal.Status.Conditions)` — see **what/** for semantics. Now includes `EmergencyStopped` as highest-precedence terminal phase.
+6. **Finalizer add:** If not terminal and finalizer missing, add RBAC cleanup finalizer (re-fetch proposal after patch).
+7. **Terminal / failed shortcuts:** Completed/Denied/Escalated/EmergencyStopped → optional sandbox release via `Agent.ReleaseSandboxes`. `ProposalPhaseFailed` → `handleFailed` (RBAC cleanup if annotation set).
+8. **Shared prelude:** `getApprovalPolicy` (cluster singleton name `cluster`), `ensureProposalApproval`, `resolveProposal`. Resolution failure → set `ProposalConditionAnalyzed=False` with `reasonWorkflowFailed`, status patch, return (no requeue).
+9. **Phase switch:** Routes to `handleRevision` (if `needsRevision`) before analysis/execution/escalation arms; otherwise `handleAnalysis`, `handleExecution`, `handleVerification`, `handleEscalation`, or no-op.
+10. **Handlers** set step conditions (`Unknown` → agent call → `True`/`False`), create result CRs, append `Status.Steps.*.Results`, `statusPatch` proposal.
+11. **Agent path:** All agent steps go through `r.Agent.*` which (in production) is `SandboxAgentCaller`: `callWithSandbox` calls `SetStep` on the provider → `Claim` (provider-specific: `SandboxManager.Claim` handles template derivation, `BarePodManager.Claim` builds pod directly) → `patchSandboxInfo` on proposal → `WaitReady` → normalize URL → `outputSchemaForStep` → `ClientFactory(endpoint).Run` → JSON unmarshal into outputs.
 
 ---
 
@@ -201,6 +202,7 @@ ProposalReconciler.Reconcile
 - **`cmd/main.go` scheme:** Registers core + `agenticv1alpha1` + `consolev1` + `openshiftv1`. Watching or applying arbitrary CRDs from tests may need extended schemes (see `reconciler_test.go`).
 - **Max concurrent reconciles:** `SetupWithManager` reads cluster `ApprovalPolicy` via API reader for `MaxConcurrentProposals`, else `DefaultMaxConcurrentProposals` from API package.
 - **Policy watch:** Enqueues **all** non-terminal proposals on any `ApprovalPolicy` event — can be chatty.
+- **[PLANNED: OLS-3018] AgenticOLSConfig watch:** Same pattern as policy watch — enqueues all non-terminal proposals on any `AgenticOLSConfig` change. When `suspended` flips to `true`, all re-queued proposals hit the suspension guard and get terminated.
 - **Workflow resolution errors:** Patched onto `ProposalConditionAnalyzed` false — see API for exact condition ordering vs `DerivePhase`.
 - **`selectedOption` vs trim:** Verification uses latest analysis result’s **first** option (`Options[0]`) when resolving; execution path uses `trimNonSelectedOptions` which respects `ProposalApproval` execution option index when multiple options exist.
 - **`maxAttempts`:** Combines `ApprovalPolicy.Spec.MaxAttempts` ceiling with per-approval execution override (`helpers.go`); retry semantics interact with verification failure branch in `handleVerification` (see **what/proposal-lifecycle.md**).
