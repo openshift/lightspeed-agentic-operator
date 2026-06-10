@@ -21,6 +21,8 @@ import (
 )
 
 // AgenticOLSConfigSpec defines the desired state of AgenticOLSConfig.
+//
+// +kubebuilder:validation:MinProperties=1
 type AgenticOLSConfigSpec struct {
 	// suspended halts all agentic operations cluster-wide when set to true.
 	// All non-terminal proposals are immediately terminated with an
@@ -28,8 +30,8 @@ type AgenticOLSConfigSpec struct {
 	// system for new proposals only — EmergencyStopped proposals remain
 	// terminal and must be recreated explicitly.
 	// +optional
-	// +kubebuilder:default=false
-	Suspended bool `json:"suspended,omitempty"`
+	// +default=false
+	Suspended bool `json:"suspended,omitempty"` //nolint:kubeapilinter // kill switch is genuinely binary; bool is the right type
 }
 
 // +kubebuilder:object:root=true
