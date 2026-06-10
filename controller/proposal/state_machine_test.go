@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,10 +39,6 @@ func testPolicyWithMaxAttempts(analysis, execution, verification agenticv1alpha1
 	}
 }
 
-func manualObjects() []client.Object {
-	return []client.Object{testDefaultAgent(), testLLM("smart"), testManualPolicy()}
-}
-
 func newReconcilerWithPolicy(t *testing.T, proposal *agenticv1alpha1.Proposal, agent *testAgentCaller, policy *agenticv1alpha1.ApprovalPolicy, extraObjs ...client.Object) (*ProposalReconciler, client.WithWatch) {
 	t.Helper()
 	scheme := testScheme()
@@ -54,7 +49,7 @@ func newReconcilerWithPolicy(t *testing.T, proposal *agenticv1alpha1.Proposal, a
 	objs = append(objs, extraObjs...)
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 	// Initial reconcile creates ProposalApproval (auto-approved stages based on policy).
 	reconcileOnce(r, proposal.Name)
 	return r, fc
@@ -171,16 +166,6 @@ func denyStage(t *testing.T, fc client.WithWatch, name string, stageType agentic
 	approval.Spec.Stages = append(approval.Spec.Stages, stage)
 	if err := fc.Patch(context.Background(), &approval, client.MergeFrom(base)); err != nil {
 		t.Fatalf("deny %s: %v", stageType, err)
-	}
-}
-
-func mustRequeue(t *testing.T, result ctrl.Result, err error, context string) {
-	t.Helper()
-	if err != nil {
-		t.Fatalf("%s: unexpected error: %v", context, err)
-	}
-	if !result.Requeue {
-		t.Fatalf("%s: expected Requeue=true", context)
 	}
 }
 
@@ -507,7 +492,7 @@ func TestNoPolicy_DefaultsToManual(t *testing.T) {
 	objs := []client.Object{proposal, testDefaultAgent(), testLLM("smart")}
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Initial reconcile creates ProposalApproval; analysis should wait for approval
 	reconcileOnce(r, "fix-crash")

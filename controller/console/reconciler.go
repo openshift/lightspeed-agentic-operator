@@ -60,6 +60,11 @@ http {
 `
 )
 
+const (
+	ErrEnsure       = "ensure"
+	ErrGetConsoleCR = "get Console CR"
+)
+
 type AgenticConsoleConfig struct {
 	Image     string
 	Namespace string
@@ -87,7 +92,7 @@ func EnsureAgenticConsole(ctx context.Context, c client.Client, cfg AgenticConso
 		{"ConsoleActivation", ensureConsoleActivation},
 	} {
 		if err := fn.fn(ctx, c, cfg); err != nil {
-			return fmt.Errorf("ensure %s: %w", fn.name, err)
+			return fmt.Errorf("%s %s: %w", ErrEnsure, fn.name, err)
 		}
 		log.V(1).Info("Resource ready", "resource", fn.name)
 	}
@@ -233,7 +238,7 @@ func ensureConsoleActivation(ctx context.Context, c client.Client, _ AgenticCons
 			if errors.IsNotFound(err) {
 				return fmt.Errorf("Console CR %q not found — OpenShift Console operator may not be installed", consoleCRName)
 			}
-			return fmt.Errorf("get Console CR: %w", err)
+			return fmt.Errorf("%s: %w", ErrGetConsoleCR, err)
 		}
 		if slices.Contains(console.Spec.Plugins, pluginName) {
 			return nil

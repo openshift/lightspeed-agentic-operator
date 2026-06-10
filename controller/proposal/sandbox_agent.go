@@ -16,6 +16,17 @@ import (
 const (
 	defaultSandboxTimeout   = 5 * time.Minute
 	defaultBaseTemplateName = "lightspeed-agent"
+
+	ErrAnalysisAgentCall         = "analysis agent call"
+	ErrParseAnalysisResponse     = "parse analysis response"
+	ErrExecutionAgentCall        = "execution agent call"
+	ErrParseExecutionResponse    = "parse execution response"
+	ErrVerificationAgentCall     = "verification agent call"
+	ErrParseVerificationResponse = "parse verification response"
+	ErrEscalationAgentCall       = "escalation agent call"
+	ErrParseEscalationResponse   = "parse escalation response"
+	ErrClaimSandbox              = "claim sandbox"
+	ErrWaitForSandbox            = "wait for sandbox"
 )
 
 type analysisResponse struct {
@@ -68,12 +79,12 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alp
 	query := buildAnalysisQuery(requestText, proposal)
 	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(proposal), serviceAccount)
 	if err != nil {
-		return nil, fmt.Errorf("analysis agent call: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrAnalysisAgentCall, err)
 	}
 
 	var resp analysisResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("parse analysis response: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrParseAnalysisResponse, err)
 	}
 
 	return &AnalysisOutput{
@@ -91,12 +102,12 @@ func (s *SandboxAgentCaller) Execute(ctx context.Context, proposal *agenticv1alp
 	query := buildExecutionQuery(option)
 	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx, serviceAccount)
 	if err != nil {
-		return nil, fmt.Errorf("execution agent call: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrExecutionAgentCall, err)
 	}
 
 	var resp executionResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("parse execution response: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrParseExecutionResponse, err)
 	}
 
 	out := &ExecutionOutput{
@@ -119,12 +130,12 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alph
 	query := buildVerificationQuery(option, exec)
 	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx, serviceAccount)
 	if err != nil {
-		return nil, fmt.Errorf("verification agent call: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrVerificationAgentCall, err)
 	}
 
 	var resp verificationResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("parse verification response: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrParseVerificationResponse, err)
 	}
 
 	return &VerificationOutput{
@@ -138,7 +149,7 @@ func (s *SandboxAgentCaller) Escalate(ctx context.Context, proposal *agenticv1al
 	agentCtx := buildAgentContext(proposal)
 	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx, serviceAccount)
 	if err != nil {
-		return nil, fmt.Errorf("escalation agent call: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrEscalationAgentCall, err)
 	}
 
 	var resp struct {
@@ -147,7 +158,7 @@ func (s *SandboxAgentCaller) Escalate(ctx context.Context, proposal *agenticv1al
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("parse escalation response: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrParseEscalationResponse, err)
 	}
 
 	return &EscalationOutput{
@@ -170,7 +181,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 
 	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, "")
 	if err != nil {
-		return nil, fmt.Errorf("claim sandbox: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrClaimSandbox, err)
 	}
 
 	// Write sandbox info immediately so the console can stream logs
@@ -184,7 +195,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 
 	endpoint, err := s.Sandbox.WaitReady(ctx, claimName, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("wait for sandbox: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrWaitForSandbox, err)
 	}
 
 	agentURL := endpoint
@@ -217,7 +228,7 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, proposal *age
 			continue
 		}
 		if err := s.Sandbox.Release(ctx, info.ClaimName); err != nil {
-			log.Error(err, "failed to release sandbox", "claimName", info.ClaimName)
+			log.Error(err, "failed to release sandbox", LogKeyClaim, info.ClaimName)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -253,7 +264,7 @@ func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, proposal *age
 	}
 
 	if err := s.K8sClient.Status().Patch(ctx, &current, client.MergeFrom(base)); err != nil {
-		log.Error(err, "failed to patch sandbox info", "step", step, "claimName", claimName)
+		log.Error(err, "failed to patch sandbox info", LogKeyStep, step, LogKeyClaim, claimName)
 	}
 }
 

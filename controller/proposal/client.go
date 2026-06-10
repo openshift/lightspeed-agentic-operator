@@ -17,6 +17,11 @@ const (
 	maxErrorBodyLen = 500
 	maxResponseSize = 2 << 20 // 2 MiB
 	runPath         = "/v1/agent/run"
+
+	ErrMarshalRequest    = "failed to marshal request"
+	ErrCreateHTTPRequest = "failed to create HTTP request"
+	ErrPost              = "POST"
+	ErrReadResponseBody  = "failed to read response body"
 )
 
 type agentRunRequest struct {
@@ -96,24 +101,24 @@ func (c *AgentHTTPClient) Run(ctx context.Context, systemPrompt, query string, o
 
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrMarshalRequest, err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint+runPath, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrCreateHTTPRequest, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("POST %s failed: %w", runPath, err)
+		return nil, fmt.Errorf("%s %s failed: %w", ErrPost, runPath, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrReadResponseBody, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {

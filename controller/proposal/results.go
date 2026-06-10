@@ -12,6 +12,13 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+const (
+	ErrGetExistingResult          = "get existing"
+	ErrUpdateExistingResultStatus = "update existing"
+	ErrCreateResultCR             = "create"
+	ErrPatchResultStatus          = "patch"
+)
+
 func resultCRName(proposalName, step string, index int) string {
 	return truncateK8sName(fmt.Sprintf("%s-%s-%d", proposalName, step, index))
 }
@@ -304,7 +311,7 @@ func createIdempotent(ctx context.Context, c client.Client, obj client.Object, k
 		if apierrors.IsAlreadyExists(err) {
 			existing := obj.DeepCopyObject().(client.Object)
 			if getErr := c.Get(ctx, client.ObjectKeyFromObject(obj), existing); getErr != nil {
-				return fmt.Errorf("get existing %s %s: %w", kind, obj.GetName(), getErr)
+				return fmt.Errorf("%s %s %s: %w", ErrGetExistingResult, kind, obj.GetName(), getErr)
 			}
 			patched := existing.DeepCopyObject().(client.Object)
 			if sh, ok := patched.(statusHolder); ok {
@@ -314,18 +321,18 @@ func createIdempotent(ctx context.Context, c client.Client, obj client.Object, k
 			}
 			copyResultStatus(patched, withStatus)
 			if patchErr := c.Status().Patch(ctx, patched, client.MergeFrom(existing)); patchErr != nil {
-				return fmt.Errorf("update existing %s %s status: %w", kind, obj.GetName(), patchErr)
+				return fmt.Errorf("%s %s %s status: %w", ErrUpdateExistingResultStatus, kind, obj.GetName(), patchErr)
 			}
 			return nil
 		}
-		return fmt.Errorf("create %s %s: %w", kind, obj.GetName(), err)
+		return fmt.Errorf("%s %s %s: %w", ErrCreateResultCR, kind, obj.GetName(), err)
 	}
 
 	// After Create, obj has ResourceVersion but status is stripped.
 	// Use the saved copy (with full status) for the status patch.
 	withStatus.SetResourceVersion(obj.GetResourceVersion())
 	if err := c.Status().Patch(ctx, withStatus, client.MergeFrom(obj)); err != nil {
-		return fmt.Errorf("patch %s %s status: %w", kind, obj.GetName(), err)
+		return fmt.Errorf("%s %s %s status: %w", ErrPatchResultStatus, kind, obj.GetName(), err)
 	}
 	return nil
 }

@@ -15,6 +15,12 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+const (
+	ErrBuildPodSpec = "build pod spec"
+	ErrCreatePod    = "create pod for"
+	ErrDeletePod    = "delete pod"
+)
+
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
 
 // BarePodManager is a SandboxProvider that creates bare Pods using PodSpecBuilder
@@ -58,7 +64,7 @@ func (m *BarePodManager) Claim(ctx context.Context, proposalName, step, _ string
 
 	podSpec, err := m.Builder.Build(m.agent, m.llm, m.tools, step, m.serviceAccount)
 	if err != nil {
-		return "", fmt.Errorf("build pod spec: %w", err)
+		return "", fmt.Errorf("%s: %w", ErrBuildPodSpec, err)
 	}
 
 	pod := &corev1.Pod{
@@ -77,10 +83,10 @@ func (m *BarePodManager) Claim(ctx context.Context, proposalName, step, _ string
 		if apierrors.IsAlreadyExists(err) {
 			return podName, nil
 		}
-		return "", fmt.Errorf("create pod for %s: %w", step, err)
+		return "", fmt.Errorf("%s %s: %w", ErrCreatePod, step, err)
 	}
 
-	log.Info("Created bare pod", "name", podName, "step", step)
+	log.Info("Created bare pod", LogKeyName, podName, LogKeyStep, step)
 	return podName, nil
 }
 
@@ -106,7 +112,7 @@ func (m *BarePodManager) WaitReady(ctx context.Context, podName string, timeout 
 
 			var pod corev1.Pod
 			if err := m.Client.Get(ctx, key, &pod); err != nil {
-				log.V(1).Info("Waiting for pod", "name", podName)
+				log.V(1).Info("Waiting for pod", LogKeyName, podName)
 				continue
 			}
 
@@ -115,7 +121,7 @@ func (m *BarePodManager) WaitReady(ctx context.Context, podName string, timeout 
 					if pod.Status.PodIP == "" {
 						continue
 					}
-					log.Info("Pod ready", "name", podName, "podIP", pod.Status.PodIP)
+					log.Info("Pod ready", LogKeyName, podName, "podIP", pod.Status.PodIP)
 					return pod.Status.PodIP, nil
 				}
 			}
@@ -139,9 +145,9 @@ func (m *BarePodManager) Release(ctx context.Context, podName string) error {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("delete pod %q: %w", podName, err)
+		return fmt.Errorf("%s %q: %w", ErrDeletePod, podName, err)
 	}
 
-	log.Info("Released bare pod", "name", podName)
+	log.Info("Released bare pod", LogKeyName, podName)
 	return nil
 }

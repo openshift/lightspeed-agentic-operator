@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -279,7 +278,7 @@ func TestReconcile_StatusInitialization(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	_, err := reconcileOnce(r, "fresh")
 	if err != nil {
@@ -305,7 +304,7 @@ func TestReconcile_Denied_Terminal(t *testing.T) {
 	}
 
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(proposal).WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	result, err := reconcileOnce(r, "fix-crash")
 	if err != nil {
@@ -336,7 +335,6 @@ func TestReconcileSuspension(t *testing.T) {
 			Build()
 		r := &ProposalReconciler{
 			Client:    fc,
-			Log:       logr.Discard(),
 			Agent:     newTestAgentCaller(),
 			Namespace: "default",
 		}
@@ -365,7 +363,6 @@ func TestReconcileSuspension(t *testing.T) {
 			Build()
 		r := &ProposalReconciler{
 			Client:    fc,
-			Log:       logr.Discard(),
 			Agent:     newTestAgentCaller(),
 			Namespace: "default",
 		}
@@ -390,7 +387,6 @@ func TestReconcileSuspension(t *testing.T) {
 			Build()
 		r := &ProposalReconciler{
 			Client:    fc,
-			Log:       logr.Discard(),
 			Agent:     newTestAgentCaller(),
 			Namespace: "default",
 		}
@@ -420,7 +416,6 @@ func TestReconcileSuspension(t *testing.T) {
 			Build()
 		r := &ProposalReconciler{
 			Client:    fc,
-			Log:       logr.Discard(),
 			Agent:     newTestAgentCaller(),
 			Namespace: "default",
 		}
@@ -472,11 +467,10 @@ func TestHandleSuspension(t *testing.T) {
 				Build()
 			r := &ProposalReconciler{
 				Client:    fc,
-				Log:       logr.Discard(),
 				Agent:     newTestAgentCaller(),
 				Namespace: "default",
 			}
-			_, err := r.handleSuspension(context.Background(), logr.Discard(), tt.proposal)
+			_, err := r.handleSuspension(context.Background(), tt.proposal)
 			if err != nil {
 				t.Fatalf("handleSuspension() error: %v", err)
 			}
