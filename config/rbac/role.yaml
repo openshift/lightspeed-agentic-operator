@@ -7,6 +7,15 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
+  - services
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
   - pods
   verbs:
   - create
@@ -85,6 +94,22 @@ rules:
   - list
   - watch
 - apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
+  - console.openshift.io
+  resources:
+  - consoleplugins
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
   - extensions.agents.x-k8s.io
   resources:
   - sandboxclaims
@@ -105,6 +130,13 @@ rules:
   - list
   - update
   - watch
+- apiGroups:
+  - operator.openshift.io
+  resources:
+  - consoles
+  verbs:
+  - get
+  - update
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
