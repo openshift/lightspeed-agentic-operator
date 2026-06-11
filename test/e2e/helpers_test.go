@@ -188,7 +188,7 @@ func createProposal(t *testing.T, c client.Client, name string) *agenticv1alpha1
 		Spec: agenticv1alpha1.ProposalSpec{
 			Request:          "Pod crash-looping in staging namespace",
 			TargetNamespaces: []string{"staging"},
-			Tools:            agenticv1alpha1.ToolsSpec{Skills: []agenticv1alpha1.SkillsSource{{Image: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent"}}},
+			Tools:            agenticv1alpha1.ToolsSpec{Skills: []agenticv1alpha1.SkillsSource{{Image: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent", Paths: []string{"/skills"}}}},
 			Analysis:         agenticv1alpha1.ProposalStep{Agent: "e2e-agent"},
 			Execution:        agenticv1alpha1.ProposalStep{Agent: "e2e-agent"},
 			Verification:     agenticv1alpha1.ProposalStep{Agent: "e2e-agent"},
