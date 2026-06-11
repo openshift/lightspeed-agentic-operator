@@ -54,6 +54,8 @@ step "3/5" "Deleting operator deployment..."
 oc delete deployment lightspeed-agentic-operator -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
 oc delete sa lightspeed-agentic-operator -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
 oc delete clusterrolebinding lightspeed-agentic-operator --ignore-not-found 2>/dev/null || true
+oc delete clusterrolebinding lightspeed-agent-cluster-reader --ignore-not-found 2>/dev/null || true
+oc delete clusterrolebinding lightspeed-agent-monitoring-view --ignore-not-found 2>/dev/null || true
 info "Operator removed"
 
 # --- Step 4: Delete CRDs -----------------------------------------------------

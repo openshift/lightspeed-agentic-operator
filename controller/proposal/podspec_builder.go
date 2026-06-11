@@ -116,11 +116,9 @@ func (b *PodSpecBuilder) Build(
 		container.Env = append(container.Env, secEnv...)
 	}
 
-	mountToken := step == "execution" || step == "verification"
-
 	return &corev1.PodSpec{
 		ServiceAccountName:           serviceAccount,
-		AutomountServiceAccountToken: ptr.To(mountToken),
+		AutomountServiceAccountToken: ptr.To(true),
 		Containers:                   []corev1.Container{container},
 		Volumes:                      volumes,
 	}, nil

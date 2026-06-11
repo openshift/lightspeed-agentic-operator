@@ -182,8 +182,8 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 	if podSpec.ServiceAccountName != defaultSandboxSA {
 		t.Errorf("serviceAccountName = %q, want %q", podSpec.ServiceAccountName, defaultSandboxSA)
 	}
-	if podSpec.AutomountServiceAccountToken == nil || *podSpec.AutomountServiceAccountToken {
-		t.Error("automountServiceAccountToken should be false")
+	if podSpec.AutomountServiceAccountToken == nil || !*podSpec.AutomountServiceAccountToken {
+		t.Error("automountServiceAccountToken should be true")
 	}
 }
 

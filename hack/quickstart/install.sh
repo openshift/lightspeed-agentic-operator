@@ -166,6 +166,39 @@ $([ -n "${IMAGE_PULL_POLICY}" ] && echo '        - "--image-pull-policy='"${IMAG
 EOF
 info "Operator deployment applied"
 
+# --- Step 3b: Agent read RBAC -------------------------------------------------
+
+info "Binding read permissions to lightspeed-agent SA..."
+
+oc apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lightspeed-agent-cluster-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-reader
+subjects:
+- kind: ServiceAccount
+  name: lightspeed-agent
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lightspeed-agent-monitoring-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+- kind: ServiceAccount
+  name: lightspeed-agent
+  namespace: ${NAMESPACE}
+EOF
+info "Agent read RBAC applied (cluster-reader + cluster-monitoring-view)"
+
 # --- Step 4: ApprovalPolicy ---------------------------------------------------
 
 step "4/5" "Creating ApprovalPolicy..."
