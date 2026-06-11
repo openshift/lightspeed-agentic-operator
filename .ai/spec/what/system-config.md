@@ -24,25 +24,33 @@ Jira tracking: OLS-3018.
 10. **Resumption**: Setting `spec.suspended` back to `false` re-enables the system for **new** proposals only. Existing `EmergencyStopped` proposals remain terminal.
 11. **New proposal blocking**: While `suspended=true`, proposals that are already in `Pending` phase (no conditions set yet) MUST also be terminated with `EmergencyStopped` — suspension applies to all non-terminal proposals, not just those with active sandboxes.
 
+### Admission-Time Blocking (OLS-3166)
+
+12. **Proposal creation rejection**: While `suspended=true`, the API server MUST reject `Proposal` CREATE requests at admission time with a clear error message. Enforced via a `ValidatingAdmissionPolicy` with `paramRef` to `AgenticOLSConfig`.
+13. **Absence allows creation**: If no `AgenticOLSConfig` CR exists, admission MUST allow proposal creation. Consistent with rule 3 (absence = `suspended=false`). Enforced via `parameterNotFoundAction: Allow` on the policy binding.
+14. **CREATE-only scope**: The admission policy MUST only intercept `CREATE` operations on `proposals`. Updates to existing proposals MUST NOT be blocked — the reconciler manages lifecycle transitions.
+15. **Static manifests**: The `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` are static manifests installed alongside CRDs. They require no runtime management by the operator.
+16. **Defense-in-depth**: The reconciler guard (rules 17–20) MUST remain as fallback enforcement. The admission policy is primary; the reconciler guard catches race conditions during suspension toggle, pre-existing proposals, and VAP removal/misconfiguration.
+
 ### Reconciler Integration
 
-12. **Watch and re-queue**: The proposal reconciler MUST watch `AgenticOLSConfig` and re-queue all non-terminal proposals when the CR changes (same pattern as the existing `ApprovalPolicy` watch).
-13. **Reconcile guard**: The suspension check MUST execute after the deletion handler but before finalizer addition, terminal phase routing, approval resolution, and phase dispatch.
-14. **Order of operations on termination**: For each non-terminal proposal when suspended: (a) release sandbox claims via `Agent.ReleaseSandboxes` (best-effort, log errors), (b) clean up execution RBAC via `cleanupExecutionRBAC` (best-effort, log errors), (c) set `EmergencyStopped` condition, (d) status patch. Errors in (a) or (b) MUST NOT prevent (c) and (d).
-15. **Config fetch failure**: If the `AgenticOLSConfig` CR cannot be fetched and the error is not `NotFound`, the reconciler MUST return the error for retry. `NotFound` MUST be treated as `suspended=false`.
+17. **Watch and re-queue**: The proposal reconciler MUST watch `AgenticOLSConfig` and re-queue all non-terminal proposals when the CR changes (same pattern as the existing `ApprovalPolicy` watch).
+18. **Reconcile guard**: The suspension check MUST execute after the deletion handler but before finalizer addition, terminal phase routing, approval resolution, and phase dispatch.
+19. **Order of operations on termination**: For each non-terminal proposal when suspended: (a) release sandbox claims via `Agent.ReleaseSandboxes` (best-effort, log errors), (b) clean up execution RBAC via `cleanupExecutionRBAC` (best-effort, log errors), (c) set `EmergencyStopped` condition, (d) status patch. Errors in (a) or (b) MUST NOT prevent (c) and (d).
+20. **Config fetch failure**: If the `AgenticOLSConfig` CR cannot be fetched and the error is not `NotFound`, the reconciler MUST return the error for retry. `NotFound` MUST be treated as `suspended=false`.
 
 ### Console Visibility
 
-16. **Suspension banner**: The console plugin MUST display a cluster-wide danger alert banner when `AgenticOLSConfig.spec.suspended == true`. The banner MUST be visible on all agentic views without requiring page reload when the state changes.
-17. **EmergencyStopped phase display**: The console MUST render `EmergencyStopped` proposals with a distinct visual treatment (status badge, color) that is clearly different from `Failed`.
-18. **DerivePhase sync**: The console's `derivePhaseFromConditions` function in `src/models/proposal.ts` MUST be updated to handle the `EmergencyStopped` condition with the same precedence as the Go implementation (per the existing `// SYNC:` contract).
+21. **Suspension banner**: The console plugin MUST display a cluster-wide danger alert banner when `AgenticOLSConfig.spec.suspended == true`. The banner MUST be visible on all agentic views without requiring page reload when the state changes.
+22. **EmergencyStopped phase display**: The console MUST render `EmergencyStopped` proposals with a distinct visual treatment (status badge, color) that is clearly different from `Failed`.
+23. **DerivePhase sync**: The console's `derivePhaseFromConditions` function in `src/models/proposal.ts` MUST be updated to handle the `EmergencyStopped` condition with the same precedence as the Go implementation (per the existing `// SYNC:` contract).
 
 ### CLI Visibility
 
-19. **Status command**: `oc agentic status` (or equivalent top-level command) MUST report the system suspension state: `"Agentic System: SUSPENDED"` when suspended, `"Agentic System: Active"` when not.
-20. **Suspend/resume commands**: The CLI MUST provide `oc agentic suspend` and `oc agentic resume` commands that patch `AgenticOLSConfig.spec.suspended` to `true` and `false` respectively.
-21. **Suspend confirmation**: `oc agentic suspend` MUST prompt for confirmation before proceeding: `"All agentic operations will be halted and in-flight proposals will be terminated. Continue? [y/N]"`.
-22. **Proposal list**: `oc agentic proposals` (or equivalent list command) MUST display `EmergencyStopped` as a distinct phase value in the phase/status column.
+24. **Status command**: `oc agentic status` (or equivalent top-level command) MUST report the system suspension state: `"Agentic System: SUSPENDED"` when suspended, `"Agentic System: Active"` when not.
+25. **Suspend/resume commands**: The CLI MUST provide `oc agentic suspend` and `oc agentic resume` commands that patch `AgenticOLSConfig.spec.suspended` to `true` and `false` respectively.
+26. **Suspend confirmation**: `oc agentic suspend` MUST prompt for confirmation before proceeding: `"All agentic operations will be halted and in-flight proposals will be terminated. Continue? [y/N]"`.
+27. **Proposal list**: `oc agentic proposals` (or equivalent list command) MUST display `EmergencyStopped` as a distinct phase value in the phase/status column.
 
 ## Configuration Surface
 
@@ -63,7 +71,8 @@ Jira tracking: OLS-3018.
 - `EmergencyStopped` MUST be added to `isTerminal()` in the reconciler and any console/CLI equivalents.
 - The `AgenticOLSConfig` controller RBAC MUST include `get`, `list`, `watch` on `agenticolsconfigs` for the proposal reconciler's service account.
 - The `oc agentic suspend` / `resume` commands require the user to have `patch` permissions on `AgenticOLSConfig`.
-- Termination of in-flight proposals via Approach A (reconciler re-queue) is bounded by `maxConcurrentReconciles`; at default concurrency (5) with 100 proposals, termination completes in approximately 4-8 seconds. This is acceptable for v1. If real-world scale requires faster termination, a batch-sweep approach (Approach B) can be added to the `AgenticOLSConfig` reconciler without changing any other component.
+- Termination of in-flight proposals via the reconciler guard (re-queue) is bounded by `maxConcurrentReconciles`; at default concurrency (5) with 100 proposals, termination completes in approximately 4-8 seconds. This is acceptable for v1. If real-world scale requires faster termination, a batch-sweep approach can be added to the `AgenticOLSConfig` reconciler without changing any other component.
+- The `ValidatingAdmissionPolicy` requires OpenShift 4.17+ (Kubernetes 1.30+). This is confirmed as the minimum supported version.
 
 ## Planned Changes
 
