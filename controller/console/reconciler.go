@@ -1,11 +1,11 @@
 package console
 
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;create;update
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;create;update
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;create;update
-// +kubebuilder:rbac:groups=console.openshift.io,resources=consoleplugins,verbs=get;create;update
-// +kubebuilder:rbac:groups=operator.openshift.io,resources=consoles,verbs=get;update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=console.openshift.io,resources=consoleplugins,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=operator.openshift.io,resources=consoles,verbs=get;list;watch;update
 
 import (
 	"context"

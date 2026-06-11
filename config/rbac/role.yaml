@@ -12,7 +12,9 @@ rules:
   verbs:
   - create
   - get
+  - list
   - update
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -100,7 +102,9 @@ rules:
   verbs:
   - create
   - get
+  - list
   - update
+  - watch
 - apiGroups:
   - console.openshift.io
   resources:
@@ -108,7 +112,9 @@ rules:
   verbs:
   - create
   - get
+  - list
   - update
+  - watch
 - apiGroups:
   - extensions.agents.x-k8s.io
   resources:
@@ -136,7 +142,9 @@ rules:
   - consoles
   verbs:
   - get
+  - list
   - update
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
