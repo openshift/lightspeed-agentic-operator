@@ -22,6 +22,7 @@ OPERATOR_IMAGE="${OPERATOR_IMAGE:-quay.io/redhat-user-workloads/crt-nshift-light
 SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-agentic-sandbox:main}"
 CONSOLE_IMAGE="${CONSOLE_IMAGE:-quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-agentic-console:main}"
 SANDBOX_MODE="${SANDBOX_MODE:-bare-pod}"
+IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-}"
 
 GITHUB_RAW="https://raw.githubusercontent.com/openshift/lightspeed-agentic-operator/main"
 
@@ -118,11 +119,13 @@ spec:
       containers:
       - name: manager
         image: ${OPERATOR_IMAGE}
+$([ -n "${IMAGE_PULL_POLICY}" ] && echo "        imagePullPolicy: ${IMAGE_PULL_POLICY}")
         args:
         - "--namespace=${NAMESPACE}"
         - "--sandbox-mode=${SANDBOX_MODE}"
         - "--agentic-sandbox-image=${SANDBOX_IMAGE}"
         - "--agentic-console-image=${CONSOLE_IMAGE}"
+$([ -n "${IMAGE_PULL_POLICY}" ] && echo '        - "--image-pull-policy='"${IMAGE_PULL_POLICY}"'"')
         ports:
         - name: metrics
           containerPort: 8080

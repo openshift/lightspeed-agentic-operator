@@ -35,11 +35,19 @@ Skip the confirmation prompt with `QUICKSTART_FORCE=1`.
 | `OPERATOR_IMAGE` | Konflux `:main` | Operator container image |
 | `SANDBOX_IMAGE` | Konflux `:main` | Agent sandbox container image |
 | `SANDBOX_MODE` | `bare-pod` | Sandbox mode (`bare-pod` or `sandbox-claim`) |
+| `IMAGE_PULL_POLICY` | *(empty — Kubernetes default)* | Image pull policy for operator and sandbox pods (`Always`, `IfNotPresent`, `Never`) |
 
 Example with overrides:
 
 ```bash
 NAMESPACE=my-ns SANDBOX_MODE=sandbox-claim \
+  bash <(curl -sL https://raw.githubusercontent.com/openshift/lightspeed-agentic-operator/main/hack/quickstart/install.sh)
+```
+
+For dev environments with floating tags like `:main`, force fresh pulls:
+
+```bash
+IMAGE_PULL_POLICY=Always \
   bash <(curl -sL https://raw.githubusercontent.com/openshift/lightspeed-agentic-operator/main/hack/quickstart/install.sh)
 ```
 
