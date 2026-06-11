@@ -15,7 +15,7 @@ fail()  { echo "  ✗ $*" >&2; exit 1; }
 
 if [ "${QUICKSTART_FORCE:-}" != "1" ]; then
   echo "This will delete ALL Agentic OLS resources in namespace ${NAMESPACE}"
-  echo "and remove the operator CRDs cluster-wide."
+  echo ", remove the operator CRDs cluster-wide and the namespace itself."
   echo ""
   read -rp "Continue? [y/N] " confirm
   case "${confirm}" in
