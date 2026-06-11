@@ -74,6 +74,15 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
+	// --- Suspension guard ---
+	suspended, err := isSuspended(ctx, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if suspended {
+		return r.handleSuspension(ctx, log, &proposal)
+	}
+
 	phase := agenticv1alpha1.DerivePhase(proposal.Status.Conditions)
 
 	// --- Finalizer ---
@@ -94,7 +103,8 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	switch phase {
 	case agenticv1alpha1.ProposalPhaseCompleted,
 		agenticv1alpha1.ProposalPhaseDenied,
-		agenticv1alpha1.ProposalPhaseEscalated:
+		agenticv1alpha1.ProposalPhaseEscalated,
+		agenticv1alpha1.ProposalPhaseEmergencyStopped:
 		if hasSandboxClaims(&proposal) {
 			if err := r.Agent.ReleaseSandboxes(ctx, &proposal); err != nil {
 				log.Error(err, "sandbox cleanup failed at terminal phase")
@@ -184,6 +194,24 @@ func (r *ProposalReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&agenticv1alpha1.VerificationResult{}).
 		Owns(&agenticv1alpha1.EscalationResult{}).
 		Watches(&agenticv1alpha1.ApprovalPolicy{}, handler.EnqueueRequestsFromMapFunc(
+			func(ctx context.Context, obj client.Object) []ctrl.Request {
+				var proposals agenticv1alpha1.ProposalList
+				if err := r.List(ctx, &proposals); err != nil {
+					return nil
+				}
+				var reqs []ctrl.Request
+				for _, p := range proposals.Items {
+					phase := agenticv1alpha1.DerivePhase(p.Status.Conditions)
+					if !isTerminal(phase) {
+						reqs = append(reqs, ctrl.Request{
+							NamespacedName: client.ObjectKeyFromObject(&p),
+						})
+					}
+				}
+				return reqs
+			},
+		)).
+		Watches(&agenticv1alpha1.AgenticOLSConfig{}, handler.EnqueueRequestsFromMapFunc(
 			func(ctx context.Context, obj client.Object) []ctrl.Request {
 				var proposals agenticv1alpha1.ProposalList
 				if err := r.List(ctx, &proposals); err != nil {
