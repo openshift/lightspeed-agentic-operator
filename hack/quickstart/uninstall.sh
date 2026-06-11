@@ -19,8 +19,11 @@ if [ "${QUICKSTART_FORCE:-}" != "1" ]; then
   echo ""
   if [ -t 0 ]; then
     read -rp "Continue? [y/N] " confirm
-  elif [ -e /dev/tty ]; then
-    read -rp "Continue? [y/N] " confirm </dev/tty
+  elif [ -r /dev/tty ]; then
+    if ! read -rp "Continue? [y/N] " confirm </dev/tty; then
+      echo "Non-interactive shell detected. Set QUICKSTART_FORCE=1 to proceed."
+      exit 1
+    fi
   else
     echo "Non-interactive shell detected. Set QUICKSTART_FORCE=1 to proceed."
     exit 1
