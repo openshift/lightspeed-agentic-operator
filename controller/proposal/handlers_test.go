@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/go-logr/logr"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,7 +95,7 @@ func TestReconcile_WorkflowVariants(t *testing.T) {
 				WithObjects(objs...).
 				WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-			r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+			r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 			if _, err := reconcileOnce(r, "fix-crash"); err != nil {
 				t.Fatalf("analysis reconcile: %v", err)
@@ -127,7 +126,7 @@ func TestReconcile_HappyPath_FullLifecycle(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Reconcile 1: Pending → Proposed (analysis complete)
 	result, err := reconcileOnce(r, "fix-crash")
@@ -215,7 +214,7 @@ func TestReconcile_AnalysisSystemFailure_Terminal(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Reconcile 1: Pending → Failed (system failure)
 	result, err := reconcileOnce(r, "fix-crash")
@@ -254,7 +253,7 @@ func TestReconcile_VerificationObjectiveFailure_RetriesExecution(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis → approve → execution → verifying
 	reconcileOnce(r, "fix-crash")
@@ -320,7 +319,7 @@ func TestReconcile_SystemFailure_Execution_Terminal(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis → approve
 	reconcileOnce(r, "fix-crash")
@@ -357,7 +356,7 @@ func TestReconcile_SystemFailure_Verification_Terminal(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis → approve → execution → verifying
 	reconcileOnce(r, "fix-crash")
@@ -396,7 +395,7 @@ func TestReconcile_ObjectiveFailure_ThenRevise(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Full lifecycle to verification failure, retries exhausted → Analyzing
 	reconcileOnce(r, "fix-crash")
@@ -455,7 +454,7 @@ func TestReconcile_RevisionHappyPath(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Reconcile 1: Pending → Executing (analysis complete)
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -504,7 +503,7 @@ func TestReconcile_RevisionMultipleRounds(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Initial analysis
 	reconcileOnce(r, "fix-crash")
@@ -542,7 +541,7 @@ func TestReconcile_RevisionNoOp_WhenObserved(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Initial analysis
 	reconcileOnce(r, "fix-crash")
@@ -591,7 +590,7 @@ func TestReconcile_RevisionReanalysis(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Analysis → Executing
 	reconcileOnce(r, "fix-crash")
@@ -612,7 +611,7 @@ func TestReconcile_RevisionAnalysisFailure(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Initial analysis succeeds
 	reconcileOnce(r, "fix-crash")
@@ -655,7 +654,7 @@ func TestReconcile_RevisionWithFeedback(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Initial analysis
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -721,7 +720,7 @@ func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Pending → Proposed (analysis complete)
 	reconcileOnce(r, "fix-crash")
@@ -798,7 +797,7 @@ func TestReconcile_ExecutionRBACCleanedOnFailure(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis → approve
 	reconcileOnce(r, "fix-crash")
@@ -878,7 +877,7 @@ func TestFullLifecycle_WithSandboxAgent(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: sandboxAgent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: sandboxAgent, Namespace: "default"}
 
 	// Reconcile 1: Pending → Executing (via sandbox analysis)
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -980,7 +979,7 @@ func TestReconcile_ExecutingPhase_DoesNotReExecute(t *testing.T) {
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
 	agent := newTestAgentCaller()
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Run analysis
 	reconcileOnce(r, "fix-crash")
@@ -1027,7 +1026,7 @@ func TestReconcile_ExecutionOutcomeFailed_FailsStep(t *testing.T) {
 		Success:      false,
 		ActionsTaken: []agenticv1alpha1.ExecutionAction{{Type: "patch", Description: "Failed patch", Outcome: agenticv1alpha1.ActionOutcomeFailed}},
 	}
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis → Executing
 	reconcileOnce(r, "fix-crash")
@@ -1056,7 +1055,7 @@ func TestReconcile_VerificationOutcomeFailed_RetriesExecution(t *testing.T) {
 		Checks:  []agenticv1alpha1.VerifyCheck{{Name: "health", Result: agenticv1alpha1.CheckResultFailed}},
 		Summary: "Health check failed",
 	}
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis → Executing → Approve → Execute → Verify (fail) → retry
 	reconcileOnce(r, "fix-crash")
@@ -1090,7 +1089,7 @@ func TestReconcile_ExecutionSelectsOption(t *testing.T) {
 			{Title: "Option C", Diagnosis: agenticv1alpha1.DiagnosisResult{Summary: "diag-C"}},
 		},
 	}
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis
 	reconcileOnce(r, "fix-crash")
@@ -1133,7 +1132,7 @@ func TestReconcile_ExecutionSingleOption(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: newTestAgentCaller(), Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
 
 	// Analysis (default stub returns 1 option)
 	reconcileOnce(r, "fix-crash")
@@ -1172,7 +1171,7 @@ func TestReconcile_TrimOptionsOnExecution(t *testing.T) {
 		Checks:  []agenticv1alpha1.VerifyCheck{{Name: "health", Result: agenticv1alpha1.CheckResultFailed}},
 		Summary: "Health check failed",
 	}
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	// Analysis
 	reconcileOnce(r, "fix-crash")
@@ -1265,7 +1264,7 @@ func TestResultCR_FailureConditions(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(proposal, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &ProposalReconciler{Client: fc, Log: logr.Discard(), Agent: agent, Namespace: "default"}
+	r := &ProposalReconciler{Client: fc, Agent: agent, Namespace: "default"}
 
 	reconcileOnce(r, "fix-crash")
 	p, _ := getProposal(r, "fix-crash")

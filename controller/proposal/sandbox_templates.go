@@ -21,6 +21,53 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+const (
+	ErrMarshalTemplateHash      = "marshal template hash input"
+	ErrReadBaseTemplate         = "failed to read base sandbox template"
+	ErrComputeTemplateHash      = "compute template hash"
+	ErrCheckTemplate            = "failed to check template"
+	ErrPatchSkillsImage         = "patch skills image"
+	ErrPatchSkillsPaths         = "patch skills paths"
+	ErrPatchLLMCredentials      = "patch LLM credentials"
+	ErrPatchMCPServers          = "patch MCP servers"
+	ErrPatchRequiredSecrets     = "patch required secrets"
+	ErrPatchProbes              = "patch probes"
+	ErrSetServiceAccountName    = "set serviceAccountName on template"
+	ErrCreateTemplate           = "failed to create template"
+	ErrSetProvider              = "set LIGHTSPEED_PROVIDER"
+	ErrSetModel                 = "set LIGHTSPEED_MODEL"
+	ErrAddCredentialsEnvFrom    = "add credentials envFrom"
+	ErrAddCredentialsVolume     = "add credentials volume"
+	ErrMountCredentials         = "mount credentials"
+	ErrSetProviderURL           = "set LIGHTSPEED_PROVIDER_URL"
+	ErrSetModelProvider         = "set LIGHTSPEED_MODEL_PROVIDER"
+	ErrSetProviderProject       = "set LIGHTSPEED_PROVIDER_PROJECT"
+	ErrSetProviderRegion        = "set LIGHTSPEED_PROVIDER_REGION"
+	ErrSetProviderAPIVersion    = "set LIGHTSPEED_PROVIDER_API_VERSION"
+	ErrAddSecretVolume          = "add secret volume"
+	ErrAddVolumeMountForSecret  = "add volume mount"
+	ErrAddEnvVarFromSecret      = "add env var from secret"
+	ErrPatchProbesFn            = "patchProbes"
+	ErrListOldTemplates         = "failed to list old templates"
+	ErrExtractSAName            = "extract serviceAccountName from template"
+	ErrReadContainers           = "read containers"
+	ErrAddEnvFromSecretFn       = "addEnvFromSecret"
+	ErrSetEnvFrom               = "set envFrom"
+	ErrUpsertEnv                = "upsertEnv"
+	ErrSetEnv                   = "set env"
+	ErrAddVolumeMountFn         = "addVolumeMount"
+	ErrSetVolumeMountsUpdate    = "set volumeMounts (update)"
+	ErrSetVolumeMountsAppend    = "set volumeMounts (append)"
+	ErrReadVolumes              = "read volumes"
+	ErrSetSkillsImageRef        = "set skills image reference"
+	ErrSetSkillsImagePullPolicy = "set skills image pullPolicy"
+	ErrPatchSkillsPathsFn       = "patchSkillsPaths"
+	ErrSetVolumeMounts          = "set volumeMounts"
+	ErrAddMCPHeaderVolume       = "add MCP header secret volume"
+	ErrAddMCPHeaderMount        = "add MCP header volume mount"
+	ErrMarshalMCPConfig         = "marshal MCP server config"
+)
+
 var sandboxTemplateGVK = schema.GroupVersionKind{
 	Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxTemplate",
 }
@@ -72,7 +119,7 @@ func computeTemplateHash(
 	}
 	data, err := json.Marshal(input)
 	if err != nil {
-		return "", fmt.Errorf("marshal template hash input: %w", err)
+		return "", fmt.Errorf("%s: %w", ErrMarshalTemplateHash, err)
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])[:10], nil
@@ -109,7 +156,7 @@ func EnsureAgentTemplate(
 	base := &unstructured.Unstructured{}
 	base.SetGroupVersionKind(sandboxTemplateGVK)
 	if err := c.Get(ctx, types.NamespacedName{Name: baseTemplateName, Namespace: namespace}, base); err != nil {
-		return "", fmt.Errorf("failed to read base sandbox template %q: %w", baseTemplateName, err)
+		return "", fmt.Errorf("%s %q: %w", ErrReadBaseTemplate, baseTemplateName, err)
 	}
 
 	var skills []agenticv1alpha1.SkillsSource
@@ -123,7 +170,7 @@ func EnsureAgentTemplate(
 
 	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, step, base.GetResourceVersion(), serviceAccount)
 	if err != nil {
-		return "", fmt.Errorf("compute template hash: %w", err)
+		return "", fmt.Errorf("%s: %w", ErrComputeTemplateHash, err)
 	}
 	name := agentTemplateName(step, agent.Name, hash)
 
@@ -134,7 +181,7 @@ func EnsureAgentTemplate(
 		return name, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return "", fmt.Errorf("failed to check template %q: %w", name, err)
+		return "", fmt.Errorf("%s %q: %w", ErrCheckTemplate, name, err)
 	}
 
 	derived := base.DeepCopy()
@@ -162,38 +209,38 @@ func EnsureAgentTemplate(
 
 	if len(skills) > 0 && skills[0].Image != "" {
 		if err := patchSkillsImage(derived, skills[0].Image); err != nil {
-			return "", fmt.Errorf("patch skills image: %w", err)
+			return "", fmt.Errorf("%s: %w", ErrPatchSkillsImage, err)
 		}
 		if len(skills[0].Paths) > 0 {
 			if err := patchSkillsPaths(derived, skills[0].Paths); err != nil {
-				return "", fmt.Errorf("patch skills paths: %w", err)
+				return "", fmt.Errorf("%s: %w", ErrPatchSkillsPaths, err)
 			}
 		}
 	}
 
 	if err := patchLLMCredentials(derived, llm, agent.Spec.Model); err != nil {
-		return "", fmt.Errorf("patch LLM credentials: %w", err)
+		return "", fmt.Errorf("%s: %w", ErrPatchLLMCredentials, err)
 	}
 
 	if len(mcpServers) > 0 {
 		if err := patchMCPServers(derived, mcpServers); err != nil {
-			return "", fmt.Errorf("patch MCP servers: %w", err)
+			return "", fmt.Errorf("%s: %w", ErrPatchMCPServers, err)
 		}
 	}
 
 	if len(requiredSecrets) > 0 {
 		if err := patchRequiredSecrets(derived, requiredSecrets); err != nil {
-			return "", fmt.Errorf("patch required secrets: %w", err)
+			return "", fmt.Errorf("%s: %w", ErrPatchRequiredSecrets, err)
 		}
 	}
 
 	if err := patchProbes(derived); err != nil {
-		return "", fmt.Errorf("patch probes: %w", err)
+		return "", fmt.Errorf("%s: %w", ErrPatchProbes, err)
 	}
 
 	if serviceAccount != "" {
 		if err := unstructured.SetNestedField(derived.Object, serviceAccount, "spec", "podTemplate", "spec", "serviceAccountName"); err != nil {
-			return "", fmt.Errorf("set serviceAccountName on template: %w", err)
+			return "", fmt.Errorf("%s: %w", ErrSetServiceAccountName, err)
 		}
 	}
 
@@ -201,13 +248,13 @@ func EnsureAgentTemplate(
 		if apierrors.IsAlreadyExists(err) {
 			return name, nil
 		}
-		return "", fmt.Errorf("failed to create template %q: %w", name, err)
+		return "", fmt.Errorf("%s %q: %w", ErrCreateTemplate, name, err)
 	}
 
 	log.Info("Created agent SandboxTemplate",
-		"name", name,
+		LogKeyName, name,
 		"base", baseTemplateName,
-		"step", step,
+		LogKeyStep, step,
 		"agent", agent.Name,
 		"llmProvider", llm.Name,
 		"hash", hash)
@@ -274,48 +321,48 @@ func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.L
 	secretName := credentialsSecretName(llm)
 
 	if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER", providerTypeString(llm.Spec.Type)); err != nil {
-		return fmt.Errorf("set LIGHTSPEED_PROVIDER: %w", err)
+		return fmt.Errorf("%s: %w", ErrSetProvider, err)
 	}
 	if err := setEnvVar(tmpl, "LIGHTSPEED_MODEL", model); err != nil {
-		return fmt.Errorf("set LIGHTSPEED_MODEL: %w", err)
+		return fmt.Errorf("%s: %w", ErrSetModel, err)
 	}
 	if err := addEnvFromSecret(tmpl, secretName); err != nil {
-		return fmt.Errorf("add credentials envFrom: %w", err)
+		return fmt.Errorf("%s: %w", ErrAddCredentialsEnvFrom, err)
 	}
 	if err := addSecretVolume(tmpl, llmCredsVolumeName, secretName); err != nil {
-		return fmt.Errorf("add credentials volume: %w", err)
+		return fmt.Errorf("%s: %w", ErrAddCredentialsVolume, err)
 	}
 	if err := addVolumeMount(tmpl, llmCredsVolumeName, llmCredsMountPath, true); err != nil {
-		return fmt.Errorf("mount credentials: %w", err)
+		return fmt.Errorf("%s: %w", ErrMountCredentials, err)
 	}
 
 	switch llm.Spec.Type {
 	case agenticv1alpha1.LLMProviderAnthropic:
 		if u := providerURL(llm); u != "" {
 			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
-				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+				return fmt.Errorf("%s: %w", ErrSetProviderURL, err)
 			}
 		}
 	case agenticv1alpha1.LLMProviderGoogleCloudVertex:
 		cfg := llm.Spec.GoogleCloudVertex
 		if err := setEnvVar(tmpl, "LIGHTSPEED_MODEL_PROVIDER", strings.ToLower(string(cfg.ModelProvider))); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_MODEL_PROVIDER: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetModelProvider, err)
 		}
 		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_PROJECT", cfg.ProjectID); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_PROVIDER_PROJECT: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetProviderProject, err)
 		}
 		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_REGION", cfg.Region); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_PROVIDER_REGION: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetProviderRegion, err)
 		}
 		if u := providerURL(llm); u != "" {
 			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
-				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+				return fmt.Errorf("%s: %w", ErrSetProviderURL, err)
 			}
 		}
 	case agenticv1alpha1.LLMProviderOpenAI:
 		if u := providerURL(llm); u != "" {
 			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
-				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+				return fmt.Errorf("%s: %w", ErrSetProviderURL, err)
 			}
 		}
 	case agenticv1alpha1.LLMProviderAzureOpenAI:
@@ -325,21 +372,21 @@ func patchLLMCredentials(tmpl *unstructured.Unstructured, llm *agenticv1alpha1.L
 			providerURLValue = u
 		}
 		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", providerURLValue); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetProviderURL, err)
 		}
 		if cfg.APIVersion != "" {
 			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_API_VERSION", cfg.APIVersion); err != nil {
-				return fmt.Errorf("set LIGHTSPEED_PROVIDER_API_VERSION: %w", err)
+				return fmt.Errorf("%s: %w", ErrSetProviderAPIVersion, err)
 			}
 		}
 	case agenticv1alpha1.LLMProviderAWSBedrock:
 		cfg := llm.Spec.AWSBedrock
 		if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_REGION", cfg.Region); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_PROVIDER_REGION: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetProviderRegion, err)
 		}
 		if u := providerURL(llm); u != "" {
 			if err := setEnvVar(tmpl, "LIGHTSPEED_PROVIDER_URL", u); err != nil {
-				return fmt.Errorf("set LIGHTSPEED_PROVIDER_URL: %w", err)
+				return fmt.Errorf("%s: %w", ErrSetProviderURL, err)
 			}
 		}
 	}
@@ -352,14 +399,14 @@ func patchRequiredSecrets(tmpl *unstructured.Unstructured, secrets []agenticv1al
 		case agenticv1alpha1.SecretMountFilePath:
 			volName := "req-" + s.Name
 			if err := addSecretVolume(tmpl, volName, s.Name); err != nil {
-				return fmt.Errorf("add secret volume %q: %w", s.Name, err)
+				return fmt.Errorf("%s %q: %w", ErrAddSecretVolume, s.Name, err)
 			}
 			if err := addVolumeMount(tmpl, volName, s.MountAs.FilePath.Path, true); err != nil {
-				return fmt.Errorf("add volume mount %q: %w", s.MountAs.FilePath.Path, err)
+				return fmt.Errorf("%s %q: %w", ErrAddVolumeMountForSecret, s.MountAs.FilePath.Path, err)
 			}
 		case agenticv1alpha1.SecretMountEnvVar:
 			if err := addEnvVarFromSecret(tmpl, s.MountAs.EnvVar.Name, s.Name, "token"); err != nil {
-				return fmt.Errorf("add env var from secret %q: %w", s.Name, err)
+				return fmt.Errorf("%s %q: %w", ErrAddEnvVarFromSecret, s.Name, err)
 			}
 		}
 	}
@@ -369,7 +416,7 @@ func patchRequiredSecrets(tmpl *unstructured.Unstructured, secrets []agenticv1al
 func patchProbes(tmpl *unstructured.Unstructured) error {
 	container, containers, err := firstContainer(tmpl)
 	if err != nil {
-		return fmt.Errorf("patchProbes: %w", err)
+		return fmt.Errorf("%s: %w", ErrPatchProbesFn, err)
 	}
 
 	container["readinessProbe"] = map[string]any{
@@ -415,7 +462,7 @@ func gcOldTemplates(
 		Namespace:     namespace,
 		LabelSelector: sel,
 	}); err != nil {
-		return fmt.Errorf("failed to list old templates: %w", err)
+		return fmt.Errorf("%s: %w", ErrListOldTemplates, err)
 	}
 
 	log := logf.FromContext(ctx).WithName("sandbox-templates")
@@ -425,10 +472,10 @@ func gcOldTemplates(
 			continue
 		}
 		if err := c.Delete(ctx, item); err != nil && !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete old template", "name", item.GetName())
+			log.Error(err, "failed to delete old template", LogKeyName, item.GetName())
 			continue
 		}
-		log.Info("Garbage-collected old SandboxTemplate", "name", item.GetName())
+		log.Info("Garbage-collected old SandboxTemplate", LogKeyName, item.GetName())
 	}
 	return nil
 }
@@ -442,7 +489,7 @@ func SandboxTemplateServiceAccount(ctx context.Context, c client.Client, templat
 	}
 	sa, found, err := unstructured.NestedString(tmpl.Object, "spec", "podTemplate", "spec", "serviceAccountName")
 	if err != nil {
-		return "", fmt.Errorf("extract serviceAccountName from template %q: %w", templateName, err)
+		return "", fmt.Errorf("%s %q: %w", ErrExtractSAName, templateName, err)
 	}
 	if !found || sa == "" {
 		return "", fmt.Errorf("template %q has no serviceAccountName", templateName)
@@ -454,7 +501,7 @@ func SandboxTemplateServiceAccount(ctx context.Context, c client.Client, templat
 func firstContainer(tmpl *unstructured.Unstructured) (map[string]any, []any, error) {
 	containers, found, err := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "containers")
 	if err != nil {
-		return nil, nil, fmt.Errorf("read containers: %w", err)
+		return nil, nil, fmt.Errorf("%s: %w", ErrReadContainers, err)
 	}
 	if !found || len(containers) == 0 {
 		return nil, nil, fmt.Errorf("template has no containers")
@@ -494,7 +541,7 @@ func addEnvVarFromSecret(tmpl *unstructured.Unstructured, envName, secretName, k
 func addEnvFromSecret(tmpl *unstructured.Unstructured, secretName string) error {
 	container, containers, err := firstContainer(tmpl)
 	if err != nil {
-		return fmt.Errorf("addEnvFromSecret: %w", err)
+		return fmt.Errorf("%s: %w", ErrAddEnvFromSecretFn, err)
 	}
 	envFromList, _, _ := unstructured.NestedSlice(container, "envFrom")
 	for _, e := range envFromList {
@@ -513,7 +560,7 @@ func addEnvFromSecret(tmpl *unstructured.Unstructured, secretName string) error 
 		},
 	})
 	if err := unstructured.SetNestedSlice(container, envFromList, "envFrom"); err != nil {
-		return fmt.Errorf("set envFrom: %w", err)
+		return fmt.Errorf("%s: %w", ErrSetEnvFrom, err)
 	}
 	return writeContainers(tmpl, container, containers)
 }
@@ -521,7 +568,7 @@ func addEnvFromSecret(tmpl *unstructured.Unstructured, secretName string) error 
 func upsertEnv(tmpl *unstructured.Unstructured, name string, entry map[string]any) error {
 	container, containers, err := firstContainer(tmpl)
 	if err != nil {
-		return fmt.Errorf("upsertEnv(%s): %w", name, err)
+		return fmt.Errorf("%s(%s): %w", ErrUpsertEnv, name, err)
 	}
 	envList, _, _ := unstructured.NestedSlice(container, "env")
 
@@ -542,7 +589,7 @@ func upsertEnv(tmpl *unstructured.Unstructured, name string, entry map[string]an
 	}
 
 	if err := unstructured.SetNestedSlice(container, envList, "env"); err != nil {
-		return fmt.Errorf("set env: %w", err)
+		return fmt.Errorf("%s: %w", ErrSetEnv, err)
 	}
 	return writeContainers(tmpl, container, containers)
 }
@@ -572,7 +619,7 @@ func addSecretVolume(tmpl *unstructured.Unstructured, volumeName, secretName str
 func addVolumeMount(tmpl *unstructured.Unstructured, name, mountPath string, readOnly bool) error {
 	container, containers, err := firstContainer(tmpl)
 	if err != nil {
-		return fmt.Errorf("addVolumeMount: %w", err)
+		return fmt.Errorf("%s: %w", ErrAddVolumeMountFn, err)
 	}
 	mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
 	mount := map[string]any{
@@ -588,14 +635,14 @@ func addVolumeMount(tmpl *unstructured.Unstructured, name, mountPath string, rea
 		if existing["mountPath"] == mountPath {
 			mounts[i] = mount
 			if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
-				return fmt.Errorf("set volumeMounts (update): %w", err)
+				return fmt.Errorf("%s: %w", ErrSetVolumeMountsUpdate, err)
 			}
 			return writeContainers(tmpl, container, containers)
 		}
 	}
 	mounts = append(mounts, mount)
 	if err := unstructured.SetNestedSlice(container, mounts, "volumeMounts"); err != nil {
-		return fmt.Errorf("set volumeMounts (append): %w", err)
+		return fmt.Errorf("%s: %w", ErrSetVolumeMountsAppend, err)
 	}
 	return writeContainers(tmpl, container, containers)
 }
@@ -603,7 +650,7 @@ func addVolumeMount(tmpl *unstructured.Unstructured, name, mountPath string, rea
 func patchSkillsImage(tmpl *unstructured.Unstructured, image string) error {
 	volumes, found, err := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "volumes")
 	if err != nil {
-		return fmt.Errorf("read volumes: %w", err)
+		return fmt.Errorf("%s: %w", ErrReadVolumes, err)
 	}
 	if !found {
 		return fmt.Errorf("template has no volumes")
@@ -618,10 +665,10 @@ func patchSkillsImage(tmpl *unstructured.Unstructured, image string) error {
 			continue
 		}
 		if err := unstructured.SetNestedField(vol, image, "image", "reference"); err != nil {
-			return fmt.Errorf("set skills image reference: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetSkillsImageRef, err)
 		}
 		if err := unstructured.SetNestedField(vol, "Always", "image", "pullPolicy"); err != nil {
-			return fmt.Errorf("set skills image pullPolicy: %w", err)
+			return fmt.Errorf("%s: %w", ErrSetSkillsImagePullPolicy, err)
 		}
 		volumes[i] = vol
 	}
@@ -634,7 +681,7 @@ func patchSkillsPaths(tmpl *unstructured.Unstructured, paths []string) error {
 	}
 	container, containers, err := firstContainer(tmpl)
 	if err != nil {
-		return fmt.Errorf("patchSkillsPaths: %w", err)
+		return fmt.Errorf("%s: %w", ErrPatchSkillsPathsFn, err)
 	}
 	mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
 
@@ -668,7 +715,7 @@ func patchSkillsPaths(tmpl *unstructured.Unstructured, paths []string) error {
 	}
 
 	if err := unstructured.SetNestedSlice(container, filtered, "volumeMounts"); err != nil {
-		return fmt.Errorf("set volumeMounts: %w", err)
+		return fmt.Errorf("%s: %w", ErrSetVolumeMounts, err)
 	}
 	return writeContainers(tmpl, container, containers)
 }
@@ -704,10 +751,10 @@ func patchMCPServers(tmpl *unstructured.Unstructured, servers []agenticv1alpha1.
 			if h.ValueFrom.Type == agenticv1alpha1.MCPHeaderSourceTypeSecret {
 				he.SecretName = h.ValueFrom.Secret.Name
 				if err := addSecretVolume(tmpl, "mcp-header-"+h.ValueFrom.Secret.Name, h.ValueFrom.Secret.Name); err != nil {
-					return fmt.Errorf("add MCP header secret volume: %w", err)
+					return fmt.Errorf("%s: %w", ErrAddMCPHeaderVolume, err)
 				}
 				if err := addVolumeMount(tmpl, "mcp-header-"+h.ValueFrom.Secret.Name, mcpHeadersMountRoot+"/"+h.ValueFrom.Secret.Name, true); err != nil {
-					return fmt.Errorf("add MCP header volume mount: %w", err)
+					return fmt.Errorf("%s: %w", ErrAddMCPHeaderMount, err)
 				}
 			}
 			entry.Headers = append(entry.Headers, he)
@@ -717,7 +764,7 @@ func patchMCPServers(tmpl *unstructured.Unstructured, servers []agenticv1alpha1.
 
 	data, err := json.Marshal(entries)
 	if err != nil {
-		return fmt.Errorf("marshal MCP server config: %w", err)
+		return fmt.Errorf("%s: %w", ErrMarshalMCPConfig, err)
 	}
 	return setEnvVar(tmpl, mcpServersEnvVar, string(data))
 }

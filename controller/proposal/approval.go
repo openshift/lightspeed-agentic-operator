@@ -13,6 +13,12 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+const (
+	ErrGetApprovalPolicy      = "get ApprovalPolicy"
+	ErrGetProposalApproval    = "get ProposalApproval"
+	ErrCreateProposalApproval = "create ProposalApproval"
+)
+
 func getApprovalPolicy(ctx context.Context, c client.Client) (*agenticv1alpha1.ApprovalPolicy, error) {
 	policy := &agenticv1alpha1.ApprovalPolicy{}
 	err := c.Get(ctx, types.NamespacedName{Name: "cluster"}, policy)
@@ -20,7 +26,7 @@ func getApprovalPolicy(ctx context.Context, c client.Client) (*agenticv1alpha1.A
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get ApprovalPolicy: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrGetApprovalPolicy, err)
 	}
 	return policy, nil
 }
@@ -45,7 +51,7 @@ func ensureProposalApproval(
 		return existing, nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return nil, fmt.Errorf("get ProposalApproval: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrGetProposalApproval, err)
 	}
 
 	var autoStages []agenticv1alpha1.ApprovalStage
@@ -99,7 +105,7 @@ func ensureProposalApproval(
 		if apierrors.IsAlreadyExists(err) {
 			return getProposalApproval(ctx, c, proposal)
 		}
-		return nil, fmt.Errorf("create ProposalApproval: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrCreateProposalApproval, err)
 	}
 	return approval, nil
 }
@@ -156,7 +162,7 @@ func getStageOverrideAgent(approval *agenticv1alpha1.ProposalApproval, stage age
 	return ""
 }
 
-func getStageOption(approval *agenticv1alpha1.ProposalApproval, policy *agenticv1alpha1.ApprovalPolicy) *int32 {
+func getStageOption(approval *agenticv1alpha1.ProposalApproval, _ *agenticv1alpha1.ApprovalPolicy) *int32 {
 	if approval != nil {
 		for _, s := range approval.Spec.Stages {
 			if s.Type == agenticv1alpha1.ApprovalStageExecution && s.Execution.Option != nil {

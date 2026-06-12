@@ -13,6 +13,11 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+const (
+	ErrBuildMCPServers        = "build MCP servers"
+	ErrMarshalMCPServerConfig = "marshal MCP server config"
+)
+
 type PodSpecBuilder struct {
 	Image           string
 	ImagePullPolicy string
@@ -102,7 +107,7 @@ func (b *PodSpecBuilder) Build(
 	if tools != nil && len(tools.MCPServers) > 0 {
 		mcpVols, mcpMounts, mcpEnv, err := b.buildMCPServers(tools.MCPServers)
 		if err != nil {
-			return nil, fmt.Errorf("build MCP servers: %w", err)
+			return nil, fmt.Errorf("%s: %w", ErrBuildMCPServers, err)
 		}
 		volumes = append(volumes, mcpVols...)
 		container.VolumeMounts = append(container.VolumeMounts, mcpMounts...)
@@ -235,7 +240,7 @@ func (b *PodSpecBuilder) buildMCPServers(servers []agenticv1alpha1.MCPServerConf
 
 	data, err := json.Marshal(entries)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("marshal MCP server config: %w", err)
+		return nil, nil, nil, fmt.Errorf("%s: %w", ErrMarshalMCPServerConfig, err)
 	}
 
 	envs := []corev1.EnvVar{{Name: mcpServersEnvVar, Value: string(data)}}

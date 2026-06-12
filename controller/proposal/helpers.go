@@ -9,12 +9,12 @@ import (
 	"reflect"
 	"text/template"
 
-	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -33,6 +33,9 @@ func renderTemplate(name string, data any) string {
 }
 
 const (
+	ErrGetAnalysisResult         = "get AnalysisResult"
+	ErrTrimAnalysisResultOptions = "trim AnalysisResult options"
+
 	rbacCleanupFinalizer = "agentic.openshift.io/execution-rbac-cleanup"
 
 	reasonInProgress        = "InProgress"
@@ -41,8 +44,6 @@ const (
 	reasonSkipped           = "Skipped"
 	reasonPassed            = "Passed"
 	reasonWorkflowFailed    = "WorkflowResolutionFailed"
-	reasonPendingApproval   = "PendingApproval"
-	reasonAutoApproved      = "AutoApproved"
 	reasonUserDenied        = "UserDenied"
 	defaultSandboxSA        = "lightspeed-agent"
 	reasonRevising          = "Revising"
@@ -50,6 +51,14 @@ const (
 	reasonRetryingExecution = agenticv1alpha1.ReasonRetryingExecution
 	reasonRetriesExhausted  = agenticv1alpha1.ReasonRetriesExhausted
 	reasonSystemSuspended   = "SystemSuspended"
+
+	LogKeyName      = "name"
+	LogKeyStep      = "step"
+	LogKeyPhase     = "phase"
+	LogKeyClaim     = "claimName"
+	LogKeyTemplate  = "template"
+	LogKeySummary   = "summary"
+	LogKeyCondition = "condition"
 )
 
 func isSuspended(ctx context.Context, c client.Client) (bool, error) {
@@ -66,8 +75,9 @@ func isSuspended(ctx context.Context, c client.Client) (bool, error) {
 // failStep marks a step as failed and creates a failure result CR.
 // The caller must have set the step condition to ConditionUnknown before
 // calling failStep so that conditionTime can extract the start time.
-func (r *ProposalReconciler) failStep(ctx context.Context, log logr.Logger, proposal *agenticv1alpha1.Proposal, conditionType string, err error) (ctrl.Result, error) {
-	log.Error(err, "step failed", "condition", conditionType)
+func (r *ProposalReconciler) failStep(ctx context.Context, proposal *agenticv1alpha1.Proposal, conditionType string, err error) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	log.Error(err, "step failed", LogKeyCondition, conditionType)
 	base := proposal.DeepCopy()
 	completedAt := metav1.Now()
 	startTime := conditionTime(proposal.Status.Conditions, conditionType)
@@ -150,7 +160,7 @@ func (r *ProposalReconciler) getLatestAnalysisResult(ctx context.Context, propos
 	latestRef := analysis.Results[len(analysis.Results)-1]
 	var result agenticv1alpha1.AnalysisResult
 	if err := r.Get(ctx, types.NamespacedName{Name: latestRef.Name, Namespace: proposal.Namespace}, &result); err != nil {
-		return nil, fmt.Errorf("get AnalysisResult %s: %w", latestRef.Name, err)
+		return nil, fmt.Errorf("%s %s: %w", ErrGetAnalysisResult, latestRef.Name, err)
 	}
 	return &result, nil
 }
@@ -191,7 +201,7 @@ func (r *ProposalReconciler) trimNonSelectedOptions(ctx context.Context, proposa
 	base := result.DeepCopy()
 	result.Status.Options = []agenticv1alpha1.RemediationOption{selected}
 	if err := r.Status().Patch(ctx, result, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("trim AnalysisResult options: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrTrimAnalysisResultOptions, err)
 	}
 	return &result.Status.Options[0], nil
 }

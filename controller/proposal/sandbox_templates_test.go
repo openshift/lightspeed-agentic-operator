@@ -1,6 +1,7 @@
 package proposal
 
 import (
+	"context"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -516,14 +517,14 @@ func TestSetEnvVar_FailsOnNoContainers(t *testing.T) {
 }
 
 func TestEnsureAgentTemplate_NilAgent(t *testing.T) {
-	_, err := EnsureAgentTemplate(nil, nil, "base", "ns", "analysis", nil, testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex), nil, "lightspeed-agent")
+	_, err := EnsureAgentTemplate(context.Background(), nil, "base", "ns", "analysis", nil, testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex), nil, "lightspeed-agent")
 	if err == nil {
 		t.Error("expected error for nil agent")
 	}
 }
 
 func TestEnsureAgentTemplate_NilLLM(t *testing.T) {
-	_, err := EnsureAgentTemplate(nil, nil, "base", "ns", "analysis", testDefaultAgent(), nil, nil, "lightspeed-agent")
+	_, err := EnsureAgentTemplate(context.Background(), nil, "base", "ns", "analysis", testDefaultAgent(), nil, nil, "lightspeed-agent")
 	if err == nil {
 		t.Error("expected error for nil LLM")
 	}

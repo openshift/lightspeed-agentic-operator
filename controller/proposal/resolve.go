@@ -10,6 +10,14 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+const (
+	ErrGetAgent                = "get Agent"
+	ErrGetLLMProvider          = "get LLMProvider"
+	ErrResolveAnalysisStep     = "resolve analysis step"
+	ErrResolveExecutionStep    = "resolve execution step"
+	ErrResolveVerificationStep = "resolve verification step"
+)
+
 type resolvedStep struct {
 	Agent *agenticv1alpha1.Agent
 	LLM   *agenticv1alpha1.LLMProvider
@@ -34,7 +42,7 @@ func resolveProposal(ctx context.Context, c client.Client, proposal *agenticv1al
 		if !ok {
 			agent = &agenticv1alpha1.Agent{}
 			if err := c.Get(ctx, types.NamespacedName{Name: agentName}, agent); err != nil {
-				return nil, nil, fmt.Errorf("get Agent %q: %w", agentName, err)
+				return nil, nil, fmt.Errorf("%s %q: %w", ErrGetAgent, agentName, err)
 			}
 			agentCache[agentName] = agent
 		}
@@ -44,7 +52,7 @@ func resolveProposal(ctx context.Context, c client.Client, proposal *agenticv1al
 		if !ok {
 			llm = &agenticv1alpha1.LLMProvider{}
 			if err := c.Get(ctx, types.NamespacedName{Name: llmName}, llm); err != nil {
-				return nil, nil, fmt.Errorf("get LLMProvider %q (referenced by Agent %q): %w", llmName, agentName, err)
+				return nil, nil, fmt.Errorf("%s %q (referenced by Agent %q): %w", ErrGetLLMProvider, llmName, agentName, err)
 			}
 			llmCache[llmName] = llm
 		}
@@ -70,14 +78,14 @@ func resolveProposal(ctx context.Context, c client.Client, proposal *agenticv1al
 
 	agent, llm, err := resolveAgent(effectiveAgent(agenticv1alpha1.SandboxStepAnalysis, proposal.Spec.Analysis))
 	if err != nil {
-		return nil, fmt.Errorf("resolve analysis step: %w", err)
+		return nil, fmt.Errorf("%s: %w", ErrResolveAnalysisStep, err)
 	}
 	resolved.Analysis = resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(proposal.Spec.Analysis)}
 
 	if !proposal.Spec.Execution.IsZero() {
 		agent, llm, err := resolveAgent(effectiveAgent(agenticv1alpha1.SandboxStepExecution, proposal.Spec.Execution))
 		if err != nil {
-			return nil, fmt.Errorf("resolve execution step: %w", err)
+			return nil, fmt.Errorf("%s: %w", ErrResolveExecutionStep, err)
 		}
 		resolved.Execution = &resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(proposal.Spec.Execution)}
 	}
@@ -85,7 +93,7 @@ func resolveProposal(ctx context.Context, c client.Client, proposal *agenticv1al
 	if !proposal.Spec.Verification.IsZero() {
 		agent, llm, err := resolveAgent(effectiveAgent(agenticv1alpha1.SandboxStepVerification, proposal.Spec.Verification))
 		if err != nil {
-			return nil, fmt.Errorf("resolve verification step: %w", err)
+			return nil, fmt.Errorf("%s: %w", ErrResolveVerificationStep, err)
 		}
 		resolved.Verification = &resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(proposal.Spec.Verification)}
 	}

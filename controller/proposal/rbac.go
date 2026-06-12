@@ -16,6 +16,17 @@ import (
 
 const (
 	rbacNamespacesAnnotation = "agentic.openshift.io/rbac-namespaces"
+
+	ErrCreateExecutionSA        = "create execution SA"
+	ErrCreateRole               = "create Role in"
+	ErrCreateRoleBinding        = "create RoleBinding in"
+	ErrCreateClusterRole        = "create ClusterRole"
+	ErrCreateClusterRoleBinding = "create ClusterRoleBinding"
+	ErrDeleteRoleBinding        = "delete RoleBinding in"
+	ErrDeleteRole               = "delete Role in"
+	ErrDeleteClusterRoleBinding = "delete ClusterRoleBinding"
+	ErrDeleteClusterRole        = "delete ClusterRole"
+	ErrDeleteExecutionSA        = "delete execution SA"
 )
 
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;delete;get
@@ -41,7 +52,7 @@ func ensureExecutionSA(ctx context.Context, c client.Client, proposal *agenticv1
 		},
 	}
 	if err := c.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-		return "", fmt.Errorf("create execution SA %s: %w", saName, err)
+		return "", fmt.Errorf("%s %s: %w", ErrCreateExecutionSA, saName, err)
 	}
 	return saName, nil
 }
@@ -98,7 +109,7 @@ func ensureExecutionRBAC(
 				Rules:      nsRules,
 			}
 			if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("create Role in %s: %w", ns, err)
+				return fmt.Errorf("%s %s: %w", ErrCreateRole, ns, err)
 			}
 			binding := &rbacv1.RoleBinding{
 				ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns, Labels: labels},
@@ -106,7 +117,7 @@ func ensureExecutionRBAC(
 				Subjects:   subjects,
 			}
 			if err := c.Create(ctx, binding); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("create RoleBinding in %s: %w", ns, err)
+				return fmt.Errorf("%s %s: %w", ErrCreateRoleBinding, ns, err)
 			}
 		}
 	}
@@ -119,7 +130,7 @@ func ensureExecutionRBAC(
 			Rules:      clusterRules,
 		}
 		if err := c.Create(ctx, cr); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create ClusterRole %s: %w", crName, err)
+			return fmt.Errorf("%s %s: %w", ErrCreateClusterRole, crName, err)
 		}
 		crb := &rbacv1.ClusterRoleBinding{
 			ObjectMeta: metav1.ObjectMeta{Name: crName, Labels: labels},
@@ -127,7 +138,7 @@ func ensureExecutionRBAC(
 			Subjects:   subjects,
 		}
 		if err := c.Create(ctx, crb); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create ClusterRoleBinding %s: %w", crName, err)
+			return fmt.Errorf("%s %s: %w", ErrCreateClusterRoleBinding, crName, err)
 		}
 	}
 
@@ -143,23 +154,23 @@ func cleanupExecutionRBAC(ctx context.Context, c client.Client, proposal *agenti
 
 	for _, ns := range nsList {
 		if err := deleteIfExists(ctx, c, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns}}); err != nil {
-			return fmt.Errorf("delete RoleBinding in %s: %w", ns, err)
+			return fmt.Errorf("%s %s: %w", ErrDeleteRoleBinding, ns, err)
 		}
 		if err := deleteIfExists(ctx, c, &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns}}); err != nil {
-			return fmt.Errorf("delete Role in %s: %w", ns, err)
+			return fmt.Errorf("%s %s: %w", ErrDeleteRole, ns, err)
 		}
 	}
 
 	crName := clusterRoleName(proposal.Name)
 	if err := deleteIfExists(ctx, c, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: crName}}); err != nil {
-		return fmt.Errorf("delete ClusterRoleBinding %s: %w", crName, err)
+		return fmt.Errorf("%s %s: %w", ErrDeleteClusterRoleBinding, crName, err)
 	}
 	if err := deleteIfExists(ctx, c, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: crName}}); err != nil {
-		return fmt.Errorf("delete ClusterRole %s: %w", crName, err)
+		return fmt.Errorf("%s %s: %w", ErrDeleteClusterRole, crName, err)
 	}
 
 	if err := deleteExecutionSA(ctx, c, proposal, operatorNS); err != nil {
-		return fmt.Errorf("delete execution SA: %w", err)
+		return fmt.Errorf("%s: %w", ErrDeleteExecutionSA, err)
 	}
 	return nil
 }

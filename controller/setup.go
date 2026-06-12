@@ -43,7 +43,6 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 
 	if err := (&proposal.ProposalReconciler{
 		Client:    mgr.GetClient(),
-		Log:       ctrl.Log.WithName("controllers").WithName("Proposal"),
 		Agent:     agentCaller,
 		Namespace: opts.Namespace,
 	}).SetupWithManager(mgr); err != nil {

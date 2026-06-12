@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -12,8 +11,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+)
+
+const (
+	ErrRemoveFinalizer = "remove finalizer"
+	ErrAddFinalizer    = "add finalizer"
 )
 
 // ProposalReconciler reconciles Proposal objects.
@@ -21,7 +26,6 @@ import (
 // Agent must be set before calling SetupWithManager.
 type ProposalReconciler struct {
 	client.Client
-	Log       logr.Logger
 	Agent     AgentCaller
 	Namespace string
 }
@@ -44,7 +48,7 @@ type ProposalReconciler struct {
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticolsconfigs,verbs=get;list;watch
 
 func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("proposal", req.NamespacedName)
+	log := logf.FromContext(ctx)
 
 	var proposal agenticv1alpha1.Proposal
 	if err := r.Get(ctx, req.NamespacedName, &proposal); err != nil {
@@ -58,17 +62,15 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			// orphaned sandbox pods/claims. Trade-off: if sandbox API is permanently down,
 			// the Proposal stays in Terminating until resolved (or finalizer is manually removed).
 			if err := r.Agent.ReleaseSandboxes(ctx, &proposal); err != nil {
-				log.Error(err, "sandbox cleanup failed during deletion, retrying")
 				return ctrl.Result{}, err
 			}
 			if err := cleanupExecutionRBAC(ctx, r.Client, &proposal, r.Namespace); err != nil {
-				log.Error(err, "RBAC cleanup failed, retrying")
 				return ctrl.Result{}, err
 			}
 			original := proposal.DeepCopy()
 			controllerutil.RemoveFinalizer(&proposal, rbacCleanupFinalizer)
 			if err := r.Patch(ctx, &proposal, client.MergeFrom(original)); err != nil {
-				return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+				return ctrl.Result{}, fmt.Errorf("%s: %w", ErrRemoveFinalizer, err)
 			}
 		}
 		return ctrl.Result{}, nil
@@ -80,7 +82,7 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	if suspended {
-		return r.handleSuspension(ctx, log, &proposal)
+		return r.handleSuspension(ctx, &proposal)
 	}
 
 	phase := agenticv1alpha1.DerivePhase(proposal.Status.Conditions)
@@ -91,7 +93,7 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			original := proposal.DeepCopy()
 			controllerutil.AddFinalizer(&proposal, rbacCleanupFinalizer)
 			if err := r.Patch(ctx, &proposal, client.MergeFrom(original)); err != nil {
-				return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
+				return ctrl.Result{}, fmt.Errorf("%s: %w", ErrAddFinalizer, err)
 			}
 			if err := r.Get(ctx, req.NamespacedName, &proposal); err != nil {
 				return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -113,7 +115,7 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 
 	case agenticv1alpha1.ProposalPhaseFailed:
-		return r.handleFailed(ctx, log, &proposal)
+		return r.handleFailed(ctx, &proposal)
 	}
 
 	// --- Ensure ProposalApproval exists ---
@@ -146,33 +148,33 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, nil
 	}
 
-	log.Info("reconciling", "phase", phase)
+	log.V(1).Info("reconciling", LogKeyPhase, phase)
 
 	// --- Phase routing ---
 	switch phase {
 	case agenticv1alpha1.ProposalPhasePending, agenticv1alpha1.ProposalPhaseAnalyzing:
 		if needsRevision(&proposal) {
-			return r.handleRevision(ctx, log, &proposal, resolved)
+			return r.handleRevision(ctx, &proposal, resolved)
 		}
-		return r.handleAnalysis(ctx, log, &proposal, resolved, approval, policy)
+		return r.handleAnalysis(ctx, &proposal, resolved, approval, policy)
 
 	case agenticv1alpha1.ProposalPhaseProposed, agenticv1alpha1.ProposalPhaseExecuting:
 		if needsRevision(&proposal) {
-			return r.handleRevision(ctx, log, &proposal, resolved)
+			return r.handleRevision(ctx, &proposal, resolved)
 		}
-		return r.handleExecution(ctx, log, &proposal, resolved, approval, policy)
+		return r.handleExecution(ctx, &proposal, resolved, approval, policy)
 
 	case agenticv1alpha1.ProposalPhaseVerifying:
-		return r.handleVerification(ctx, log, &proposal, resolved, approval, policy)
+		return r.handleVerification(ctx, &proposal, resolved, approval, policy)
 
 	case agenticv1alpha1.ProposalPhaseEscalating:
 		if needsRevision(&proposal) {
-			return r.handleRevision(ctx, log, &proposal, resolved)
+			return r.handleRevision(ctx, &proposal, resolved)
 		}
-		return r.handleEscalation(ctx, log, &proposal, resolved, approval, policy)
+		return r.handleEscalation(ctx, &proposal, resolved, approval, policy)
 
 	default:
-		log.Info("unhandled phase, no-op", "phase", phase)
+		log.V(1).Info("unhandled phase, no-op", LogKeyPhase, phase)
 		return ctrl.Result{}, nil
 	}
 }

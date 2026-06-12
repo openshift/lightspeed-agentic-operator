@@ -22,6 +22,11 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 	Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxTemplate",
 }
 
+const (
+	ErrEnsureSA              = "ensure ServiceAccount"
+	ErrEnsureSandboxTemplate = "ensure SandboxTemplate"
+)
+
 type BootstrapConfig struct {
 	Image       string
 	Namespace   string
@@ -39,13 +44,13 @@ func EnsureBootstrapResources(ctx context.Context, c client.Client, cfg Bootstra
 	log.Info("Ensuring bootstrap resources", "image", cfg.Image, "namespace", cfg.Namespace, "mode", cfg.SandboxMode)
 
 	if err := ensureServiceAccount(ctx, c, cfg.Namespace); err != nil {
-		return fmt.Errorf("ensure ServiceAccount: %w", err)
+		return fmt.Errorf("%s: %w", ErrEnsureSA, err)
 	}
 	log.V(1).Info("ServiceAccount ready")
 
 	if cfg.SandboxMode == "sandbox-claim" {
 		if err := ensureSandboxTemplate(ctx, c, cfg.Image, cfg.Namespace); err != nil {
-			return fmt.Errorf("ensure SandboxTemplate: %w", err)
+			return fmt.Errorf("%s: %w", ErrEnsureSandboxTemplate, err)
 		}
 		log.V(1).Info("SandboxTemplate ready")
 	}
