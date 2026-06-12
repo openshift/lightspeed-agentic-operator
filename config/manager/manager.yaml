@@ -30,6 +30,9 @@ spec:
           command:
             - /manager
           args:
+            - --namespace=__OPERATOR_NAMESPACE__
+            - --sandbox-mode=__SANDBOX_MODE__
+            - --agentic-sandbox-image=__SANDBOX_IMAGE__
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
           env:

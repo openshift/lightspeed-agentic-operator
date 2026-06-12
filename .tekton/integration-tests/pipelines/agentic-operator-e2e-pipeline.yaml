@@ -1,0 +1,283 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: agentic-operator-e2e-pipeline
+spec:
+  description: |
+    Runs lightspeed-agentic-operator e2e tests on a Konflux ephemeral OpenShift cluster (EaaS).
+    Provisions the cluster, deploys the operator from the SNAPSHOT image with a fixed mock agent,
+    runs make test-e2e, then deprovisions
+  params:
+    - name: SNAPSHOT
+      description: 'The JSON string representing the snapshot of the application under test.'
+      default: '{"components": [{"name":"test-app", "containerImage": "quay.io/example/repo:latest"}]}'
+      type: string
+    - name: test-name
+      description: 'The name of the test corresponding to a defined Konflux integration test.'
+      default: 'agentic-e2e-tests'
+      type: string
+    - name: namespace
+      description: 'Namespace to deploy the operator into'
+      default: 'openshift-lightspeed'
+      type: string
+    - name: openshift-version-prefix
+      description: 'Minor line prefix for eaas-get-latest-openshift-version-by-prefix (include trailing dot, e.g. 4.19.)'
+      default: '4.19.'
+      type: string
+  tasks:
+    - name: eaas-provision-space
+      taskRef:
+        resolver: git
+        params:
+          - name: url
+            value: https://github.com/konflux-ci/build-definitions.git
+          - name: revision
+            value: main
+          - name: pathInRepo
+            value: task/eaas-provision-space/0.1/eaas-provision-space.yaml
+      params:
+        - name: ownerKind
+          value: PipelineRun
+        - name: ownerName
+          value: $(context.pipelineRun.name)
+        - name: ownerUid
+          value: $(context.pipelineRun.uid)
+    - name: provision-cluster
+      runAfter:
+        - eaas-provision-space
+      params:
+        - name: openshift-version-prefix
+          value: $(params.openshift-version-prefix)
+      taskSpec:
+        params:
+          - name: openshift-version-prefix
+            type: string
+        results:
+          - name: clusterName
+            value: "$(steps.create-cluster.results.clusterName)"
+        steps:
+          - name: pick-version
+            ref:
+              resolver: git
+              params:
+                - name: url
+                  value: https://github.com/konflux-ci/build-definitions.git
+                - name: revision
+                  value: main
+                - name: pathInRepo
+                  value: stepactions/eaas-get-latest-openshift-version-by-prefix/0.1/eaas-get-latest-openshift-version-by-prefix.yaml
+            params:
+              - name: prefix
+                value: "$(params.openshift-version-prefix)"
+          - name: create-cluster
+            ref:
+              resolver: git
+              params:
+                - name: url
+                  value: https://github.com/konflux-ci/build-definitions.git
+                - name: revision
+                  value: main
+                - name: pathInRepo
+                  value: stepactions/eaas-create-ephemeral-cluster-hypershift-aws/0.1/eaas-create-ephemeral-cluster-hypershift-aws.yaml
+            params:
+              - name: eaasSpaceSecretRef
+                value: $(tasks.eaas-provision-space.results.secretRef)
+              - name: version
+                value: "$(steps.pick-version.results.version)"
+              - name: instanceType
+                value: "m5.large"
+    - name: install-and-test
+      description: Install operator from SNAPSHOT, run e2e tests.
+      runAfter:
+        - provision-cluster
+      taskSpec:
+        params:
+          - name: SNAPSHOT
+            type: string
+          - name: namespace
+            type: string
+        results:
+          - name: commit
+            value: "$(steps.install-operator.results.commit)"
+        volumes:
+          - name: credentials
+            emptyDir: {}
+          - name: ols-konflux-artifacts-bot-creds
+            secret:
+              secretName: ols-konflux-artifacts-bot
+        steps:
+          - name: get-kubeconfig
+            ref:
+              resolver: git
+              params:
+                - name: url
+                  value: https://github.com/konflux-ci/build-definitions.git
+                - name: revision
+                  value: main
+                - name: pathInRepo
+                  value: stepactions/eaas-get-ephemeral-cluster-credentials/0.1/eaas-get-ephemeral-cluster-credentials.yaml
+            params:
+              - name: eaasSpaceSecretRef
+                value: $(tasks.eaas-provision-space.results.secretRef)
+              - name: clusterName
+                value: "$(tasks.provision-cluster.results.clusterName)"
+              - name: credentials
+                value: credentials
+          - name: install-operator
+            results:
+              - name: commit
+                type: string
+            volumeMounts:
+              - name: credentials
+                mountPath: /credentials
+            env:
+              - name: SNAPSHOT
+                value: $(params.SNAPSHOT)
+              - name: KONFLUX_COMPONENT_NAME
+                valueFrom:
+                  fieldRef:
+                    fieldPath: metadata.labels['appstudio.openshift.io/component']
+              - name: KUBECONFIG
+                value: "/credentials/$(steps.get-kubeconfig.results.kubeconfig)"
+              - name: NAMESPACE
+                value: "$(params.namespace)"
+              - name: SANDBOX_IMAGE
+                value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent"
+            image: registry.redhat.io/openshift4/ose-cli:latest
+            script: |
+              set -euo pipefail
+              dnf -y install jq git make golang
+              OPERATOR_IMAGE="$(jq -r --arg component_name "${KONFLUX_COMPONENT_NAME}" '.components[] | select(.name == $component_name) | .containerImage' <<< "$SNAPSHOT")"
+              if [ -z "$OPERATOR_IMAGE" ] || [ "$OPERATOR_IMAGE" = "null" ]; then
+                echo "ERROR: could not extract operator image from SNAPSHOT"
+                exit 1
+              fi
+
+              COMMIT="$(jq -r --arg component_name "${KONFLUX_COMPONENT_NAME}" '.components[] | select(.name == $component_name) | .source.git.revision' <<< "$SNAPSHOT")"
+              if [ -z "$COMMIT" ] || [ "$COMMIT" = "null" ]; then
+                echo "ERROR: could not extract git revision from SNAPSHOT"
+                exit 1
+              fi
+              echo -n "${COMMIT}" > $(step.results.commit.path)
+
+              git clone --depth=1 https://github.com/openshift/lightspeed-agentic-operator.git /workspace/repo
+              cd /workspace/repo
+              git fetch --depth=1 origin "${COMMIT}"
+              git checkout "${COMMIT}"
+
+              IMG="${OPERATOR_IMAGE}" \
+              OPERATOR_NAMESPACE="${NAMESPACE}" \
+              SANDBOX_IMAGE="${SANDBOX_IMAGE}" \
+              bash .tekton/integration-tests/scripts/install-operator.sh
+          - name: run-e2e-tests
+            resources:
+              requests:
+                memory: "8Gi"
+              limits:
+                memory: "8Gi"
+            onError: continue
+            volumeMounts:
+              - name: credentials
+                mountPath: /credentials
+            env:
+              - name: KUBECONFIG
+                value: "/credentials/$(steps.get-kubeconfig.results.kubeconfig)"
+              - name: TEST_NAMESPACE
+                value: "$(params.namespace)"
+              - name: OPERATOR_NAMESPACE
+                value: "$(params.namespace)"
+            image: registry.redhat.io/openshift4/ose-cli:latest
+            script: |
+              set -euo pipefail
+              dnf -y install git make golang
+              cd /workspace/repo
+              mkdir -p /workspace/konflux-artifacts
+              make test-e2e 2>&1 | tee /workspace/konflux-artifacts/e2e-test-output.log
+          - name: gather-cluster-resources
+            onError: continue
+            volumeMounts:
+              - name: credentials
+                mountPath: /credentials
+            env:
+              - name: KUBECONFIG
+                value: "/credentials/$(steps.get-kubeconfig.results.kubeconfig)"
+              - name: ARTIFACT_DIR
+                value: "/workspace/konflux-artifacts"
+              - name: NAMESPACE
+                value: "$(params.namespace)"
+            image: quay.io/konflux-qe-incubator/konflux-qe-tools:latest
+            script: |
+              #!/bin/bash
+              set -x
+              cd "${ARTIFACT_DIR}"
+              oc get proposals -A -o yaml > proposals.yaml 2>/dev/null || true
+              oc get proposalapprovals -A -o yaml > proposalapprovals.yaml 2>/dev/null || true
+              oc get analysisresults -A -o yaml > analysisresults.yaml 2>/dev/null || true
+              oc get executionresults -A -o yaml > executionresults.yaml 2>/dev/null || true
+              oc get verificationresults -A -o yaml > verificationresults.yaml 2>/dev/null || true
+              oc get pods -n "${NAMESPACE}" -o yaml > pods.yaml 2>/dev/null || true
+              oc logs -n "${NAMESPACE}" deployment/controller-manager --tail=500 > operator-logs.txt 2>/dev/null || true
+              echo "Artifacts gathered:"
+              ls -la "${ARTIFACT_DIR}"
+          - name: list-artifacts
+            onError: continue
+            image: quay.io/konflux-qe-incubator/konflux-qe-tools:latest
+            workingDir: /workspace/konflux-artifacts
+            script: |
+              #!/bin/bash
+              echo "=== Artifacts to push ==="
+              ls -la /workspace/konflux-artifacts
+          - name: push-artifacts
+            onError: continue
+            ref:
+              resolver: git
+              params:
+                - name: url
+                  value: https://github.com/konflux-ci/tekton-integration-catalog.git
+                - name: revision
+                  value: main
+                - name: pathInRepo
+                  value: stepactions/secure-push-oci/0.1/secure-push-oci.yaml
+            params:
+              - name: workdir-path
+                value: /workspace/konflux-artifacts
+              - name: oci-ref
+                value: "quay.io/openshift-lightspeed/ols-operator-artifacts:agentic-$(steps.install-operator.results.commit)"
+              - name: credentials-volume-name
+                value: ols-konflux-artifacts-bot-creds
+          - name: fail-if-any-step-failed
+            ref:
+              resolver: git
+              params:
+                - name: url
+                  value: https://github.com/konflux-ci/tekton-integration-catalog.git
+                - name: revision
+                  value: main
+                - name: pathInRepo
+                  value: stepactions/fail-if-any-step-failed/0.1/fail-if-any-step-failed.yaml
+      params:
+        - name: SNAPSHOT
+          value: $(params.SNAPSHOT)
+        - name: namespace
+          value: "$(params.namespace)"
+  finally:
+    - name: export-logs-for-retention
+      taskRef:
+        resolver: git
+        params:
+          - name: url
+            value: https://github.com/konflux-ci/tekton-integration-catalog.git
+          - name: revision
+            value: main
+          - name: pathInRepo
+            value: tasks/export-logs/0.1/export-logs-to-quay.yaml
+      params:
+        - name: pipeline-run-name
+          value: $(context.pipelineRun.name)
+        - name: namespace
+          value: $(context.pipelineRun.namespace)
+        - name: quay-repo
+          value: "quay.io/openshift-lightspeed/ols-operator-artifacts"
+        - name: artifact-credentials-secret
+          value: ols-konflux-artifacts-bot

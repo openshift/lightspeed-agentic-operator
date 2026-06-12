@@ -1,0 +1,36 @@
+# IntegrationTestScenario for lightspeed-agentic-operator e2e.
+# Triggers on lightspeed-agentic-operator component builds.
+# Provisions an ephemeral Hypershift cluster, deploys operator from SNAPSHOT,
+# runs make test-e2e with the fixed mock agent image.
+#
+# Apply to tenant namespace: kubectl apply -f .tekton/integration-tests/integration-test-scenarios.yaml
+---
+apiVersion: appstudio.redhat.com/v1beta2
+kind: IntegrationTestScenario
+metadata:
+  name: agentic-operator-e2e-tests
+  namespace: crt-nshift-lightspeed-tenant
+  labels:
+    test.appstudio.openshift.io/optional: "true"
+spec:
+  application: ols
+  contexts:
+    - description: Agentic operator e2e (bare-pod mode)
+      name: component_lightspeed-agentic-operator
+  params:
+    - name: test-name
+      value: agentic-e2e-tests
+    - name: namespace
+      value: openshift-lightspeed
+    - name: openshift-version-prefix
+      value: "4.19."
+  resolverRef:
+    resolver: git
+    resourceKind: pipeline
+    params:
+      - name: url
+        value: https://github.com/openshift/lightspeed-agentic-operator
+      - name: revision
+        value: main
+      - name: pathInRepo
+        value: .tekton/integration-tests/pipelines/agentic-operator-e2e-pipeline.yaml

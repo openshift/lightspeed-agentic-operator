@@ -107,7 +107,12 @@ ifndef ignore-not-found
   ignore-not-found = false
 endif
 
-# kubernetes-sigs/agent-sandbox release used by install-agent-sandbox (manifest + extensions).
+# Sandbox mode: "bare-pod" (default) or "sandbox-claim".
+SANDBOX_MODE ?= bare-pod
+# Agent sandbox image used by bare-pod mode (the container the operator creates per step).
+SANDBOX_IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent
+
+# kubernetes-sigs/agent-sandbox release reference (used only for documentation links).
 AGENT_SANDBOX_VERSION ?= v0.4.5
 AGENT_SANDBOX_RELEASE_BASE ?= https://github.com/kubernetes-sigs/agent-sandbox/releases/download
 
@@ -121,20 +126,21 @@ DEPLOY_LOCAL_REGISTRY ?=
 # When 1, deploy-local will not patch imageregistry/cluster (spec.defaultRoute) to expose the registry.
 DEPLOY_LOCAL_SKIP_REGISTRY_ROUTE_PATCH ?=
 
-.PHONY: install-agent-sandbox
-install-agent-sandbox: ## Install Agent Sandbox (core+extensions) if Sandbox CRDs are missing. See README.md.
-	@set -e; \
+.PHONY: validate-agent-sandbox
+validate-agent-sandbox: ## Verify Sandbox CRDs are present (sandbox-claim mode only). No-op for bare-pod mode.
+	@if [ "$(SANDBOX_MODE)" != "sandbox-claim" ]; then \
+		echo "Skipping Agent Sandbox check (SANDBOX_MODE=$(SANDBOX_MODE), not sandbox-claim)."; \
+		exit 0; \
+	fi; \
 	ext_crd=sandboxclaims.extensions.agents.x-k8s.io; \
 	core_crd=sandboxes.agents.x-k8s.io; \
 	st_crd=sandboxtemplates.extensions.agents.x-k8s.io; \
 	if $(KUBECTL) get crd "$$ext_crd" >/dev/null 2>&1 && $(KUBECTL) get crd "$$core_crd" >/dev/null 2>&1 && $(KUBECTL) get crd "$$st_crd" >/dev/null 2>&1; then \
-		echo "Agent Sandbox already installed ($$ext_crd, $$core_crd, $$st_crd)."; \
+		echo "Agent Sandbox CRDs present ($$ext_crd, $$core_crd, $$st_crd)."; \
 	else \
-		v="$(AGENT_SANDBOX_VERSION)"; \
-		base="$(AGENT_SANDBOX_RELEASE_BASE)"; \
-		echo "Applying Agent Sandbox $$v ($$base/$$v/{manifest,extensions}.yaml) ..."; \
-		$(KUBECTL) apply -f "$$base/$$v/manifest.yaml"; \
-		$(KUBECTL) apply -f "$$base/$$v/extensions.yaml"; \
+		echo "ERROR: Sandbox CRDs not found. Install the Sandbox operator before using sandbox-claim mode."; \
+		echo "  See: https://github.com/kubernetes-sigs/agent-sandbox/releases"; \
+		exit 1; \
 	fi
 
 .PHONY: install
@@ -146,12 +152,15 @@ uninstall: kustomize ## Remove CRDs from config/crd. Use ignore-not-found=true i
 	$(KUSTOMIZE) build config/crd | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f -
 
 .PHONY: deploy
-deploy: manifests install-agent-sandbox kustomize ## Pre-built image: apply CRDs+RBAC+Deployment (set IMG). For OpenShift dev build+push+integrated registry use deploy-local.
+deploy: manifests validate-agent-sandbox kustomize ## Pre-built image: apply CRDs+RBAC+Deployment (set IMG). For OpenShift dev build+push+integrated registry use deploy-local.
 	@tmpdir=$$(mktemp -d); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	cp -a config "$$tmpdir/"; \
 	for f in "$$tmpdir/config/manager/manager.yaml" "$$tmpdir/config/rbac/role_binding.yaml" "$$tmpdir/config/rbac/service_account.yaml" "$$tmpdir/config/default/kustomization.yaml"; do \
-		sed -e 's|__OPERATOR_NAMESPACE__|$(OPERATOR_NAMESPACE)|g' "$$f" > "$$f.tmp" && mv "$$f.tmp" "$$f"; \
+		sed -e 's|__OPERATOR_NAMESPACE__|$(OPERATOR_NAMESPACE)|g' \
+		    -e 's|__SANDBOX_MODE__|$(SANDBOX_MODE)|g' \
+		    -e 's|__SANDBOX_IMAGE__|$(SANDBOX_IMAGE)|g' \
+		    "$$f" > "$$f.tmp" && mv "$$f.tmp" "$$f"; \
 	done; \
 	cd "$$tmpdir/config/manager" && $(KUSTOMIZE) edit set image controller=$(IMG); \
 	$(KUSTOMIZE) build "$$tmpdir/config/default" | $(KUBECTL) apply -f -
@@ -239,10 +248,11 @@ undeploy: kustomize ## Remove in-cluster operator (CRDs + RBAC + Deployment). Us
 	$(KUSTOMIZE) build "$$tmpdir/config/default" | $(KUBECTL) delete --ignore-not-found=$(ignore-not-found) -f - || true
 
 .PHONY: run
-run: install install-agent-sandbox vet ## install + install-agent-sandbox (no-op if CRDs exist) + vet, then run the controller locally.
-	# Same kubeconfig discovery as other controller-runtime apps (see README.md).
+run: install validate-agent-sandbox vet ## install + validate-agent-sandbox (no-op if bare-pod) + vet, then run the controller locally.
 	go run ./cmd/main.go \
 		--namespace=$(OPERATOR_NAMESPACE) \
+		--sandbox-mode=$(SANDBOX_MODE) \
+		--agentic-sandbox-image=$(SANDBOX_IMAGE) \
 		--metrics-bind-address=$(METRICS_BIND_ADDRESS) \
 		--health-probe-bind-address=$(HEALTH_PROBE_BIND_ADDRESS)
 

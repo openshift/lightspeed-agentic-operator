@@ -18,20 +18,25 @@ import (
 //  3. Wait for phase = Denied (terminal)
 //  4. Assert: Denied condition present, sandboxes released on deletion
 func TestDenialFlow_ProposedToDenied(t *testing.T) {
+	t.Log("=== TestDenialFlow_ProposedToDenied: validates execution denial → Denied terminal ===")
 	c := newClient(t)
 	ctx := context.Background()
 
+	t.Log("Creating fixtures (LLMProvider, Agent, ApprovalPolicy, Secret)")
 	createFixtures(t, c)
 	prop := createProposal(t, c, "e2e-denial-flow")
+	t.Logf("Proposal created: %s/%s", testNS, prop.Name)
 
-	// Drive to Proposed (analysis complete).
+	t.Log("Waiting for phase: Proposed (analysis complete)")
 	waitForPhase(t, c, prop.Name, agenticv1alpha1.ProposalPhaseProposed)
+	t.Log("Phase reached: Proposed")
 
-	// Deny execution.
+	t.Log("Denying execution stage")
 	denyStage(t, c, prop.Name, agenticv1alpha1.ApprovalStageExecution)
 
-	// Wait for Denied (terminal).
+	t.Log("Waiting for phase: Denied (terminal)")
 	updated := waitForPhase(t, c, prop.Name, agenticv1alpha1.ProposalPhaseDenied)
+	t.Log("Phase reached: Denied")
 
 	// --- Verify: Denied condition ---
 	var deniedFound bool
@@ -46,12 +51,15 @@ func TestDenialFlow_ProposedToDenied(t *testing.T) {
 	if !deniedFound {
 		t.Error("Denied condition not found")
 	}
+	t.Log("Verified: Denied=True condition present")
 
 	// --- Cleanup ---
+	t.Log("Deleting Proposal — verifying finalizer cleanup")
 	if err := c.Delete(ctx, prop); err != nil {
 		t.Fatalf("delete Proposal: %v", err)
 	}
 	waitForDeletion(t, c, prop.Name)
+	t.Log("Verified: Proposal deleted successfully")
 
 	t.Logf("PASS: execution denied, phase=Denied (terminal)")
 }

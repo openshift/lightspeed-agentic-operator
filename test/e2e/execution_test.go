@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -23,20 +24,25 @@ import (
 //  5. Assert: ExecutionResult exists, Executed=True, sandbox info, RBAC annotation
 //  6. Delete Proposal, verify RBAC cleaned up
 func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
+	t.Log("=== TestExecutionFlow_ProposedToVerifying: validates Proposed → Executing → Verifying with RBAC + SA ===")
 	c := newClient(t)
 	ctx := context.Background()
 
+	t.Log("Creating fixtures (LLMProvider, Agent, ApprovalPolicy, Secret)")
 	createFixtures(t, c)
 	prop := createProposal(t, c, "e2e-execution-flow")
+	t.Logf("Proposal created: %s/%s", testNS, prop.Name)
 
-	// Drive to Proposed (analysis complete).
+	t.Log("Waiting for phase: Proposed (analysis complete)")
 	waitForPhase(t, c, prop.Name, agenticv1alpha1.ProposalPhaseProposed)
+	t.Log("Phase reached: Proposed")
 
-	// Approve execution with option 0.
+	t.Log("Approving execution with option 0")
 	approveExecution(t, c, prop.Name, 0)
 
-	// Wait for Executing phase — RBAC should exist during this window (mock delays 60s).
+	t.Log("Waiting for phase: Executing")
 	waitForPhase(t, c, prop.Name, agenticv1alpha1.ProposalPhaseExecuting)
+	t.Log("Phase reached: Executing — checking RBAC")
 
 	// --- Verify: RBAC created ---
 	roleName := "ls-exec-" + prop.Name
@@ -50,6 +56,21 @@ func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "staging"}, &binding); err != nil {
 		t.Fatalf("get RoleBinding %s in staging: %v", roleName, err)
 	}
+	t.Logf("Verified: RoleBinding %s exists in staging", roleName)
+
+	// Verify: per-proposal execution SA created.
+	saName := "ls-exec-" + testNS + "-" + prop.Name
+	var sa corev1.ServiceAccount
+	if err := c.Get(ctx, types.NamespacedName{Name: saName, Namespace: testNS}, &sa); err != nil {
+		t.Fatalf("get execution SA %s: %v", saName, err)
+	}
+	t.Logf("Execution SA %s exists", saName)
+
+	// Verify: RoleBinding references the per-proposal SA.
+	if len(binding.Subjects) == 0 || binding.Subjects[0].Name != saName {
+		t.Errorf("RoleBinding subject = %v, want SA %s", binding.Subjects, saName)
+	}
+	t.Log("Verified: RoleBinding subjects correct SA")
 
 	// Verify annotation on Proposal.
 	var current agenticv1alpha1.Proposal
@@ -59,9 +80,11 @@ func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
 	if current.Annotations["agentic.openshift.io/rbac-namespaces"] == "" {
 		t.Error("rbac-namespaces annotation is empty")
 	}
+	t.Log("Verified: RBAC annotation present on Proposal")
 
-	// Wait for execution to complete → Verifying phase.
+	t.Log("Waiting for phase: Verifying (execution complete)")
 	updated := waitForPhase(t, c, prop.Name, agenticv1alpha1.ProposalPhaseVerifying)
+	t.Log("Phase reached: Verifying")
 
 	// --- Verify: Executed condition ---
 	var executedFound bool
@@ -76,6 +99,7 @@ func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
 	if !executedFound {
 		t.Error("Executed condition not found")
 	}
+	t.Log("Verified: Executed=True condition present")
 
 	// --- Verify: ExecutionResult exists ---
 	var execList agenticv1alpha1.ExecutionResultList
@@ -88,13 +112,16 @@ func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
 	if len(execList.Items[0].OwnerReferences) == 0 {
 		t.Error("ExecutionResult has no owner references")
 	}
+	t.Logf("Verified: ExecutionResult %s exists with owner reference", execList.Items[0].Name)
 
 	// --- Verify: execution sandbox info ---
 	if updated.Status.Steps.Execution.Sandbox.ClaimName == "" {
 		t.Error("status.steps.execution.sandbox.claimName is empty")
 	}
+	t.Logf("Verified: execution sandbox info recorded, claimName=%s", updated.Status.Steps.Execution.Sandbox.ClaimName)
 
 	// --- Cleanup and verify RBAC removed ---
+	t.Log("Deleting Proposal — verifying RBAC + SA cleanup")
 	if err := c.Delete(ctx, prop); err != nil {
 		t.Fatalf("delete Proposal: %v", err)
 	}
@@ -103,6 +130,10 @@ func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "staging"}, &role); err == nil {
 		t.Errorf("Role %s still exists after Proposal deletion — RBAC not cleaned up", roleName)
 	}
+	if err := c.Get(ctx, types.NamespacedName{Name: saName, Namespace: testNS}, &sa); err == nil {
+		t.Errorf("SA %s still exists after Proposal deletion — not cleaned up", saName)
+	}
+	t.Log("Verified: RBAC Role + SA cleaned up after deletion")
 
-	t.Logf("PASS: execution complete, RBAC created and cleaned up")
+	t.Logf("PASS: execution complete, RBAC + SA created and cleaned up")
 }

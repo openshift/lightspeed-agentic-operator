@@ -23,8 +23,14 @@ import (
 const (
 	pollInterval = 2 * time.Second
 	pollTimeout  = 10 * time.Minute
-	testNS       = "openshift-lightspeed"
 )
+
+var testNS = func() string {
+	if ns := os.Getenv("TEST_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return "openshift-lightspeed"
+}()
 
 // --- Client ---
 
@@ -109,6 +115,13 @@ func deleteSandboxClaim(t *testing.T, c client.Client, name, namespace string) {
 	_ = c.Delete(context.Background(), obj)
 }
 
+// deleteBarePod removes a bare pod by name from the operator namespace (same as testNS).
+func deleteBarePod(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS}}
+	_ = c.Delete(context.Background(), pod)
+}
+
 // --- Fixture builders ---
 
 // e2eFixtures holds the prerequisite CRs needed for any proposal flow.
@@ -150,7 +163,6 @@ func createFixtures(t *testing.T, c client.Client) *e2eFixtures {
 			Spec: agenticv1alpha1.ApprovalPolicySpec{
 				Stages: []agenticv1alpha1.ApprovalPolicyStage{
 					{Name: agenticv1alpha1.SandboxStepAnalysis, Approval: agenticv1alpha1.ApprovalModeAutomatic},
-					{Name: agenticv1alpha1.SandboxStepVerification, Approval: agenticv1alpha1.ApprovalModeAutomatic},
 				},
 			},
 		},
@@ -195,12 +207,15 @@ func createProposal(t *testing.T, c client.Client, name string) *agenticv1alpha1
 		},
 	}
 
-	// Clean leftovers.
+	// Clean leftovers from previous runs (proposals, approvals, sandbox claims, bare pods).
 	cleanup(t, c, &agenticv1alpha1.Proposal{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS}})
 	cleanup(t, c, &agenticv1alpha1.ProposalApproval{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS}})
 	deleteSandboxClaim(t, c, "ls-analysis-"+name, testNS)
 	deleteSandboxClaim(t, c, "ls-execution-"+name, testNS)
 	deleteSandboxClaim(t, c, "ls-verification-"+name, testNS)
+	deleteBarePod(t, c, "ls-analysis-"+name)
+	deleteBarePod(t, c, "ls-execution-"+name)
+	deleteBarePod(t, c, "ls-verification-"+name)
 
 	if err := c.Create(ctx, prop); err != nil {
 		t.Fatalf("create Proposal: %v", err)
@@ -320,4 +335,35 @@ func approveExecution(t *testing.T, c client.Client, name string, optionIdx int3
 		t.Fatalf("approve execution: %v", err)
 	}
 	t.Logf("approved execution with option %d", optionIdx)
+}
+
+// approveVerification patches the ProposalApproval to approve verification.
+func approveVerification(t *testing.T, c client.Client, name string) {
+	t.Helper()
+	ctx := context.Background()
+
+	var approval agenticv1alpha1.ProposalApproval
+	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: testNS}, &approval); err != nil {
+		t.Fatalf("get ProposalApproval for verification approval: %v", err)
+	}
+
+	base := approval.DeepCopy()
+	found := false
+	for i, s := range approval.Spec.Stages {
+		if s.Type == agenticv1alpha1.ApprovalStageVerification {
+			approval.Spec.Stages[i].Verification = agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"}
+			found = true
+			break
+		}
+	}
+	if !found {
+		approval.Spec.Stages = append(approval.Spec.Stages, agenticv1alpha1.ApprovalStage{
+			Type:         agenticv1alpha1.ApprovalStageVerification,
+			Verification: agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"},
+		})
+	}
+	if err := c.Patch(ctx, &approval, client.MergeFrom(base)); err != nil {
+		t.Fatalf("approve verification: %v", err)
+	}
+	t.Logf("approved verification")
 }
