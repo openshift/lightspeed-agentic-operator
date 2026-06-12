@@ -20,6 +20,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /mock-agent 
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=builder /mock-agent /mock-agent
+COPY --from=builder /workspace/test/agent/skills/ /skills/
 EXPOSE 8080
 USER nonroot:nonroot
 ENTRYPOINT ["/mock-agent"]
