@@ -77,7 +77,7 @@ func emptyTemplate() *unstructured.Unstructured {
 
 func mustHash(t *testing.T, llm *agenticv1alpha1.LLMProvider, model string, skills []agenticv1alpha1.SkillsSource, requiredSecrets []agenticv1alpha1.SecretRequirement, phase string) string {
 	t.Helper()
-	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, phase, "", "")
+	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, nil, phase, "", "")
 	if err != nil {
 		t.Fatalf("computeTemplateHash: %v", err)
 	}
@@ -627,11 +627,11 @@ func TestComputeTemplateHash_DifferentBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "")
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "2000", "")
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "2000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,11 +645,11 @@ func TestComputeTemplateHash_SameBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "")
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "")
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -729,4 +729,90 @@ func TestPatchProbes(t *testing.T) {
 			t.Fatal("expected error for template with no containers")
 		}
 	})
+}
+
+// TestComputeTemplateHash_DataSource verifies that a non-nil dataSource changes
+// the hash, and that two different claimNames produce two different hashes.
+// DataSource is optional — nil is valid and covered by all other hash tests above.
+func TestComputeTemplateHash_DataSource(t *testing.T) {
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
+	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
+
+	hNoDS, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, nil, "analysis", "", "")
+	if err != nil {
+		t.Fatalf("computeTemplateHash (nil dataSource): %v", err)
+	}
+
+	ds1 := &agenticv1alpha1.DataSource{ClaimName: "pvc-alpha"}
+	hDS1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, ds1, "analysis", "", "")
+	if err != nil {
+		t.Fatalf("computeTemplateHash (dataSource pvc-alpha): %v", err)
+	}
+
+	ds2 := &agenticv1alpha1.DataSource{ClaimName: "pvc-beta"}
+	hDS2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, ds2, "analysis", "", "")
+	if err != nil {
+		t.Fatalf("computeTemplateHash (dataSource pvc-beta): %v", err)
+	}
+
+	if hNoDS == hDS1 {
+		t.Error("nil dataSource and non-nil dataSource should produce different hashes")
+	}
+	if hDS1 == hDS2 {
+		t.Error("different claimNames should produce different hashes")
+	}
+}
+
+// TestPatchDataSource_MountsReadOnly verifies that patchDataSource adds a PVC
+// volume with the correct claimName and mounts it read-only at /data/input.
+func TestPatchDataSource_MountsReadOnly(t *testing.T) {
+	tmpl := emptyTemplate()
+	ds := &agenticv1alpha1.DataSource{ClaimName: "my-must-gather-pvc"}
+
+	if err := patchDataSource(tmpl, ds); err != nil {
+		t.Fatalf("patchDataSource: %v", err)
+	}
+
+	// Verify volume was added with the correct name and claimName.
+	volumes, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "volumes")
+	var foundVol bool
+	for _, v := range volumes {
+		vol, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if vol["name"] != dataSourceVolumeName {
+			continue
+		}
+		foundVol = true
+		pvc, ok := vol["persistentVolumeClaim"].(map[string]any)
+		if !ok {
+			t.Fatalf("volume %q has no persistentVolumeClaim", dataSourceVolumeName)
+		}
+		if got := pvc["claimName"]; got != "my-must-gather-pvc" {
+			t.Errorf("claimName = %q, want %q", got, "my-must-gather-pvc")
+		}
+	}
+	if !foundVol {
+		t.Errorf("volume %q not found after patchDataSource", dataSourceVolumeName)
+	}
+
+	// Verify volumeMount is read-only at /data/input.
+	mounts := getVolumeMounts(tmpl)
+	var foundMount bool
+	for _, m := range mounts {
+		if m["mountPath"] != dataSourceMountPath {
+			continue
+		}
+		foundMount = true
+		if m["name"] != dataSourceVolumeName {
+			t.Errorf("mount name = %q, want %q", m["name"], dataSourceVolumeName)
+		}
+		if ro, _ := m["readOnly"].(bool); !ro {
+			t.Error("dataSource mount should be readOnly=true")
+		}
+	}
+	if !foundMount {
+		t.Errorf("volumeMount at %q not found after patchDataSource", dataSourceMountPath)
+	}
 }

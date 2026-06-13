@@ -73,10 +73,15 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 }
 
 const (
-	llmCredsMountPath   = "/var/run/secrets/llm-credentials"
-	llmCredsVolumeName  = "llm-credentials"
-	mcpHeadersMountRoot = "/var/secrets/mcp"
-	mcpServersEnvVar    = "LIGHTSPEED_MCP_SERVERS"
+	agentModeEnvVar      = "LIGHTSPEED_MODE"
+	vertexCredsMountPath = "/var/secrets/google"
+	vertexCredsFileName  = "credentials.json"
+	llmCredsVolumeName   = "llm-credentials"
+	llmCredsMountPath    = "/var/run/secrets/llm-credentials"
+	mcpHeadersMountRoot  = "/var/secrets/mcp"
+	mcpServersEnvVar     = "LIGHTSPEED_MCP_SERVERS"
+	dataSourceMountPath  = "/data/input"
+	dataSourceVolumeName = "lightspeed-data-source"
 
 	LabelManaged      = "agentic.openshift.io/managed"
 	LabelBaseTemplate = "agentic.openshift.io/base-template"
@@ -92,6 +97,7 @@ type templateHashInput struct {
 	Skills              []agenticv1alpha1.SkillsSource      `json:"skills"`
 	MCPServers          []agenticv1alpha1.MCPServerConfig   `json:"mcpServers,omitempty"`
 	RequiredSecrets     []agenticv1alpha1.SecretRequirement `json:"requiredSecrets,omitempty"`
+	DataSource          *agenticv1alpha1.DataSource         `json:"dataSource,omitempty"`
 	Step                string                              `json:"step"`
 	BaseResourceVersion string                              `json:"baseRV"`
 	ServiceAccount      string                              `json:"serviceAccount"`
@@ -103,6 +109,7 @@ func computeTemplateHash(
 	skills []agenticv1alpha1.SkillsSource,
 	mcpServers []agenticv1alpha1.MCPServerConfig,
 	requiredSecrets []agenticv1alpha1.SecretRequirement,
+	dataSource *agenticv1alpha1.DataSource,
 	step string,
 	baseResourceVersion string,
 	serviceAccount string,
@@ -113,6 +120,7 @@ func computeTemplateHash(
 		Skills:              skills,
 		MCPServers:          mcpServers,
 		RequiredSecrets:     requiredSecrets,
+		DataSource:          dataSource,
 		Step:                step,
 		BaseResourceVersion: baseResourceVersion,
 		ServiceAccount:      serviceAccount,
@@ -130,7 +138,8 @@ func agentTemplateName(step, agentName, hash string) string {
 }
 
 // EnsureAgentTemplate creates a SandboxTemplate derived from the base template
-// with skills, LLM credentials, MCP servers, and required secrets from the CRD chain.
+// with skills, LLM credentials, MCP servers, required secrets, and an optional
+// dataSource PVC from the CRD chain.
 // Template name includes a config hash — same input = same template = no-op.
 // Old templates for the same agent+phase are garbage-collected.
 func EnsureAgentTemplate(
@@ -162,13 +171,17 @@ func EnsureAgentTemplate(
 	var skills []agenticv1alpha1.SkillsSource
 	var mcpServers []agenticv1alpha1.MCPServerConfig
 	var requiredSecrets []agenticv1alpha1.SecretRequirement
+	var dataSource *agenticv1alpha1.DataSource
 	if tools != nil {
 		skills = tools.Skills
 		mcpServers = tools.MCPServers
 		requiredSecrets = tools.RequiredSecrets
+		if !tools.DataSource.IsZero() {
+			dataSource = &tools.DataSource
+		}
 	}
 
-	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, step, base.GetResourceVersion(), serviceAccount)
+	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, dataSource, step, base.GetResourceVersion(), serviceAccount)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", ErrComputeTemplateHash, err)
 	}
@@ -231,6 +244,12 @@ func EnsureAgentTemplate(
 	if len(requiredSecrets) > 0 {
 		if err := patchRequiredSecrets(derived, requiredSecrets); err != nil {
 			return "", fmt.Errorf("%s: %w", ErrPatchRequiredSecrets, err)
+		}
+	}
+
+	if dataSource != nil {
+		if err := patchDataSource(derived, dataSource); err != nil {
+			return "", fmt.Errorf("patch data source: %w", err)
 		}
 	}
 
@@ -614,6 +633,36 @@ func addSecretVolume(tmpl *unstructured.Unstructured, volumeName, secretName str
 	}
 	volumes = append(volumes, vol)
 	return unstructured.SetNestedSlice(tmpl.Object, volumes, "spec", "podTemplate", "spec", "volumes")
+}
+
+func addPVCVolume(tmpl *unstructured.Unstructured, volumeName, claimName string) error {
+	volumes, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "volumes")
+	vol := map[string]any{
+		"name": volumeName,
+		"persistentVolumeClaim": map[string]any{
+			"claimName": claimName,
+		},
+	}
+	for i, v := range volumes {
+		existing, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+		if existing["name"] == volumeName {
+			volumes[i] = vol
+			return unstructured.SetNestedSlice(tmpl.Object, volumes, "spec", "podTemplate", "spec", "volumes")
+		}
+	}
+	volumes = append(volumes, vol)
+	return unstructured.SetNestedSlice(tmpl.Object, volumes, "spec", "podTemplate", "spec", "volumes")
+}
+
+func patchDataSource(tmpl *unstructured.Unstructured, ds *agenticv1alpha1.DataSource) error {
+	volName := dataSourceVolumeName
+	if err := addPVCVolume(tmpl, volName, ds.ClaimName); err != nil {
+		return fmt.Errorf("add data source PVC volume: %w", err)
+	}
+	return addVolumeMount(tmpl, volName, dataSourceMountPath, true)
 }
 
 func addVolumeMount(tmpl *unstructured.Unstructured, name, mountPath string, readOnly bool) error {
