@@ -3,8 +3,7 @@ module github.com/openshift/lightspeed-agentic-operator
 go 1.25.7
 
 require (
-	github.com/go-logr/logr v1.4.3
-	github.com/openshift/api v0.0.0-20260605005319-1194f4c62539
+	github.com/openshift/api v0.0.0-20260615110019-261e3a0546f3
 	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.3
@@ -17,6 +16,7 @@ require (
 )
 
 require (
+	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-openapi/swag/cmdutils v0.26.0 // indirect
 	github.com/go-openapi/swag/conv v0.26.0 // indirect
 	github.com/go-openapi/swag/fileutils v0.26.0 // indirect
