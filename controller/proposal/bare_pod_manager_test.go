@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
@@ -15,7 +16,7 @@ import (
 
 func newBarePodClient() *fake.ClientBuilder {
 	s := runtime.NewScheme()
-	_ = corev1.AddToScheme(s)
+	utilruntime.Must(corev1.AddToScheme(s))
 	return fake.NewClientBuilder().WithScheme(s)
 }
 

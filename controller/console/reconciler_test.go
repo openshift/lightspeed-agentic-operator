@@ -11,15 +11,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func testScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
-	_ = corev1.AddToScheme(s)
-	_ = appsv1.AddToScheme(s)
-	_ = consolev1.AddToScheme(s)
-	_ = openshiftv1.AddToScheme(s)
+	utilruntime.Must(corev1.AddToScheme(s))
+	utilruntime.Must(appsv1.AddToScheme(s))
+	utilruntime.Must(consolev1.AddToScheme(s))
+	utilruntime.Must(openshiftv1.AddToScheme(s))
 	return s
 }
 

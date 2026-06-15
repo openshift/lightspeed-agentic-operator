@@ -9,12 +9,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func testScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
-	_ = corev1.AddToScheme(s)
+	utilruntime.Must(corev1.AddToScheme(s))
 	return s
 }
 

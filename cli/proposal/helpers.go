@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/duration"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -57,8 +58,8 @@ var validSandboxSteps = []string{
 
 var scheme = func() *runtime.Scheme {
 	s := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(s)
-	_ = agenticv1alpha1.AddToScheme(s)
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
 	return s
 }()
 

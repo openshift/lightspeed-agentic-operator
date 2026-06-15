@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,8 +18,8 @@ const configName = "cluster"
 
 var scheme = func() *runtime.Scheme {
 	s := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(s)
-	_ = agenticv1alpha1.AddToScheme(s)
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
 	return s
 }()
 

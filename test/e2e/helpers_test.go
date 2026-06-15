@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
@@ -43,7 +44,7 @@ func newClient(t *testing.T) client.Client {
 	}
 
 	s := scheme.Scheme
-	_ = agenticv1alpha1.AddToScheme(s)
+	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
 
 	c, err := client.New(cfg, client.Options{Scheme: s})
 	if err != nil {

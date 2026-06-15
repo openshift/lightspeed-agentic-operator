@@ -6,14 +6,15 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 func testScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(s)
-	_ = agenticv1alpha1.AddToScheme(s)
+	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
 	return s
 }
 

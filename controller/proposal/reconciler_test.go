@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -74,9 +75,9 @@ func (ta *testAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha
 
 func testScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
-	_ = agenticv1alpha1.AddToScheme(s)
-	_ = corev1.AddToScheme(s)
-	_ = rbacv1.AddToScheme(s)
+	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
+	utilruntime.Must(corev1.AddToScheme(s))
+	utilruntime.Must(rbacv1.AddToScheme(s))
 	return s
 }
 
