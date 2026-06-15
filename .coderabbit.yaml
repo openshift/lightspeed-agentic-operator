@@ -8,6 +8,9 @@ tone_instructions: >-
 
 reviews:
   profile: chill
+  request_changes_workflow: true
+  pre_merge_checks:
+    override_requested_reviewers_only: true
 
   auto_review:
     enabled: true
