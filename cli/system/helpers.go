@@ -43,9 +43,5 @@ func getConfig(ctx context.Context, c client.Client) (*agenticv1alpha1.AgenticOL
 }
 
 func isNoMatchError(err error) bool {
-	if err == nil {
-		return false
-	}
-	_, ok := err.(*meta.NoKindMatchError)
-	return ok
+	return meta.IsNoMatchError(err)
 }

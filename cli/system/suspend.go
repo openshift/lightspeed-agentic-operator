@@ -79,10 +79,17 @@ func (o *SuspendOptions) Run(ctx context.Context) error {
 			Spec:       agenticv1alpha1.AgenticOLSConfigSpec{Suspended: true},
 		}
 		if err := o.client.Create(ctx, cfg); err != nil {
-			return fmt.Errorf("failed to create AgenticOLSConfig: %w", err)
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("failed to create AgenticOLSConfig: %w", err)
+			}
+			cfg, err = getConfig(ctx, o.client)
+			if err != nil {
+				return fmt.Errorf("failed to get AgenticOLSConfig after conflict: %w", err)
+			}
+		} else {
+			fmt.Fprintln(o.Out, "Agentic system suspended.")
+			return nil
 		}
-		fmt.Fprintln(o.Out, "Agentic system suspended.")
-		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("failed to get AgenticOLSConfig: %w", err)
