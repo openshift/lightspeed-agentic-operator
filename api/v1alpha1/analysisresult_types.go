@@ -50,6 +50,10 @@ type AnalysisResultStatus struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=8192
 	FailureReason string `json:"failureReason,omitempty"`
+
+	// metrics contains telemetry from the sandbox agent for this step.
+	// +optional
+	Metrics StepMetrics `json:"metrics,omitzero"`
 }
 
 // AnalysisResultSpec contains the immutable identity fields for an AnalysisResult.

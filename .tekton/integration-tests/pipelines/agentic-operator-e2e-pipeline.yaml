@@ -143,7 +143,7 @@ spec:
               - name: NAMESPACE
                 value: "$(params.namespace)"
               - name: SANDBOX_IMAGE
-                value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent"
+                value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent-metric"
             image: registry.redhat.io/openshift4/ose-cli:latest
             script: |
               set -euo pipefail

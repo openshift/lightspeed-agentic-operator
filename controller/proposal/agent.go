@@ -10,6 +10,7 @@ import (
 type AnalysisOutput struct {
 	Success bool
 	Options []agenticv1alpha1.RemediationOption
+	Metrics *RunMetrics
 }
 
 // ExecutionOutput holds the execution agent's output.
@@ -17,6 +18,7 @@ type ExecutionOutput struct {
 	Success      bool
 	ActionsTaken []agenticv1alpha1.ExecutionAction
 	Verification agenticv1alpha1.ExecutionVerification
+	Metrics      *RunMetrics
 }
 
 // VerificationOutput holds the verification agent's output.
@@ -24,6 +26,7 @@ type VerificationOutput struct {
 	Success bool
 	Checks  []agenticv1alpha1.VerifyCheck
 	Summary string
+	Metrics *RunMetrics
 }
 
 // EscalationOutput holds the escalation agent's output.
@@ -31,6 +34,7 @@ type EscalationOutput struct {
 	Success bool
 	Summary string
 	Content string
+	Metrics *RunMetrics
 }
 
 // AgentCaller abstracts the agent invocation path. The reconciler

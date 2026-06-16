@@ -31,7 +31,7 @@ func TestAgentHTTPClient_RunSuccess(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"options": [{"title": "Fix it"}]}`))
+		w.Write([]byte(`{"metrics":{"latency_ms":100,"input_tokens":10,"output_tokens":5,"model":"test","provider":"test","tool_calls_count":0},"result":{"options": [{"title": "Fix it"}]}}`))
 	}))
 	defer server.Close()
 
@@ -40,8 +40,11 @@ func TestAgentHTTPClient_RunSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(resp.Response) == 0 {
-		t.Error("expected non-empty response")
+	if len(resp.Result) == 0 {
+		t.Error("expected non-empty result")
+	}
+	if resp.Metrics == nil {
+		t.Error("expected non-nil metrics")
 	}
 }
 
@@ -96,7 +99,7 @@ func TestAgentHTTPClient_RunWithExecutionResult(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success": true}`))
+		w.Write([]byte(`{"metrics":{"latency_ms":50,"input_tokens":5,"output_tokens":3,"model":"test","provider":"test","tool_calls_count":0},"result":{"success": true}}`))
 	}))
 	defer server.Close()
 
@@ -131,7 +134,7 @@ func TestAgentHTTPClient_RunWithoutExecutionResult(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success": true}`))
+		w.Write([]byte(`{"metrics":{"latency_ms":50,"input_tokens":5,"output_tokens":3,"model":"test","provider":"test","tool_calls_count":0},"result":{"success": true}}`))
 	}))
 	defer server.Close()
 
@@ -165,7 +168,7 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"success": true}`))
+		w.Write([]byte(`{"metrics":{"latency_ms":50,"input_tokens":5,"output_tokens":3,"model":"test","provider":"test","tool_calls_count":0},"result":{"success": true}}`))
 	}))
 	defer server.Close()
 

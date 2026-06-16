@@ -21,7 +21,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: agent
-          image: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent
+          image: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent-metric
           args: ["-addr", ":8080"]
           ports:
             - name: http

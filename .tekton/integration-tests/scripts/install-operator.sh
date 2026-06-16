@@ -9,7 +9,7 @@
 # Optional env:
 #   OPERATOR_NAMESPACE  (default: openshift-lightspeed)
 #   SANDBOX_MODE        (default: bare-pod)
-#   SANDBOX_IMAGE       (default: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent)
+#   SANDBOX_IMAGE       (default: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent-metric)
 
 set -euo pipefail
 
@@ -18,7 +18,7 @@ set -euo pipefail
 
 OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
 SANDBOX_MODE="${SANDBOX_MODE:-bare-pod}"
-SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent-metric}"
 
 echo "=== Agentic operator install ==="
 echo "  IMG:                ${IMG}"

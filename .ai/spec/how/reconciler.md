@@ -125,7 +125,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 - **Constructor:** Accepts `SandboxProvider`, `client.Client`, `ClientFactory func(endpoint string) AgentHTTPClientInterface`, operator namespace. `Timeout` defaults to `defaultSandboxTimeout` const.
 - **`callWithSandbox` order:** `SetStep` on provider → `Claim` → `patchSandboxInfo` (status subresource merge) → `WaitReady` → normalize URL (`http://{endpoint}:8080` if no scheme) → `outputSchemaForStep` → `ClientFactory(endpoint).Run(ctx, "", query, schema, agentCtx)`. Template derivation (sandbox-claim mode) happens inside `SandboxManager.Claim`; bare-pod mode builds the pod spec inside `BarePodManager.Claim`.
-- **`Run` contract:** Empty `systemPrompt`; full payload in POST body per `client.go` (`query`, `outputSchema`, `context`). Path constant `/v1/agent/run`.
+- **`Run` contract:** Empty `systemPrompt`; full payload in POST body per `client.go` (`query`, `outputSchema`, `context`). Path constant `/v1/agent/run`. Response is a `{metrics, result}` envelope; `callWithSandbox` returns both the raw result JSON and the parsed `RunMetrics`.
 - **`buildAgentContext`:** `TargetNamespaces`, `ApprovedOption` / `ExecutionResult` per step, `PreviousAttempts` from failed `StepResultRef` outcomes across analysis/execution/verification result lists.
 - **`ReleaseSandboxes`:** Iterates `Status.Steps.{Analysis,Execution,Verification,Escalation}.Sandbox.ClaimName` and calls `Release` for each non-empty.
 
@@ -135,7 +135,8 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 - **`AgentHTTPClientInterface`:** `Run(ctx, systemPrompt, query, outputSchema, agentCtx) (*agentRunResponse, error)`.
 - **`NewAgentHTTPClient`:** Returns concrete type with long HTTP timeout, TLS `InsecureSkipVerify` for in-cluster calls.
-- **`Run`:** Marshals `agentRunRequest`, POSTs, reads capped body size, non-200 → error with truncated body; 200 → raw JSON in `agentRunResponse.Response` for caller to unmarshal phase-specific structs.
+- **`Run`:** Marshals `agentRunRequest`, POSTs, reads capped body size, non-200 → error with truncated body; 200 → parses `{metrics, result}` envelope. Returns `agentRunResponse` containing both `Result json.RawMessage` (per-step workflow data) and `Metrics *RunMetrics` (telemetry). Callers unmarshal `Result` into phase-specific structs; `Metrics` is passed to Result CR creation for storage.
+- **`RunMetrics`:** `LatencyMs int64`, `InputTokens int64`, `OutputTokens int64`, `CostUSD *string` (nil when unknown; decimal string e.g. "0.05"), `Model string`, `Provider string`, `ToolCallsCount int`.
 
 ---
 

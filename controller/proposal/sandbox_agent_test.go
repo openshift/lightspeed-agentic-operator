@@ -102,7 +102,7 @@ func TestSandboxAgentCaller_Analyze_HappyPath(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "options": [{"title": "Increase memory", "diagnosis": {"summary": "OOM", "confidence": "High", "rootCause": "memory limit"}, "proposal": {"description": "Bump memory", "actions": [{"type": "patch", "description": "patch deploy"}], "risk": "Low"}}]}`),
+			Result: json.RawMessage(`{"success": true, "options": [{"title": "Increase memory", "diagnosis": {"summary": "OOM", "confidence": "High", "rootCause": "memory limit"}, "proposal": {"description": "Bump memory", "actions": [{"type": "patch", "description": "patch deploy"}], "risk": "Low"}}]}`),
 		},
 	}
 
@@ -126,7 +126,7 @@ func TestSandboxAgentCaller_Execute_HappyPath(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-execution-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "actionsTaken": [{"type": "patch", "description": "Patched deployment", "outcome": "Succeeded"}], "verification": {"conditionOutcome": "Improved", "summary": "Pod running"}}`),
+			Result: json.RawMessage(`{"success": true, "actionsTaken": [{"type": "patch", "description": "Patched deployment", "outcome": "Succeeded"}], "verification": {"conditionOutcome": "Improved", "summary": "Pod running"}}`),
 		},
 	}
 
@@ -151,7 +151,7 @@ func TestSandboxAgentCaller_Verify_HappyPath(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-verification-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "checks": [{"name": "pod-running", "source": "oc", "value": "Running", "result": "Passed"}], "summary": "All checks passed"}`),
+			Result: json.RawMessage(`{"success": true, "checks": [{"name": "pod-running", "source": "oc", "value": "Running", "result": "Passed"}], "summary": "All checks passed"}`),
 		},
 	}
 
@@ -221,7 +221,7 @@ func TestSandboxAgentCaller_HTTPError(t *testing.T) {
 func TestSandboxAgentCaller_ParseError(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage("not valid json")},
+		response: &agentRunResponse{Result: json.RawMessage("not valid json")},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -237,7 +237,7 @@ func TestSandboxAgentCaller_ParseError(t *testing.T) {
 func TestSandboxAgentCaller_SandboxNotReleasedAfterCall(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "options": []}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "options": []}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -256,7 +256,7 @@ func TestSandboxAgentCaller_SandboxNotReleasedAfterCall(t *testing.T) {
 func TestSandboxAgentCaller_ContextPropagation(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "options": []}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "options": []}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -301,7 +301,7 @@ func TestSandboxAgentCaller_ContextPropagation(t *testing.T) {
 func TestSandboxAgentCaller_VerifyPassesExecutionResult(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -349,7 +349,7 @@ func TestSandboxAgentCaller_VerifyPassesExecutionResult(t *testing.T) {
 func TestSandboxAgentCaller_VerifyNilExecLeavesExecutionResultNil(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -366,7 +366,7 @@ func TestSandboxAgentCaller_VerifyNilExecLeavesExecutionResultNil(t *testing.T) 
 func TestSandboxAgentCaller_VerifyExecWithoutInlineVerification(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -390,7 +390,7 @@ func TestSandboxAgentCaller_VerifyExecWithoutInlineVerification(t *testing.T) {
 func TestSandboxAgentCaller_ExecutePassesApprovedOption(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "actionsTaken": []}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "actionsTaken": []}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -410,7 +410,7 @@ func TestSandboxAgentCaller_ExecutePassesApprovedOption(t *testing.T) {
 func TestSandboxAgentCaller_AnalysisQueryFraming(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "options": []}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "options": []}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -430,7 +430,7 @@ func TestSandboxAgentCaller_AnalysisQueryFraming(t *testing.T) {
 func TestSandboxAgentCaller_ExecutionQueryFraming(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "actionsTaken": []}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "actionsTaken": []}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -460,7 +460,7 @@ func TestSandboxAgentCaller_ExecutionQueryFraming(t *testing.T) {
 func TestSandboxAgentCaller_VerificationQueryFraming(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "checks": [], "summary": "ok"}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -492,7 +492,7 @@ func TestSandboxAgentCaller_VerificationQueryFraming(t *testing.T) {
 func TestSandboxAgentCaller_ExecutionQueryNilOption(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "claim-1", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
-		response: &agentRunResponse{Response: json.RawMessage(`{"success": true, "actionsTaken": []}`)},
+		response: &agentRunResponse{Result: json.RawMessage(`{"success": true, "actionsTaken": []}`)},
 	}
 
 	caller := newTestSandboxAgentCaller(sandbox, httpClient)
@@ -512,7 +512,7 @@ func TestSandboxAgentCaller_Analyze_PatchesSandboxInfo(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "options": [{"title": "Fix it", "diagnosis": {"summary": "broken", "confidence": "High", "rootCause": "bug"}, "proposal": {"description": "fix", "actions": [{"type": "patch", "description": "patch"}], "risk": "Low"}}]}`),
+			Result: json.RawMessage(`{"success": true, "options": [{"title": "Fix it", "diagnosis": {"summary": "broken", "confidence": "High", "rootCause": "bug"}, "proposal": {"description": "fix", "actions": [{"type": "patch", "description": "patch"}], "risk": "Low"}}]}`),
 		},
 	}
 
@@ -541,7 +541,7 @@ func TestSandboxAgentCaller_Execute_PatchesSandboxInfo(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-execution-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "actionsTaken": [{"type": "patch", "description": "patched deploy"}]}`),
+			Result: json.RawMessage(`{"success": true, "actionsTaken": [{"type": "patch", "description": "patched deploy"}]}`),
 		},
 	}
 
@@ -567,7 +567,7 @@ func TestSandboxAgentCaller_Verify_PatchesSandboxInfo(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-verification-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "checks": [{"name": "pod-running", "source": "oc", "value": "Running", "result": "Passed"}], "summary": "All checks passed"}`),
+			Result: json.RawMessage(`{"success": true, "checks": [{"name": "pod-running", "source": "oc", "value": "Running", "result": "Passed"}], "summary": "All checks passed"}`),
 		},
 	}
 
@@ -593,7 +593,7 @@ func TestSandboxAgentCaller_SandboxInfoPatch_DoesNotBlockOnError(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
 	httpClient := &mockHTTPClient{
 		response: &agentRunResponse{
-			Response: json.RawMessage(`{"success": true, "options": []}`),
+			Result: json.RawMessage(`{"success": true, "options": []}`),
 		},
 	}
 

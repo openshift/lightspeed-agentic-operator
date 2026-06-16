@@ -19,6 +19,25 @@ const (
 	ErrPatchResultStatus          = "patch"
 )
 
+func toStepMetrics(m *RunMetrics) agenticv1alpha1.StepMetrics {
+	if m == nil {
+		return agenticv1alpha1.StepMetrics{}
+	}
+	toolCalls := int32(m.ToolCallsCount)
+	sm := agenticv1alpha1.StepMetrics{
+		LatencyMs:      &m.LatencyMs,
+		InputTokens:    &m.InputTokens,
+		OutputTokens:   &m.OutputTokens,
+		Model:          m.Model,
+		Provider:       m.Provider,
+		ToolCallsCount: &toolCalls,
+	}
+	if m.CostUSD != nil {
+		sm.CostUSD = *m.CostUSD
+	}
+	return sm
+}
+
 func resultCRName(proposalName, step string, index int) string {
 	return truncateK8sName(fmt.Sprintf("%s-%s-%d", proposalName, step, index))
 }
@@ -111,6 +130,7 @@ func (r *ProposalReconciler) createAnalysisResult(
 
 	if result != nil {
 		cr.Status.Options = result.Options
+		cr.Status.Metrics = toStepMetrics(result.Metrics)
 	}
 
 	return crName, createIdempotent(ctx, r.Client, cr, "AnalysisResult")
@@ -158,6 +178,7 @@ func (r *ProposalReconciler) createExecutionResult(
 	if result != nil {
 		cr.Status.ActionsTaken = result.ActionsTaken
 		cr.Status.Verification = result.Verification
+		cr.Status.Metrics = toStepMetrics(result.Metrics)
 	}
 
 	return crName, createIdempotent(ctx, r.Client, cr, "ExecutionResult")
@@ -205,6 +226,7 @@ func (r *ProposalReconciler) createVerificationResult(
 	if result != nil {
 		cr.Status.Checks = result.Checks
 		cr.Status.Summary = result.Summary
+		cr.Status.Metrics = toStepMetrics(result.Metrics)
 	}
 
 	return crName, createIdempotent(ctx, r.Client, cr, "VerificationResult")
@@ -251,6 +273,7 @@ func (r *ProposalReconciler) createEscalationResult(
 	if result != nil {
 		cr.Status.Summary = result.Summary
 		cr.Status.Content = result.Content
+		cr.Status.Metrics = toStepMetrics(result.Metrics)
 	}
 
 	return crName, createIdempotent(ctx, r.Client, cr, "EscalationResult")
@@ -272,6 +295,7 @@ func copyResultStatus(dst, src client.Object) {
 			d.Status.Options = s.Status.Options
 			d.Status.FailureReason = s.Status.FailureReason
 			d.Status.Sandbox = s.Status.Sandbox
+			d.Status.Metrics = s.Status.Metrics
 		}
 	case *agenticv1alpha1.ExecutionResult:
 		if s, ok := src.(*agenticv1alpha1.ExecutionResult); ok {
@@ -279,6 +303,7 @@ func copyResultStatus(dst, src client.Object) {
 			d.Status.Verification = s.Status.Verification
 			d.Status.FailureReason = s.Status.FailureReason
 			d.Status.Sandbox = s.Status.Sandbox
+			d.Status.Metrics = s.Status.Metrics
 		}
 	case *agenticv1alpha1.VerificationResult:
 		if s, ok := src.(*agenticv1alpha1.VerificationResult); ok {
@@ -286,6 +311,7 @@ func copyResultStatus(dst, src client.Object) {
 			d.Status.Summary = s.Status.Summary
 			d.Status.FailureReason = s.Status.FailureReason
 			d.Status.Sandbox = s.Status.Sandbox
+			d.Status.Metrics = s.Status.Metrics
 		}
 	case *agenticv1alpha1.EscalationResult:
 		if s, ok := src.(*agenticv1alpha1.EscalationResult); ok {
@@ -293,6 +319,7 @@ func copyResultStatus(dst, src client.Object) {
 			d.Status.Content = s.Status.Content
 			d.Status.FailureReason = s.Status.FailureReason
 			d.Status.Sandbox = s.Status.Sandbox
+			d.Status.Metrics = s.Status.Metrics
 		}
 	}
 }

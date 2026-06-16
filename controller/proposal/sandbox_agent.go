@@ -77,7 +77,7 @@ func stepString(step agenticv1alpha1.SandboxStep) string {
 
 func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string, serviceAccount string) (*AnalysisOutput, error) {
 	query := buildAnalysisQuery(requestText, proposal)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(proposal), serviceAccount)
+	raw, metrics, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(proposal), serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrAnalysisAgentCall, err)
 	}
@@ -90,6 +90,7 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alp
 	return &AnalysisOutput{
 		Success: resp.Success,
 		Options: resp.Options,
+		Metrics: metrics,
 	}, nil
 }
 
@@ -100,7 +101,7 @@ func (s *SandboxAgentCaller) Execute(ctx context.Context, proposal *agenticv1alp
 	}
 
 	query := buildExecutionQuery(option)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx, serviceAccount)
+	raw, metrics, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx, serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrExecutionAgentCall, err)
 	}
@@ -113,6 +114,7 @@ func (s *SandboxAgentCaller) Execute(ctx context.Context, proposal *agenticv1alp
 	out := &ExecutionOutput{
 		Success:      resp.Success,
 		ActionsTaken: resp.ActionsTaken,
+		Metrics:      metrics,
 	}
 	if resp.Verification != nil {
 		out.Verification = *resp.Verification
@@ -128,7 +130,7 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alph
 	agentCtx.ExecutionResult = executionOutputToAgentResult(exec)
 
 	query := buildVerificationQuery(option, exec)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx, serviceAccount)
+	raw, metrics, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx, serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrVerificationAgentCall, err)
 	}
@@ -142,12 +144,13 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, proposal *agenticv1alph
 		Success: resp.Success,
 		Checks:  resp.Checks,
 		Summary: resp.Summary,
+		Metrics: metrics,
 	}, nil
 }
 
 func (s *SandboxAgentCaller) Escalate(ctx context.Context, proposal *agenticv1alpha1.Proposal, step resolvedStep, requestText string, serviceAccount string) (*EscalationOutput, error) {
 	agentCtx := buildAgentContext(proposal)
-	raw, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx, serviceAccount)
+	raw, metrics, err := s.callWithSandbox(ctx, proposal, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx, serviceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrEscalationAgentCall, err)
 	}
@@ -165,6 +168,7 @@ func (s *SandboxAgentCaller) Escalate(ctx context.Context, proposal *agenticv1al
 		Success: resp.Success,
 		Summary: resp.Summary,
 		Content: resp.Content,
+		Metrics: metrics,
 	}, nil
 }
 
@@ -176,12 +180,12 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	query string,
 	agentCtx *agentContext,
 	serviceAccount string,
-) (json.RawMessage, error) {
+) (json.RawMessage, *RunMetrics, error) {
 	s.Sandbox.SetStep(step.Agent, step.LLM, step.Tools, serviceAccount)
 
 	claimName, err := s.Sandbox.Claim(ctx, proposal.Name, stepName, "")
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", ErrClaimSandbox, err)
+		return nil, nil, fmt.Errorf("%s: %w", ErrClaimSandbox, err)
 	}
 
 	// Write sandbox info immediately so the console can stream logs
@@ -195,7 +199,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 
 	endpoint, err := s.Sandbox.WaitReady(ctx, claimName, timeout)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", ErrWaitForSandbox, err)
+		return nil, nil, fmt.Errorf("%s: %w", ErrWaitForSandbox, err)
 	}
 
 	agentURL := endpoint
@@ -208,10 +212,10 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	client := s.ClientFactory(agentURL)
 	resp, err := client.Run(ctx, "", query, schema, agentCtx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	return resp.Response, nil
+	return resp.Result, resp.Metrics, nil
 }
 
 func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, proposal *agenticv1alpha1.Proposal) error {

@@ -64,8 +64,21 @@ type agentPreviousAttempt struct {
 	FailureReason string `json:"failureReason,omitempty"`
 }
 
+// RunMetrics contains sandbox-owned telemetry from the agent response envelope.
+type RunMetrics struct {
+	LatencyMs      int64   `json:"latency_ms"`
+	InputTokens    int64   `json:"input_tokens"`
+	OutputTokens   int64   `json:"output_tokens"`
+	CostUSD        *string `json:"cost_usd,omitempty"`
+	Model          string  `json:"model"`
+	Provider       string  `json:"provider"`
+	ToolCallsCount int     `json:"tool_calls_count"`
+}
+
+// agentRunResponse is the envelope returned by POST /v1/agent/run.
 type agentRunResponse struct {
-	Response json.RawMessage
+	Metrics *RunMetrics     `json:"metrics"`
+	Result  json.RawMessage `json:"result"`
 }
 
 // AgentHTTPClientInterface abstracts HTTP calls to the agent service for testability.
@@ -129,5 +142,13 @@ func (c *AgentHTTPClient) Run(ctx context.Context, systemPrompt, query string, o
 		return nil, fmt.Errorf("POST %s returned HTTP %d: %s", runPath, resp.StatusCode, truncated)
 	}
 
-	return &agentRunResponse{Response: respBody}, nil
+	var response agentRunResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return nil, fmt.Errorf("parse response envelope: %w", err)
+	}
+	if len(response.Result) == 0 || string(response.Result) == "null" {
+		return nil, fmt.Errorf("response envelope missing or null 'result' field")
+	}
+
+	return &response, nil
 }

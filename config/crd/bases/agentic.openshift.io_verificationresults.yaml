@@ -194,6 +194,58 @@ spec:
                 maxLength: 8192
                 minLength: 1
                 type: string
+              metrics:
+                description: metrics contains telemetry from the sandbox agent for
+                  this step.
+                properties:
+                  costUsd:
+                    description: |-
+                      costUsd is the estimated cost in US dollars for this step, if known.
+                      Serialized as a string to avoid floating-point portability issues (e.g. "0.05").
+                    maxLength: 32
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: costUsd must be a decimal number string (e.g. '0.05')
+                      rule: self.matches('^[0-9]+(\\.[0-9]+)?$')
+                  inputTokens:
+                    description: inputTokens is the number of input tokens consumed
+                      by the LLM.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  latencyMs:
+                    description: latencyMs is the wall-clock time (milliseconds) the
+                      agent spent processing.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  model:
+                    description: model is the LLM model used (e.g. "claude-opus-4-6").
+                    maxLength: 128
+                    minLength: 1
+                    type: string
+                  outputTokens:
+                    description: outputTokens is the number of output tokens produced
+                      by the LLM.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  provider:
+                    description: provider is the LLM provider used (e.g. "anthropic",
+                      "openai").
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  toolCallsCount:
+                    description: toolCallsCount is the number of tool invocations
+                      the agent made.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                required:
+                - latencyMs
+                type: object
               sandbox:
                 description: sandbox tracks the sandbox pod used for this verification.
                 properties:

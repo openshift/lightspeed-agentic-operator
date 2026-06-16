@@ -151,11 +151,13 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(d)
 	}
 
-	body := cannedResponse(phase, ns)
+	result := cannedResponse(phase, ns)
+
+	envelope := fmt.Sprintf(`{"metrics":{"latency_ms":1500,"input_tokens":100,"output_tokens":50,"model":"mock-model","provider":"mock","tool_calls_count":1},"result":%s}`, string(result))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(body); err != nil {
+	if _, err := w.Write([]byte(envelope)); err != nil {
 		log.Printf("write response: %v", err)
 	}
 }

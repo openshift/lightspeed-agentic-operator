@@ -7,7 +7,7 @@
 _AGENT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 ROOT := $(abspath $(_AGENT_DIR)/../..)
 CONTAINER_TOOL ?= $(shell which podman >/dev/null 2>&1 && echo podman || echo docker)
-IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent
+IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent-metric
 
 .PHONY: docker-build docker-push
 

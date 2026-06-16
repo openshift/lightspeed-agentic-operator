@@ -110,7 +110,7 @@ endif
 # Sandbox mode: "bare-pod" (default) or "sandbox-claim".
 SANDBOX_MODE ?= bare-pod
 # Agent sandbox image used by bare-pod mode (the container the operator creates per step).
-SANDBOX_IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent
+SANDBOX_IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent-metric
 
 # kubernetes-sigs/agent-sandbox release reference (used only for documentation links).
 AGENT_SANDBOX_VERSION ?= v0.4.5

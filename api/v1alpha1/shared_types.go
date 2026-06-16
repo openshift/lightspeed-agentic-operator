@@ -191,3 +191,47 @@ type SkillsSource struct {
 	// +kubebuilder:validation:items:MaxLength=512
 	Paths []string `json:"paths,omitempty"`
 }
+
+// StepMetrics contains telemetry data collected during a workflow step execution.
+// Populated from the sandbox agent's response envelope.
+type StepMetrics struct {
+	// latencyMs is the wall-clock time (milliseconds) the agent spent processing.
+	// +required
+	// +kubebuilder:validation:Minimum=0
+	LatencyMs *int64 `json:"latencyMs,omitempty"`
+
+	// inputTokens is the number of input tokens consumed by the LLM.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	InputTokens *int64 `json:"inputTokens,omitempty"`
+
+	// outputTokens is the number of output tokens produced by the LLM.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	OutputTokens *int64 `json:"outputTokens,omitempty"`
+
+	// costUsd is the estimated cost in US dollars for this step, if known.
+	// Serialized as a string to avoid floating-point portability issues (e.g. "0.05").
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=32
+	// +kubebuilder:validation:XValidation:rule="self.matches('^[0-9]+(\\\\.[0-9]+)?$')",message="costUsd must be a decimal number string (e.g. '0.05')"
+	CostUSD string `json:"costUsd,omitempty"`
+
+	// model is the LLM model used (e.g. "claude-opus-4-6").
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=128
+	Model string `json:"model,omitempty"`
+
+	// provider is the LLM provider used (e.g. "anthropic", "openai").
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	Provider string `json:"provider,omitempty"`
+
+	// toolCallsCount is the number of tool invocations the agent made.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ToolCallsCount *int32 `json:"toolCallsCount,omitempty"`
+}
