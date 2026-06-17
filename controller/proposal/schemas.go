@@ -91,7 +91,7 @@ var AnalysisOutputSchema = json.RawMessage(`{
                 "items": {
                   "type": "object",
                   "properties": {
-                    "namespace": { "type": "string", "description": "Target namespace for this rule. Must match one of the proposal's targetNamespaces" },
+                    "namespace": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63, "description": "Target namespace for this rule. Must be a valid Kubernetes namespace name (lowercase alphanumeric and hyphens, no wildcards). Must match one of the proposal's targetNamespaces." },
                     "apiGroups": { "type": "array", "items": { "type": "string" }, "description": "API groups (e.g., '', 'apps', 'batch'). Use empty string '' for the core API group (pods, services, configmaps, etc.)" },
                     "resources": { "type": "array", "items": { "type": "string" }, "description": "Resource types (e.g., 'pods', 'deployments', 'configmaps')" },
                     "resourceNames": { "type": "array", "items": { "type": "string" }, "description": "Restrict to specific named resources. Omit to allow all resources of the given type" },
