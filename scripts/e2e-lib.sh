@@ -103,3 +103,114 @@ cleanup_operator() {
         log_info "Skipping operator cleanup (was pre-existing)"
     fi
 }
+
+default_model_for_provider() {
+    local provider="$1"
+    case "$provider" in
+        claude) echo "claude-sonnet-4-6" ;;
+        gemini) echo "gemini-2.5-flash" ;;
+        openai) echo "gpt-4.1-mini" ;;
+        *) log_error "Unknown provider: $provider"; return 1 ;;
+    esac
+}
+
+resolve_model() {
+    local provider="$1"
+    local override_var="${provider^^}_MODEL"
+    echo "${!override_var:-$(default_model_for_provider "$provider")}"
+}
+
+create_provider_fixtures() {
+    local provider="$1"
+    local namespace="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
+    local model
+    model="$(resolve_model "$provider")"
+
+    local secret_name="e2e-${provider}-secret"
+    local llm_name="e2e-${provider}-llm"
+    local agent_name="e2e-agent"
+
+    log_info "Creating fixtures for provider=$provider model=$model"
+
+    case "$provider" in
+        claude|gemini)
+            local key_path="${VERTEX_PROVIDER_KEY_PATH:?Missing VERTEX_PROVIDER_KEY_PATH for provider $provider}"
+            local project_id="${VERTEX_PROJECT_ID:?Missing VERTEX_PROJECT_ID for provider $provider}"
+            local region="${VERTEX_REGION:-us-central1}"
+            local model_provider
+            case "$model" in
+                claude-*) model_provider="Anthropic" ;;
+                gemini-*) model_provider="Google" ;;
+                *) log_error "Cannot infer modelProvider from model '$model'"; return 1 ;;
+            esac
+
+            oc create secret generic "$secret_name" \
+                --from-file=GOOGLE_APPLICATION_CREDENTIALS="$key_path" \
+                -n "$namespace" --dry-run=client -o yaml | oc apply -f -
+
+            oc apply -f - <<EOF
+apiVersion: agentic.openshift.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: $llm_name
+spec:
+  type: GoogleCloudVertex
+  googleCloudVertex:
+    credentialsSecret:
+      name: $secret_name
+    projectID: $project_id
+    region: $region
+    modelProvider: $model_provider
+EOF
+            ;;
+        openai)
+            local key_path="${OPENAI_PROVIDER_KEY_PATH:?Missing OPENAI_PROVIDER_KEY_PATH for provider $provider}"
+
+            oc create secret generic "$secret_name" \
+                --from-file=OPENAI_API_KEY="$key_path" \
+                -n "$namespace" --dry-run=client -o yaml | oc apply -f -
+
+            oc apply -f - <<EOF
+apiVersion: agentic.openshift.io/v1alpha1
+kind: LLMProvider
+metadata:
+  name: $llm_name
+spec:
+  type: OpenAI
+  openAI:
+    credentialsSecret:
+      name: $secret_name
+EOF
+            ;;
+        *)
+            log_error "Unknown provider: $provider"
+            return 1
+            ;;
+    esac
+
+    oc apply -f - <<EOF
+apiVersion: agentic.openshift.io/v1alpha1
+kind: Agent
+metadata:
+  name: $agent_name
+spec:
+  llmProvider:
+    name: $llm_name
+  model: $model
+EOF
+
+    log_info "Fixtures created for provider=$provider"
+}
+
+cleanup_provider_fixtures() {
+    local provider="$1"
+    local namespace="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
+    local secret_name="e2e-${provider}-secret"
+    local llm_name="e2e-${provider}-llm"
+    local agent_name="e2e-agent"
+
+    log_info "Cleaning up fixtures for provider=$provider"
+    oc delete agent "$agent_name" --ignore-not-found 2>/dev/null || true
+    oc delete llmprovider "$llm_name" --ignore-not-found 2>/dev/null || true
+    oc delete secret "$secret_name" -n "$namespace" --ignore-not-found 2>/dev/null || true
+}
