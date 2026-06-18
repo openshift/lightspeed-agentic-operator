@@ -214,3 +214,37 @@ cleanup_provider_fixtures() {
     oc delete llmprovider "$llm_name" --ignore-not-found 2>/dev/null || true
     oc delete secret "$secret_name" -n "$namespace" --ignore-not-found 2>/dev/null || true
 }
+
+collect_artifacts() {
+    local provider="$1"
+    local namespace="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
+
+    if [[ -z "${ARTIFACT_DIR:-}" ]]; then
+        log_info "ARTIFACT_DIR not set — skipping artifact collection for $provider"
+        return 0
+    fi
+
+    local artifact_dir="$ARTIFACT_DIR/$provider"
+    mkdir -p "$artifact_dir"
+
+    log_info "Collecting artifacts for provider=$provider → $artifact_dir"
+
+    oc logs deployment/controller-manager -n "$namespace" --tail=500 \
+        > "$artifact_dir/operator-logs.txt" 2>/dev/null || true
+    oc logs deployment/controller-manager -n "$namespace" --tail=500 --previous \
+        > "$artifact_dir/operator-logs-previous.txt" 2>/dev/null || true
+    oc get proposals -A -o yaml \
+        > "$artifact_dir/proposals.yaml" 2>/dev/null || true
+    oc get proposalapprovals -A -o yaml \
+        > "$artifact_dir/proposalapprovals.yaml" 2>/dev/null || true
+    oc get analysisresults -A -o yaml \
+        > "$artifact_dir/analysisresults.yaml" 2>/dev/null || true
+    oc get executionresults -A -o yaml \
+        > "$artifact_dir/executionresults.yaml" 2>/dev/null || true
+    oc get verificationresults -A -o yaml \
+        > "$artifact_dir/verificationresults.yaml" 2>/dev/null || true
+    oc get pods -n "$namespace" -o yaml \
+        > "$artifact_dir/pods.yaml" 2>/dev/null || true
+
+    log_info "Artifacts collected for $provider: $(ls "$artifact_dir" | wc -l) files"
+}
