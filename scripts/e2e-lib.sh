@@ -51,3 +51,55 @@ parse_snapshot() {
         log_info "Using IMG=$IMG (no SNAPSHOT)"
     fi
 }
+
+_OPERATOR_DEPLOYED_BY_SCRIPT=0
+
+deploy_operator() {
+    local namespace="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
+
+    if oc get deployment controller-manager -n "$namespace" &>/dev/null; then
+        local available
+        available="$(oc get deployment controller-manager -n "$namespace" \
+            -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)"
+        if [[ "$available" == "True" ]]; then
+            log_info "Operator already deployed and available in $namespace — skipping install"
+            return 0
+        fi
+        log_warn "Operator deployment exists but not Available — reinstalling"
+    fi
+
+    log_info "Deploying operator (IMG=$IMG, namespace=$namespace)..."
+
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+    IMG="$IMG" \
+    KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
+    OPERATOR_NAMESPACE="$namespace" \
+    SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent}" \
+    bash "${script_dir}/.tekton/integration-tests/scripts/install-operator.sh"
+
+    _OPERATOR_DEPLOYED_BY_SCRIPT=1
+    wait_for_deployment "$namespace"
+}
+
+wait_for_deployment() {
+    local namespace="$1"
+    local timeout="${2:-120s}"
+    log_info "Waiting for operator deployment (timeout=$timeout)..."
+    if ! oc rollout status deployment/controller-manager -n "$namespace" --timeout="$timeout"; then
+        log_error "Operator deployment did not become available within $timeout"
+        oc get deployment controller-manager -n "$namespace" -o yaml >&2 || true
+        exit 1
+    fi
+    log_info "Operator deployment is available"
+}
+
+cleanup_operator() {
+    if [[ "$_OPERATOR_DEPLOYED_BY_SCRIPT" -eq 1 ]]; then
+        log_info "Cleaning up operator (deployed by this script)..."
+        make undeploy ignore-not-found=true 2>/dev/null || true
+    else
+        log_info "Skipping operator cleanup (was pre-existing)"
+    fi
+}
