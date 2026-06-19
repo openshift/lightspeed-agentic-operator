@@ -48,6 +48,8 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 42. **AgenticOLSConfig — singleton name**: CRD validation requires `metadata.name` equals `cluster` (same pattern as `ApprovalPolicy`).
 43. **AgenticOLSConfig — `spec.suspended`**: Bool, optional, default `false`. When `true`, halts all agentic operations cluster-wide and terminates in-flight proposals with `EmergencyStopped` condition. See `system-config.md` for full semantics.
 44. **AgenticOLSConfig — absence**: When no `AgenticOLSConfig` CR exists, the system MUST behave as if `spec.suspended` is `false`.
+45. **AgenticOLSConfig — status subresource**: `AgenticOLSConfig` MUST have a `/status` subresource with `conditions` array (`metav1.Condition`). Condition type `Suspended` tracks whether the operator has acknowledged and acted on `spec.suspended`. See `system-config.md` rules 5a–5e for full semantics.
+46. **AgenticOLSConfig — status RBAC**: The operator's service account MUST have `get`, `update`, `patch` on `agenticolsconfigs/status` in addition to existing permissions on the main resource.
 
 ## Configuration Surface (by path)
 
@@ -67,6 +69,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 ### AgenticOLSConfig
 - `metadata.name` (must be `cluster`), `spec.suspended`
+- `status.conditions` — condition types: `Suspended`
 - See `system-config.md` for full behavioral rules
 
 ### ProposalApproval
@@ -91,4 +94,4 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 - [PLANNED: OLS-2940] Autonomous workflow CRD migrations may rename or reshape fields; specs MUST be updated when `v1alpha1` changes.
 - [PLANNED: OLS-2894] Explicit **Agent** fields for per-step system prompts if moved from template/runtime-only assembly (today prompts are composed outside `Agent` CR — see `sandbox-execution.md`).
-- [PLANNED: OLS-3018] `AgenticOLSConfig` CRD with `spec.suspended` kill switch, `EmergencyStopped` condition type on Proposal, console and CLI visibility. See `system-config.md` for full specification.
+- [PLANNED: OLS-3267] `AgenticOLSConfig` status subresource with `Suspended` condition for suspension lifecycle observability. See `system-config.md` rules 5a–5e.

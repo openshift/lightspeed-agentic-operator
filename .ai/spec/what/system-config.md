@@ -2,7 +2,7 @@
 
 Behavioral specification for the cluster-wide agentic system configuration CR and its **emergency suspension** (kill switch) capability. **Proposal lifecycle phases** are in `proposal-lifecycle.md`. **CRD field semantics** for other kinds are in `crd-api.md`.
 
-Jira tracking: OLS-3018.
+Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 
 ## Behavioral Rules
 
@@ -23,6 +23,16 @@ Jira tracking: OLS-3018.
 9. **DerivePhase precedence**: `EmergencyStopped=True` MUST be checked **before** all other conditions in `DerivePhase()`. It takes precedence over `Escalated`, `Denied`, and all progress conditions.
 10. **Resumption**: Setting `spec.suspended` back to `false` re-enables the system for **new** proposals only. Existing `EmergencyStopped` proposals remain terminal.
 11. **New proposal blocking**: While `suspended=true`, proposals that are already in `Pending` phase (no conditions set yet) MUST also be terminated with `EmergencyStopped` — suspension applies to all non-terminal proposals, not just those with active sandboxes.
+
+### Suspension Status and Observability
+
+5a. **Status subresource**: `AgenticOLSConfig` MUST have a `/status` subresource. The status MUST include a `conditions` array following the standard `metav1.Condition` shape.
+5b. **Suspended condition**: When `spec.suspended` is set to `true` and the operator has processed the suspension, the operator MUST set condition type `Suspended` with status `True`, reason `AdminActivated`, and `lastTransitionTime` reflecting when suspension was activated. The message SHOULD include the count of proposals emergency-stopped (e.g., `"System suspended; 12 proposals emergency-stopped"`).
+5c. **Suspended condition on deactivation**: When `spec.suspended` is set back to `false`, the operator MUST update the `Suspended` condition to status `False`, reason `AdminDeactivated`, preserving the new `lastTransitionTime`.
+5d. **Suspension Events**: The operator MUST emit a Kubernetes Event on the `AgenticOLSConfig` object when suspension is activated and when suspension is deactivated. Event format:
+   - Activation: `type: Warning`, reason `SuspensionActivated`, message `"System suspended; {N} proposals emergency-stopped, {M} sandbox pods released"`.
+   - Deactivation: `type: Normal`, reason `SuspensionDeactivated`, message `"System resumed; agentic operations re-enabled"`.
+5e. **Status update timing**: The `Suspended` condition and activation Event MUST be set after all non-terminal proposals have been emergency-stopped (not before), so the condition's message reflects the final count. The proposal reconciler MUST check for remaining non-terminal proposals after each `handleSuspension` call; when zero non-terminal proposals remain and `spec.suspended` is still `true`, it MUST patch the `AgenticOLSConfig` status with the `Suspended` condition and emit the activation Event. This is eventually consistent — individual proposals are terminated at reconciler concurrency, and the status update fires when the last one completes.
 
 ### Reconciler Integration
 
@@ -49,6 +59,7 @@ Jira tracking: OLS-3018.
 ### AgenticOLSConfig
 - `metadata.name` (must be `cluster`)
 - `spec.suspended` (bool, default `false`)
+- `status.conditions` — condition types: `Suspended`
 
 ### Affected Proposal fields
 - `status.conditions` — new condition type `EmergencyStopped`
@@ -69,3 +80,5 @@ Jira tracking: OLS-3018.
 
 - [PLANNED: future] Batch-sweep termination (Approach B): if Approach A's reconciler-based termination proves too slow at scale, add a direct sweep in the `AgenticOLSConfig` reconciler that lists and terminates all non-terminal proposals in a single pass with goroutine fan-out.
 - [PLANNED: future] Additional config fields (e.g., system-wide defaults, feature gates) can be added to the `AgenticOLSConfig` spec as needed.
+- [PLANNED: OLS-3267] Admission-time proposal blocking via `ValidatingAdmissionPolicy` with `paramRef` to reject `Proposal` creation at the API server when suspended. See spike OLS-3166 for design. VAP/binding lifecycle mechanism deferred to OLS-3302.
+- [PLANNED: OLS-3267] Sandbox pod isolation on suspension — isolate running sandbox pods without deleting them for post-incident forensics. Blocked on durable sandbox pod log mechanism (separate RFE).
