@@ -94,4 +94,3 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 - [PLANNED: OLS-2940] Autonomous workflow CRD migrations may rename or reshape fields; specs MUST be updated when `v1alpha1` changes.
 - [PLANNED: OLS-2894] Explicit **Agent** fields for per-step system prompts if moved from template/runtime-only assembly (today prompts are composed outside `Agent` CR — see `sandbox-execution.md`).
-- [PLANNED: OLS-3267] `AgenticOLSConfig` status subresource with `Suspended` condition for suspension lifecycle observability. See `system-config.md` rules 5a–5e.

@@ -6,6 +6,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	"github.com/openshift/lightspeed-agentic-operator/controller/agenticolsconfig"
 	agenticconsole "github.com/openshift/lightspeed-agentic-operator/controller/console"
 	"github.com/openshift/lightspeed-agentic-operator/controller/proposal"
 	agenticsandbox "github.com/openshift/lightspeed-agentic-operator/controller/sandbox"
@@ -49,6 +50,14 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 		return err
 	}
 	log.Info("Proposal controller registered", "sandboxMode", opts.SandboxMode)
+
+	if err := (&agenticolsconfig.Reconciler{
+		Client:        mgr.GetClient(),
+		EventRecorder: mgr.GetEventRecorderFor("agenticolsconfig-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		return err
+	}
+	log.Info("AgenticOLSConfig controller registered")
 
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		return agenticconsole.EnsureAgenticConsole(ctx, mgr.GetClient(), agenticconsole.AgenticConsoleConfig{

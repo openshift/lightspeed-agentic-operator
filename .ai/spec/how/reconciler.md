@@ -14,6 +14,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
     - `bare-pod` (default): `proposal.NewBarePodManager(mgr.GetClient(), &proposal.PodSpecBuilder{Image: sandboxImage}, namespace)` → `SandboxProvider`.
   - `proposal.NewSandboxAgentCaller(sandboxProvider, mgr.GetClient(), proposal.NewAgentHTTPClient, namespace)` → satisfies `proposal.AgentCaller`.
   - `proposal.ProposalReconciler{ Client, Log, Agent, Namespace }` → `SetupWithManager(mgr)`.
+  - `agenticolsconfig.Reconciler{ Client, EventRecorder }` → `SetupWithManager(mgr)` — maintains `AgenticOLSConfig` `Suspended` condition and suspension Events (see **what/system-config.md** rules 5a–5e).
   - `agenticconsole.EnsureAgenticConsole` registered as `manager.RunnableFunc` for console plugin deployment.
   - `agenticsandbox.EnsureBootstrapResources` registered as `manager.RunnableFunc` — creates SA always, creates `SandboxTemplate` only in `sandbox-claim` mode.
 - Registers health/readiness probes. See `how/project-structure.md` for full flag reference.
@@ -54,6 +55,18 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `sandbox_agent_test.go` | Agent caller tests | — |
 | `sandbox_templates_test.go` | Template ensure/GC tests; `TestPatchProbes` (rule 30 in `what/sandbox-execution.md`) | — |
 | `schemas_test.go` | Output schema assembly tests | — |
+
+---
+
+
+## Module map: `controller/agenticolsconfig/`
+
+| File | Types | Key functions |
+|------|-------|----------------|
+| `reconciler.go` | `Reconciler` (embeds `client.Client`, `EventRecorder`) | `Reconcile`, `SetupWithManager`, `handleActivation`, `handleDeactivation` |
+| `reconciler_test.go` | — | Activation/deactivation, event emission, non-terminal proposal requeue |
+
+**Integration note:** Registered in `controller/setup.go` after the proposal reconciler. Watches the cluster `AgenticOLSConfig` named `cluster` and **Watches** `Proposal` objects to requeue the config when proposal phases change.
 
 ---
 

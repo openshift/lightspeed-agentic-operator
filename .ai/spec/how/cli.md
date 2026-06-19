@@ -29,7 +29,7 @@ Audience: AI agents. Command behavior and user-facing rules belong in **what/** 
 | `suspend.go` | `SuspendOptions` | `NewSuspendCmd`, `Complete`, `Run` |
 | `resume.go` | `ResumeOptions` | `NewResumeCmd`, `Complete`, `Run` |
 
-- **`status`:** Gets `AgenticOLSConfig` named `cluster`; prints `"Agentic System: SUSPENDED"` or `"Active"`. `NotFound` = Active.
+- **`status`:** Gets `AgenticOLSConfig` named `cluster`; prints `"Agentic System: SUSPENDED"` or `"Active"`. When the `Suspended` status condition is present, includes relative/absolute transition time and condition message (suspended) or resume time (`AdminDeactivated`). Falls back to spec-only lines while suspension is in progress. `NotFound` = Active.
 - **`suspend`:** Prompts confirmation (skip with `--yes`); patches `spec.suspended=true` or creates the CR if absent. Idempotent (reports "already suspended" if already true).
 - **`resume`:** Patches `spec.suspended=false`. Reports "not suspended" if already false or CR absent.
 

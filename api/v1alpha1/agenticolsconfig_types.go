@@ -20,6 +20,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Condition type for AgenticOLSConfig status.
+const (
+	// AgenticOLSConfigConditionSuspended tracks whether the system kill
+	// switch is active. True means all proposals have been emergency-stopped
+	// and the system is suspended; False means the admin has deactivated
+	// suspension and the system is accepting new proposals.
+	AgenticOLSConfigConditionSuspended = "Suspended"
+)
+
 // AgenticOLSConfigSpec defines the desired state of AgenticOLSConfig.
 //
 // +kubebuilder:validation:MinProperties=1
@@ -34,8 +43,26 @@ type AgenticOLSConfigSpec struct {
 	Suspended bool `json:"suspended,omitempty"` //nolint:kubeapilinter // kill switch is genuinely binary; bool is the right type
 }
 
+// AgenticOLSConfigStatus defines the observed state of AgenticOLSConfig.
+//
+// +kubebuilder:validation:MinProperties=1
+type AgenticOLSConfigStatus struct {
+	// conditions represent the latest available observations of the
+	// config's state. The "Suspended" condition tracks whether the
+	// kill switch is active and all proposals have been terminated.
+	// +listType=map
+	// +listMapKey=type
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=8
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+}
+
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
+// +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Suspended",type=boolean,JSONPath=`.spec.suspended`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'cluster'",message="AgenticOLSConfig must be named 'cluster' (singleton)"
@@ -66,6 +93,10 @@ type AgenticOLSConfig struct {
 	// spec defines the desired system configuration.
 	// +required
 	Spec AgenticOLSConfigSpec `json:"spec,omitzero"`
+
+	// status defines the observed state of AgenticOLSConfig.
+	// +optional
+	Status AgenticOLSConfigStatus `json:"status,omitzero"`
 }
 
 // +kubebuilder:object:root=true

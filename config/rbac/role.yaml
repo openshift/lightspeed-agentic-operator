@@ -18,6 +18,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
   - pods
   verbs:
   - create
@@ -47,18 +54,7 @@ rules:
 - apiGroups:
   - agentic.openshift.io
   resources:
-  - analysisresults
-  - escalationresults
-  - executionresults
-  - verificationresults
-  verbs:
-  - create
-  - get
-  - list
-  - watch
-- apiGroups:
-  - agentic.openshift.io
-  resources:
+  - agenticolsconfigs/status
   - analysisresults/status
   - escalationresults/status
   - executionresults/status
@@ -69,6 +65,18 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - agentic.openshift.io
+  resources:
+  - analysisresults
+  - escalationresults
+  - executionresults
+  - verificationresults
+  verbs:
+  - create
+  - get
+  - list
+  - watch
 - apiGroups:
   - agentic.openshift.io
   resources:

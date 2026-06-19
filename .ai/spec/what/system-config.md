@@ -30,9 +30,9 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 5b. **Suspended condition**: When `spec.suspended` is set to `true` and the operator has processed the suspension, the operator MUST set condition type `Suspended` with status `True`, reason `AdminActivated`, and `lastTransitionTime` reflecting when suspension was activated. The message SHOULD include the count of proposals emergency-stopped (e.g., `"System suspended; 12 proposals emergency-stopped"`).
 5c. **Suspended condition on deactivation**: When `spec.suspended` is set back to `false`, the operator MUST update the `Suspended` condition to status `False`, reason `AdminDeactivated`, preserving the new `lastTransitionTime`.
 5d. **Suspension Events**: The operator MUST emit a Kubernetes Event on the `AgenticOLSConfig` object when suspension is activated and when suspension is deactivated. Event format:
-   - Activation: `type: Warning`, reason `SuspensionActivated`, message `"System suspended; {N} proposals emergency-stopped, {M} sandbox pods released"`.
+   - Activation: `type: Warning`, reason `SuspensionActivated`, message `"System suspended; {N} proposals emergency-stopped"`.
    - Deactivation: `type: Normal`, reason `SuspensionDeactivated`, message `"System resumed; agentic operations re-enabled"`.
-5e. **Status update timing**: The `Suspended` condition and activation Event MUST be set after all non-terminal proposals have been emergency-stopped (not before), so the condition's message reflects the final count. The proposal reconciler MUST check for remaining non-terminal proposals after each `handleSuspension` call; when zero non-terminal proposals remain and `spec.suspended` is still `true`, it MUST patch the `AgenticOLSConfig` status with the `Suspended` condition and emit the activation Event. This is eventually consistent — individual proposals are terminated at reconciler concurrency, and the status update fires when the last one completes.
+5e. **Status update timing**: The `Suspended` condition and activation Event MUST be set after all non-terminal proposals have been emergency-stopped (not before), so the condition's message reflects the final count. The operator MUST check for remaining non-terminal proposals; when zero non-terminal proposals remain and `spec.suspended` is still `true`, it MUST patch the `AgenticOLSConfig` status with the `Suspended` condition and emit the activation Event. This is eventually consistent — individual proposals are terminated at reconciler concurrency, and the status update fires when the last one completes. A dedicated `AgenticOLSConfig` controller handles this status lifecycle, watching both the config CR and Proposals as a secondary resource.
 
 ### Reconciler Integration
 
@@ -49,7 +49,7 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 
 ### CLI Visibility
 
-19. **Status command**: `oc agentic status` (or equivalent top-level command) MUST report the system suspension state: `"Agentic System: SUSPENDED"` when suspended, `"Agentic System: Active"` when not.
+19. **Status command**: `oc agentic status` (or equivalent top-level command) MUST report the system suspension state: `"Agentic System: SUSPENDED"` when suspended, `"Agentic System: Active"` when not. When `status.conditions` includes `Suspended=True` while `spec.suspended` is true, the output SHOULD include relative and absolute `lastTransitionTime` and the condition message (e.g. proposal emergency-stop count). When `spec.suspended` is false and the latest `Suspended` condition has reason `AdminDeactivated`, the output SHOULD include when the system was resumed.
 20. **Suspend/resume commands**: The CLI MUST provide `oc agentic suspend` and `oc agentic resume` commands that patch `AgenticOLSConfig.spec.suspended` to `true` and `false` respectively.
 21. **Suspend confirmation**: `oc agentic suspend` MUST prompt for confirmation before proceeding: `"All agentic operations will be halted and in-flight proposals will be terminated. Continue? [y/N]"`.
 22. **Proposal list**: `oc agentic proposals` (or equivalent list command) MUST display `EmergencyStopped` as a distinct phase value in the phase/status column.
@@ -66,7 +66,7 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 - Derived phase `EmergencyStopped` added to `ProposalPhase` enum
 
 ### Affected repositories
-- `lightspeed-agentic-operator` — CRD types, proposal reconciler, CLI commands
+- `lightspeed-agentic-operator` — CRD types, proposal reconciler, `AgenticOLSConfig` status controller, CLI commands; E2E: `test/e2e/suspension_test.go`
 - `lightspeed-agentic-console` — `derivePhaseFromConditions` sync, suspension banner, phase display
 
 ## Constraints
