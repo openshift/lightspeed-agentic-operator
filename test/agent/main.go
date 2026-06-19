@@ -255,8 +255,7 @@ func cannedResponse(phase, targetNS string) []byte {
           { "type": "patch", "description": "mock proposed action" }
         ],
         "risk": "Low",
-        "reversible": "Reversible",
-        "estimatedImpact": "Brief pod restart, ~30s downtime"
+        "reversible": "Reversible"
       },
       "verification": {
         "description": "mock verification plan",
