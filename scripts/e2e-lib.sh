@@ -134,7 +134,7 @@ create_provider_fixtures() {
         claude|gemini)
             local key_path="${VERTEX_PROVIDER_KEY_PATH:?Missing VERTEX_PROVIDER_KEY_PATH for provider $provider}"
             local project_id="${VERTEX_PROJECT_ID:?Missing VERTEX_PROJECT_ID for provider $provider}"
-            local region="${VERTEX_REGION:-us-central1}"
+            local region="${VERTEX_REGION:-global}"
             local model_provider
             case "$model" in
                 claude-*) model_provider="Anthropic" ;;

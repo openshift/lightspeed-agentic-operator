@@ -11,6 +11,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -188,7 +189,9 @@ func createFixtures(t *testing.T, c client.Client) *e2eFixtures {
 
 	// Ensure target namespace exists (used by RBAC tests).
 	stagingNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "staging"}}
-	_ = c.Create(ctx, stagingNS) // ignore AlreadyExists
+	if err := c.Create(ctx, stagingNS); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create staging namespace: %v", err)
+	}
 
 	all := []client.Object{f.LLM, f.Agent, f.Policy, f.LLMSecret}
 	cleanup(t, c, all...)
@@ -298,7 +301,9 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 	}
 
 	stagingNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "staging"}}
-	_ = c.Create(ctx, stagingNS)
+	if err := c.Create(ctx, stagingNS); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("create staging namespace: %v", err)
+	}
 
 	all := []client.Object{f.LLM, f.Agent, f.Policy, f.LLMSecret}
 	cleanup(t, c, all...)

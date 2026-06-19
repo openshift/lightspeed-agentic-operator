@@ -17,7 +17,8 @@
 #
 # Optional env:
 #   OPERATOR_NAMESPACE       — default: openshift-lightspeed
-#   VERTEX_REGION            — default: us-central1
+#   VERTEX_REGION            — default: global
+#   E2E_POLL_TIMEOUT          — default: 20m
 #   E2E_MODEL                — override default model for the provider
 #   ARTIFACT_DIR             — directory for test artifacts
 #   KONFLUX_COMPONENT_NAME   — component name for SNAPSHOT parsing
@@ -78,18 +79,18 @@ run_provider() {
         E2E_PROVIDER="$provider" \
         E2E_MODEL="$model" \
         E2E_PROVIDER_KEY_PATH="$key_path" \
-        E2E_POLL_TIMEOUT="20m" \
+        E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}" \
         VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}" \
-        VERTEX_REGION="${VERTEX_REGION:-us-central1}" \
+        VERTEX_REGION="${VERTEX_REGION:-global}" \
         TEST_NAMESPACE="$NAMESPACE" \
         make test-e2e 2>&1 | tee "$ARTIFACT_DIR/$provider/test-output.log" || test_rc=$?
     else
         E2E_PROVIDER="$provider" \
         E2E_MODEL="$model" \
         E2E_PROVIDER_KEY_PATH="$key_path" \
-        E2E_POLL_TIMEOUT="20m" \
+        E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}" \
         VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}" \
-        VERTEX_REGION="${VERTEX_REGION:-us-central1}" \
+        VERTEX_REGION="${VERTEX_REGION:-global}" \
         TEST_NAMESPACE="$NAMESPACE" \
         make test-e2e || test_rc=$?
     fi
