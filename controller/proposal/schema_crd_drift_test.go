@@ -89,9 +89,12 @@ func assertRequiredCoverage(t *testing.T, path string, crd *apiextensionsv1.JSON
 	llmProps, _ := asJSONObject(llm["properties"])
 	llmRequired := requiredSet(llm["required"])
 	for _, req := range crd.Required {
-		// Only enforce coverage for fields the LLM schema actually models;
-		// the LLM may legitimately omit a field the CRD allows.
+		// A field the CRD requires must be both modeled and required in the LLM
+		// output schema. If it is absent entirely the agent is never asked for
+		// it, so the status patch is rejected at runtime — the exact drift this
+		// guard exists to catch.
 		if _, modeled := llmProps[req]; !modeled {
+			t.Errorf("schema/CRD drift at %s: CRD requires %q but the LLM output schema does not model the field", path, req)
 			continue
 		}
 		if !llmRequired[req] {
