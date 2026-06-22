@@ -54,6 +54,10 @@ func (r *ProposalReconciler) handleAnalysis(
 	log.V(1).Info("handling analysis")
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepAnalysis) {
+		if r.Audit != nil {
+			r.Audit.EndApprovalWait(proposal)
+			r.Audit.EmitApprovalReceived(ctx, proposal, approval)
+		}
 		return r.denyProposal(ctx, proposal, "Analysis denied by user")
 	}
 
@@ -254,6 +258,10 @@ func (r *ProposalReconciler) handleExecution(
 	}
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepExecution) {
+		if r.Audit != nil {
+			r.Audit.EndApprovalWait(proposal)
+			r.Audit.EmitApprovalReceived(ctx, proposal, approval)
+		}
 		return r.denyProposal(ctx, proposal, "Execution denied by user")
 	}
 
@@ -399,6 +407,10 @@ func (r *ProposalReconciler) handleVerification(
 	}
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepVerification) {
+		if r.Audit != nil {
+			r.Audit.EndApprovalWait(proposal)
+			r.Audit.EmitApprovalReceived(ctx, proposal, approval)
+		}
 		return r.denyProposal(ctx, proposal, "Verification denied by user")
 	}
 
@@ -617,6 +629,10 @@ func (r *ProposalReconciler) handleEscalation(
 	log.V(1).Info("handling escalation")
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepEscalation) {
+		if r.Audit != nil {
+			r.Audit.EndApprovalWait(proposal)
+			r.Audit.EmitApprovalReceived(ctx, proposal, approval)
+		}
 		return r.denyProposal(ctx, proposal, "Escalation denied by user")
 	}
 
