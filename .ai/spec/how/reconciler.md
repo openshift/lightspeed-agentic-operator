@@ -184,7 +184,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 - **`SandboxProvider`:** Swappable claim/wait/release (tests can fake). Implementations: `SandboxManager` (sandbox-claim mode), `BarePodManager` (bare-pod mode). `SetStep` provides resolved step config before each `Claim` call.
 - **`PodSpecBuilder`:** Shared pod-spec assembly. Produces typed `corev1.PodSpec` from image + resolved step config. Used directly by `BarePodManager`; shared helper functions also used by `EnsureAgentTemplate` (unstructured path).
 - **`resolveProposal`:** Produces `resolvedWorkflow` with cached `Agent` + `LLMProvider` per name; applies per-stage agent overrides from `ProposalApproval` via `getStageOverrideAgent`; `Execution`/`Verification` steps nil when corresponding spec sections are zero.
-- **`EnsureAgentTemplate`:** Deterministic derived `SandboxTemplate` name from hash of LLM spec, model, skills, MCP servers, required secrets, step, and **base template resourceVersion**. Patches pod template env/volumes for credentials, Vertex/Bedrock/Azure extras, skills image/paths, and MCP JSON env. GC older templates labeled for same agent+step.
+- **`EnsureAgentTemplate`:** Deterministic derived `SandboxTemplate` name from hash of LLM spec, model, skills, MCP servers, required secrets, dataSource PVC, step, and **base template resourceVersion**. `dataSource` is extracted from `tools.DataSource` (set in `ToolsSpec`). Patches pod template env/volumes for credentials, Vertex/Bedrock/Azure extras, skills image/paths, MCP JSON env, `LIGHTSPEED_MODE`, and optional `/data/input` PVC mount. GC older templates labeled for same agent+step.
 
 ---
 

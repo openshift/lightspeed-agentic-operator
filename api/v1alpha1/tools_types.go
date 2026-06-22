@@ -109,12 +109,15 @@ type SecretRequirement struct {
 }
 
 // ToolsSpec defines the tools available to an agent in its sandbox pod.
-// This includes skills images, MCP servers, and required secrets.
+// This includes skills images, MCP servers, required secrets, and an
+// optional data source PVC.
 //
 // ToolsSpec is specified on a Proposal either as a shared default
 // (spec.tools) or per-step (spec.analysis.tools, spec.execution.tools,
 // spec.verification.tools). Per-step tools replace the shared default
-// for that step.
+// for that step, so a dataSource set in spec.analysis.tools is mounted
+// only in the analysis sandbox, while one in spec.tools is mounted in
+// every step that does not override tools.
 //
 // +kubebuilder:validation:MinProperties=1
 type ToolsSpec struct {
@@ -147,8 +150,16 @@ type ToolsSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=20
 	RequiredSecrets []SecretRequirement `json:"requiredSecrets,omitempty"`
+
+	// dataSource references a pre-existing PersistentVolumeClaim containing
+	// input data for this step (e.g., must-gather bundles, diagnostic data).
+	// The PVC must already exist in the same namespace as the Proposal and be
+	// pre-populated with data before the Proposal is created. The operator
+	// mounts it read-only at /data/input in the sandbox pod.
+	// +optional
+	DataSource DataSource `json:"dataSource,omitzero"`
 }
 
 func (t ToolsSpec) IsZero() bool {
-	return len(t.Skills) == 0 && len(t.MCPServers) == 0 && len(t.RequiredSecrets) == 0
+	return len(t.Skills) == 0 && len(t.MCPServers) == 0 && len(t.RequiredSecrets) == 0 && t.DataSource.IsZero()
 }
