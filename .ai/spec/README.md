@@ -30,6 +30,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand the kill switch / system config | `what/system-config.md` |
 | Navigate the controller codebase | `how/reconciler.md` |
 | Understand the CLI plugin | `how/cli.md` |
+| Self-review before pushing a PR | `operator-self-review-checklist.md` |
 
 ## Cross-Reference
 
