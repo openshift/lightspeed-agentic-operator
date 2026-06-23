@@ -1,12 +1,14 @@
 package sandbox
 
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=create
 
 import (
 	"context"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -23,8 +25,9 @@ var sandboxTemplateGVK = schema.GroupVersionKind{
 }
 
 const (
-	ErrEnsureSA              = "ensure ServiceAccount"
-	ErrEnsureSandboxTemplate = "ensure SandboxTemplate"
+	ErrEnsureSA                 = "ensure ServiceAccount"
+	ErrEnsureClusterRoleBinding = "ensure ClusterRoleBinding"
+	ErrEnsureSandboxTemplate    = "ensure SandboxTemplate"
 )
 
 type BootstrapConfig struct {
@@ -47,6 +50,14 @@ func EnsureBootstrapResources(ctx context.Context, c client.Client, cfg Bootstra
 		return fmt.Errorf("%s: %w", ErrEnsureSA, err)
 	}
 	log.V(1).Info("ServiceAccount ready")
+
+	if err := ensureClusterRoleBinding(ctx, c, "lightspeed-agent-cluster-reader", "cluster-reader", templateName, cfg.Namespace); err != nil {
+		return fmt.Errorf("%s %s: %w", ErrEnsureClusterRoleBinding, "cluster-reader", err)
+	}
+	if err := ensureClusterRoleBinding(ctx, c, "lightspeed-agent-monitoring-view", "cluster-monitoring-view", templateName, cfg.Namespace); err != nil {
+		return fmt.Errorf("%s %s: %w", ErrEnsureClusterRoleBinding, "cluster-monitoring-view", err)
+	}
+	log.V(1).Info("Agent read ClusterRoleBindings ready")
 
 	if cfg.SandboxMode == "sandbox-claim" {
 		if err := ensureSandboxTemplate(ctx, c, cfg.Image, cfg.Namespace); err != nil {
@@ -77,6 +88,29 @@ func ensureServiceAccount(ctx context.Context, c client.Client, namespace string
 		AutomountServiceAccountToken: ptr.To(false),
 	}
 	if err := c.Create(ctx, sa); err != nil && !errors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
+func ensureClusterRoleBinding(ctx context.Context, c client.Client, name, clusterRoleName, saName, namespace string) error {
+	crb := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: labels(),
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "ClusterRole",
+			Name:     clusterRoleName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      saName,
+			Namespace: namespace,
+		}},
+	}
+	if err := c.Create(ctx, crb); err != nil && !errors.IsAlreadyExists(err) {
 		return err
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -16,6 +17,7 @@ import (
 func testScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	utilruntime.Must(corev1.AddToScheme(s))
+	utilruntime.Must(rbacv1.AddToScheme(s))
 	return s
 }
 
@@ -43,6 +45,26 @@ func TestEnsureBootstrapResources_CreatesResources(t *testing.T) {
 	}
 	if sa.AutomountServiceAccountToken != nil && *sa.AutomountServiceAccountToken {
 		t.Error("ServiceAccount should not automount token")
+	}
+
+	for _, tc := range []struct {
+		bindingName string
+		roleName    string
+	}{
+		{"lightspeed-agent-cluster-reader", "cluster-reader"},
+		{"lightspeed-agent-monitoring-view", "cluster-monitoring-view"},
+	} {
+		var crb rbacv1.ClusterRoleBinding
+		if err := fc.Get(context.Background(), types.NamespacedName{Name: tc.bindingName}, &crb); err != nil {
+			t.Errorf("ClusterRoleBinding %s not created: %v", tc.bindingName, err)
+			continue
+		}
+		if crb.RoleRef.Name != tc.roleName {
+			t.Errorf("ClusterRoleBinding %s RoleRef.Name = %q, want %q", tc.bindingName, crb.RoleRef.Name, tc.roleName)
+		}
+		if len(crb.Subjects) != 1 || crb.Subjects[0].Name != templateName || crb.Subjects[0].Namespace != cfg.Namespace {
+			t.Errorf("ClusterRoleBinding %s has unexpected subjects: %v", tc.bindingName, crb.Subjects)
+		}
 	}
 
 	tmpl := &unstructured.Unstructured{}
