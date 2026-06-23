@@ -13,12 +13,12 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 
 ### Component Inventory
 
-5. The system comprises four functional components:
+5. The system comprises three functional components:
    - **Proposal controller** — reconciles `Proposal` CRs through the workflow state machine.
-   - **Console plugin** — deploys the agentic console UI as an OpenShift `ConsolePlugin`.
    - **CLI plugin** (`oc-agentic`) — provides `oc agentic proposal` commands for proposal CRUD, approval, watch, and log streaming.
    - **API types** (`api/v1alpha1`) — CRD type definitions published as a separate Go module for downstream consumers.
-6. The proposal controller and console plugin run in the same operator binary via `controller.Setup()`.
+5a. [PLANNED: OLS-3236] The **console plugin** deployment is migrated to the lightspeed-operator for full reconciliation lifecycle management. The agentic-operator no longer deploys any console plugins. The **alerts adapter** deployment is also managed by the lightspeed-operator.
+6. The proposal controller runs in the operator binary via `controller.Setup()`. [PLANNED: OLS-3236] The console plugin `RunnableFunc` and `controller/console/` package are removed.
 7. The CLI is a separate binary (`cmd/oc-agentic`) that communicates directly with the Kubernetes API server.
 
 ### External Dependencies
@@ -27,7 +27,7 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 9. When `--sandbox-mode=sandbox-claim`, the operator MUST interact with the Sandbox API (`extensions.agents.x-k8s.io/v1alpha1` `SandboxClaim`, `agents.x-k8s.io/v1alpha1` `Sandbox`) to provision ephemeral agent workloads. In the default `bare-pod` mode, the operator creates Pods directly and does not depend on Sandbox API CRDs.
 10. The operator MUST resolve `Agent` CRs and their referenced `LLMProvider` CRs to determine model configuration and credentials for each workflow step.
 11. The operator MUST call the sandbox agent's `POST /v1/agent/run` HTTP endpoint for each workflow step (analysis, execution, verification, escalation).
-12. The operator MUST interact with OpenShift API (`console.openshift.io/v1` `ConsolePlugin`, `operator.openshift.io/v1` `Console`) for console plugin deployment.
+12. [PLANNED: OLS-3236] Console plugin deployment is migrated to the lightspeed-operator. The agentic-operator no longer interacts with OpenShift Console APIs for plugin deployment.
 
 ### Dual-Module Structure
 
@@ -47,8 +47,7 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 | `--namespace` / `POD_NAMESPACE` | string | (required) | Operator install namespace |
 | `--metrics-bind-address` | string | `:8080` | Metrics endpoint bind address |
 | `--health-probe-bind-address` | string | `:8081` | Health probe endpoint bind address |
-| `--agentic-console-image` | string | `""` | Console plugin container image |
-| `--agentic-sandbox-image` | string | `""` | Sandbox container image |
+| `--agentic-sandbox-image` | string | `""` | Sandbox container image (default provided by lightspeed-operator constants, overridable) |
 | `--sandbox-mode` | string | `bare-pod` | Sandbox mode: `bare-pod` (direct Pod management) or `sandbox-claim` (Agent Sandbox API) |
 
 ## Constraints
@@ -63,3 +62,4 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 |---|---|
 | OLS-2957 | Sandbox template management UX and CRD ergonomics may change operator/template coupling |
 | OLS-2940 | Autonomous workflow CRD migrations may rename or reshape `v1alpha1` fields |
+| OLS-3236 | Remove `controller/console/` package and `--agentic-console-image` flag. Console plugin and alerts adapter deployment moves to lightspeed-operator. |
