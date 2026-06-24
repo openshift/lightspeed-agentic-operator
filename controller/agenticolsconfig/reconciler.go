@@ -90,10 +90,6 @@ func (r *Reconciler) handleDeactivation(ctx context.Context, config *agenticv1al
 
 func (r *Reconciler) handleActivation(ctx context.Context, config *agenticv1alpha1.AgenticOLSConfig) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	existing := meta.FindStatusCondition(config.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
-	if existing != nil && existing.Status == metav1.ConditionTrue && existing.Reason == reasonAdminActivated {
-		return ctrl.Result{}, nil
-	}
 
 	var proposals agenticv1alpha1.ProposalList
 	if err := r.List(ctx, &proposals); err != nil {
@@ -127,8 +123,13 @@ func (r *Reconciler) handleActivation(ctx context.Context, config *agenticv1alph
 		return ctrl.Result{RequeueAfter: requeueDelay}, nil
 	}
 
-	base := config.DeepCopy()
 	msg := fmt.Sprintf("System suspended; %d proposals emergency-stopped", emergencyStopped)
+	existing := meta.FindStatusCondition(config.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+	if existing != nil && existing.Status == metav1.ConditionTrue && existing.Reason == reasonAdminActivated && existing.Message == msg {
+		return ctrl.Result{}, nil
+	}
+
+	base := config.DeepCopy()
 	meta.SetStatusCondition(&config.Status.Conditions, metav1.Condition{
 		Type:    agenticv1alpha1.AgenticOLSConfigConditionSuspended,
 		Status:  metav1.ConditionTrue,
