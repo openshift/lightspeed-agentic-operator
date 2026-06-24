@@ -26,7 +26,7 @@ fi
 
 # --- Step 1: Delete CRs ------------------------------------------------------
 
-step "1/6" "Deleting custom resources..."
+step "1/7" "Deleting custom resources..."
 
 for kind in proposals proposalapprovals analysisresults executionresults verificationresults escalationresults; do
   oc delete "${kind}" --all -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
@@ -41,7 +41,7 @@ info "Agents, LLMProviders, ApprovalPolicy, AgenticOLSConfig deleted"
 
 # --- Step 2: Delete secrets ---------------------------------------------------
 
-step "2/6" "Deleting credential secrets..."
+step "2/7" "Deleting credential secrets..."
 
 for secret in llm-creds-vertex llm-creds-openai llm-creds-azure llm-creds-bedrock llm-creds-anthropic; do
   oc delete secret "${secret}" -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
@@ -50,7 +50,7 @@ info "Credential secrets deleted"
 
 # --- Step 3: Remove console plugin --------------------------------------------
 
-step "3/6" "Removing console plugin..."
+step "3/7" "Removing console plugin..."
 
 PLUGIN_NAME="lightspeed-agentic-console-plugin"
 
@@ -73,9 +73,19 @@ else
   info "Console plugin not found — skipping"
 fi
 
-# --- Step 4: Delete operator --------------------------------------------------
+# --- Step 4: Delete webhook resources -----------------------------------------
+# Delete the MutatingWebhookConfiguration BEFORE the operator so the fail-closed
+# webhook doesn't block API calls while its backend is gone.
 
-step "4/6" "Deleting operator deployment..."
+step "4/7" "Deleting webhook resources..."
+oc delete mutatingwebhookconfiguration agentic-operator-mutating-webhook --ignore-not-found 2>/dev/null || true
+oc delete service agentic-operator-webhook-service -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
+oc delete secret agentic-operator-webhook-certs -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
+info "Webhook resources deleted"
+
+# --- Step 5: Delete operator --------------------------------------------------
+
+step "5/7" "Deleting operator deployment..."
 
 oc delete deployment lightspeed-agentic-operator -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
 oc delete sa lightspeed-agentic-operator -n "${NAMESPACE}" --ignore-not-found 2>/dev/null || true
@@ -84,9 +94,9 @@ oc delete clusterrolebinding lightspeed-agent-cluster-reader --ignore-not-found 
 oc delete clusterrolebinding lightspeed-agent-monitoring-view --ignore-not-found 2>/dev/null || true
 info "Operator removed"
 
-# --- Step 5: Delete CRDs -----------------------------------------------------
+# --- Step 6: Delete CRDs -----------------------------------------------------
 
-step "5/6" "Deleting Agentic Operator CRDs..."
+step "6/7" "Deleting Agentic Operator CRDs..."
 
 for crd in \
   agenticolsconfigs.agentic.openshift.io \
@@ -103,9 +113,9 @@ for crd in \
 done
 info "CRDs deleted"
 
-# --- Step 6: Delete namespace -------------------------------------------------
+# --- Step 7: Delete namespace -------------------------------------------------
 
-step "6/6" "Deleting namespace ${NAMESPACE}..."
+step "7/7" "Deleting namespace ${NAMESPACE}..."
 
 oc delete namespace "${NAMESPACE}" --ignore-not-found --timeout=60s 2>/dev/null || true
 info "Namespace deleted"

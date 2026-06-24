@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	agenticcontroller "github.com/openshift/lightspeed-agentic-operator/controller"
@@ -136,6 +137,10 @@ func main() {
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: healthAddr,
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port:    9443,
+			CertDir: "/tmp/k8s-webhook-server/serving-certs",
+		}),
 	})
 	if err != nil {
 		log.Error(err, "unable to create manager")

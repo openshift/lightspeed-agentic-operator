@@ -6,7 +6,7 @@ NAMESPACE="${1:-observability}"
 
 echo "==> Deploying Jaeger all-in-one to namespace '$NAMESPACE'"
 
-oc get project "$NAMESPACE" &>/dev/null || oc new-project "$NAMESPACE"
+oc get project "$NAMESPACE" &>/dev/null || oc new-project "$NAMESPACE" --skip-config-write
 
 oc create deployment jaeger --image=jaegertracing/jaeger:latest --port=16686 -n "$NAMESPACE" 2>/dev/null || echo "deployment/jaeger already exists"
 

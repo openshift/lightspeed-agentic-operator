@@ -1,0 +1,24 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: agentic-operator-mutating-webhook
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+webhooks:
+  - name: proposalapproval-mutator.agentic.openshift.io
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: __OPERATOR_NAMESPACE__
+    clientConfig:
+      service:
+        name: agentic-operator-webhook-service
+        namespace: __OPERATOR_NAMESPACE__
+        path: /mutate-proposalapproval
+    rules:
+      - operations: ["UPDATE"]
+        apiGroups: ["agentic.openshift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["proposalapprovals"]
+    failurePolicy: Fail
+    sideEffects: None
+    admissionReviewVersions: ["v1"]

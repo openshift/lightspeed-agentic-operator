@@ -5,6 +5,7 @@ import (
 
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticolsconfig"
 	agenticconsole "github.com/openshift/lightspeed-agentic-operator/controller/console"
@@ -82,6 +83,11 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 		return err
 	}
 	log.Info("Sandbox bootstrap runnable registered", "sandboxMode", opts.SandboxMode)
+
+	mgr.GetWebhookServer().Register("/mutate-proposalapproval", &admission.Webhook{
+		Handler: &proposal.ProposalApprovalMutator{},
+	})
+	log.Info("ProposalApproval mutating webhook registered")
 
 	return nil
 }

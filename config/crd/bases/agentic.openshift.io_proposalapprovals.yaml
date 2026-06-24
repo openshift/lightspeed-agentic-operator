@@ -29,9 +29,10 @@ spec:
           agentic.openshift.io/v1alpha1\n\tkind: ProposalApproval\n\tmetadata:\n\t
           \ name: fix-crash\n\t  namespace: my-namespace\n\t  ownerReferences:\n\t
           \   - apiVersion: agentic.openshift.io/v1alpha1\n\t      kind: Proposal\n\t
-          \     name: fix-crash\n\tspec:\n\t  stages:\n\t    - type: Analysis\n\t
-          \     analysis: {}\n\t    - type: Execution\n\t      execution:\n\t        option:
-          0\n\t        agent: fast"
+          \     name: fix-crash\n\tspec:\n\t  approver:\n\t    uid: \"abc123\"\n\t
+          \   username: \"admin@example.com\"\n\t    approvedAt: \"2026-06-22T10:00:00Z\"\n\t
+          \ stages:\n\t    - type: Analysis\n\t      analysis: {}\n\t    - type: Execution\n\t
+          \     execution:\n\t        option: 0\n\t        agent: fast"
         properties:
           apiVersion:
             description: |-
@@ -54,6 +55,33 @@ spec:
             description: spec defines the desired approval state.
             minProperties: 1
             properties:
+              approver:
+                description: |-
+                  approver captures the authenticated identity of the user who last
+                  modified this resource. Set by the mutating admission webhook;
+                  client-submitted values are overwritten.
+                minProperties: 1
+                properties:
+                  approvedAt:
+                    description: |-
+                      approvedAt is the server-side time (RFC 3339) when the webhook processed
+                      the approval request.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  uid:
+                    description: uid is the Kubernetes user UID from the AdmissionReview
+                      userInfo.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  username:
+                    description: username is the Kubernetes username from the AdmissionReview
+                      userInfo.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                type: object
               stages:
                 description: |-
                   stages lists the approved (or denied) workflow steps. Each entry is

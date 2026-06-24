@@ -156,7 +156,7 @@ deploy: manifests validate-agent-sandbox kustomize ## Pre-built image: apply CRD
 	@tmpdir=$$(mktemp -d); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	cp -a config "$$tmpdir/"; \
-	for f in "$$tmpdir/config/manager/manager.yaml" "$$tmpdir/config/rbac/role_binding.yaml" "$$tmpdir/config/rbac/service_account.yaml" "$$tmpdir/config/default/kustomization.yaml"; do \
+	for f in "$$tmpdir/config/manager/manager.yaml" "$$tmpdir/config/rbac/role_binding.yaml" "$$tmpdir/config/rbac/service_account.yaml" "$$tmpdir/config/default/kustomization.yaml" "$$tmpdir/config/webhook/manifests.yaml" "$$tmpdir/config/webhook/service.yaml" "$$tmpdir/config/webhook/networkpolicy.yaml"; do \
 		sed -e 's|__OPERATOR_NAMESPACE__|$(OPERATOR_NAMESPACE)|g' \
 		    -e 's|__SANDBOX_MODE__|$(SANDBOX_MODE)|g' \
 		    -e 's|__SANDBOX_IMAGE__|$(SANDBOX_IMAGE)|g' \
@@ -241,7 +241,7 @@ undeploy: kustomize ## Remove in-cluster operator (CRDs + RBAC + Deployment). Us
 	@tmpdir=$$(mktemp -d); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	cp -a config "$$tmpdir/"; \
-	for f in "$$tmpdir/config/manager/manager.yaml" "$$tmpdir/config/rbac/role_binding.yaml" "$$tmpdir/config/rbac/service_account.yaml" "$$tmpdir/config/default/kustomization.yaml"; do \
+	for f in "$$tmpdir/config/manager/manager.yaml" "$$tmpdir/config/rbac/role_binding.yaml" "$$tmpdir/config/rbac/service_account.yaml" "$$tmpdir/config/default/kustomization.yaml" "$$tmpdir/config/webhook/manifests.yaml" "$$tmpdir/config/webhook/service.yaml" "$$tmpdir/config/webhook/networkpolicy.yaml"; do \
 		sed -e 's|__OPERATOR_NAMESPACE__|$(OPERATOR_NAMESPACE)|g' "$$f" > "$$f.tmp" && mv "$$f.tmp" "$$f"; \
 	done; \
 	cd "$$tmpdir/config/manager" && $(KUSTOMIZE) edit set image controller=$(IMG); \

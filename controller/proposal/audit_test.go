@@ -1510,7 +1510,7 @@ func TestApprovalSpan_ManualApproveExecution(t *testing.T) {
 
 	// Simulate manual approval: start and end approval wait
 	auditLogger.StartApprovalWait(context.Background(), proposal)
-	auditLogger.EndApprovalWait(proposal)
+	auditLogger.EndApprovalWait(proposal, nil)
 
 	_, span = auditLogger.StartExecutionSpan(context.Background(), proposal)
 	if span != nil {
@@ -1558,7 +1558,7 @@ func TestApprovalWait_BackdatesStartOnRestart(t *testing.T) {
 
 	auditLogger.RecoverLifecycleContext(context.Background(), proposal)
 	auditLogger.StartApprovalWait(context.Background(), proposal)
-	auditLogger.EndApprovalWait(proposal)
+	auditLogger.EndApprovalWait(proposal, nil)
 
 	for _, s := range sr.Ended() {
 		if s.Name() == "proposal.human_approval" {
@@ -1600,7 +1600,7 @@ func TestRepeatedTerminalReconcile_NoDuplicateLog(t *testing.T) {
 	// EmitProposalTerminal must be called before EndLifecycleSpan (which deletes the map entry).
 	// EmitProposalTerminal gates internally: skips if no lifecycle entry exists.
 	for i := 0; i < 3; i++ {
-		auditLogger.EndApprovalWait(proposal)
+		auditLogger.EndApprovalWait(proposal, nil)
 		auditLogger.EmitProposalTerminal(context.Background(), proposal, "Failed", "")
 		auditLogger.EndLifecycleSpan(proposal)
 	}

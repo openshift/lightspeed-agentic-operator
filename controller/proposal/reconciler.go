@@ -59,7 +59,7 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	// --- Deletion ---
 	if !proposal.DeletionTimestamp.IsZero() {
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(&proposal)
+			r.Audit.EndApprovalWait(&proposal, nil)
 			r.Audit.EndLifecycleSpan(&proposal)
 		}
 		if controllerutil.ContainsFinalizer(&proposal, rbacCleanupFinalizer) {
@@ -95,7 +95,7 @@ func (r *ProposalReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 		}
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(&proposal)
+			r.Audit.EndApprovalWait(&proposal, nil)
 			r.Audit.EmitProposalTerminal(ctx, &proposal, string(phase), terminalReason(&proposal))
 			r.Audit.EndLifecycleSpan(&proposal)
 		}

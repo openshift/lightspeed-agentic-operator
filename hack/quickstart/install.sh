@@ -24,7 +24,7 @@ CONSOLE_IMAGE="${CONSOLE_IMAGE:-quay.io/redhat-user-workloads/crt-nshift-lightsp
 SANDBOX_MODE="${SANDBOX_MODE:-bare-pod}"
 IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-}"
 
-GITHUB_RAW="https://raw.githubusercontent.com/openshift/lightspeed-agentic-operator/main"
+GITHUB_RAW="${GITHUB_RAW:-https://raw.githubusercontent.com/openshift/lightspeed-agentic-operator/main}"
 
 CRD_FILES=(
   agentic.openshift.io_agenticolsconfigs.yaml
@@ -45,7 +45,7 @@ fail()  { echo "  ✗ $*" >&2; exit 1; }
 
 # --- Step 1: Prerequisites ---------------------------------------------------
 
-step "1/5" "Checking prerequisites..."
+step "1/7" "Checking prerequisites..."
 
 command -v oc >/dev/null 2>&1 || fail "oc CLI not found. Install it first."
 info "oc CLI found"
@@ -60,7 +60,7 @@ info "cluster-admin privileges confirmed"
 
 # --- Step 2: Agentic Operator CRDs --------------------------------------------
 
-step "2/5" "Installing Agentic Operator CRDs..."
+step "2/7" "Installing Agentic Operator CRDs..."
 
 for crd in "${CRD_FILES[@]}"; do
   oc apply -f "${GITHUB_RAW}/config/crd/bases/${crd}"
@@ -69,7 +69,7 @@ info "${#CRD_FILES[@]} CRDs applied"
 
 # --- Step 3: Namespace + operator deployment ----------------------------------
 
-step "3/5" "Deploying operator to ${NAMESPACE} (sandbox-mode=${SANDBOX_MODE})..."
+step "3/7" "Deploying operator to ${NAMESPACE} (sandbox-mode=${SANDBOX_MODE})..."
 
 if oc create namespace "${NAMESPACE}" 2>/dev/null; then
   info "Namespace created"
@@ -134,6 +134,9 @@ $([ -n "${IMAGE_PULL_POLICY}" ] && echo '        - "--image-pull-policy='"${IMAG
         - name: health
           containerPort: 8081
           protocol: TCP
+        - name: webhook
+          containerPort: 9443
+          protocol: TCP
         livenessProbe:
           httpGet:
             path: /healthz
@@ -159,11 +162,20 @@ $([ -n "${IMAGE_PULL_POLICY}" ] && echo '        - "--image-pull-policy='"${IMAG
           capabilities:
             drop:
             - ALL
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
         env:
         - name: POD_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: agentic-operator-webhook-certs
+          optional: true
 EOF
 info "Operator deployment applied"
 
@@ -202,7 +214,7 @@ info "Agent read RBAC applied (cluster-reader + cluster-monitoring-view)"
 
 # --- Step 4: ApprovalPolicy ---------------------------------------------------
 
-step "4/5" "Creating ApprovalPolicy..."
+step "4/7" "Creating ApprovalPolicy..."
 
 oc apply -f - <<'EOF'
 apiVersion: agentic.openshift.io/v1alpha1
@@ -220,9 +232,31 @@ spec:
 EOF
 info "ApprovalPolicy created"
 
-# --- Step 5: Wait for operator ------------------------------------------------
+# --- Step 5: Webhook Service --------------------------------------------------
 
-step "5/5" "Waiting for operator to become ready..."
+step "5/7" "Creating webhook Service..."
+
+oc apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentic-operator-webhook-service
+  namespace: ${NAMESPACE}
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: agentic-operator-webhook-certs
+spec:
+  ports:
+    - port: 443
+      targetPort: 9443
+      protocol: TCP
+  selector:
+    app: lightspeed-agentic-operator
+EOF
+info "Webhook Service created"
+
+# --- Step 6: Wait for operator ------------------------------------------------
+
+step "6/7" "Waiting for operator to become ready..."
 
 if oc rollout status deployment/lightspeed-agentic-operator \
     -n "${NAMESPACE}" --timeout=120s >/dev/null 2>&1; then
@@ -233,6 +267,38 @@ else
   echo "    Check logs: oc logs deployment/lightspeed-agentic-operator -n ${NAMESPACE}"
   echo ""
 fi
+
+# --- Step 7: Webhook Configuration (after operator is ready) ------------------
+
+step "7/7" "Registering fail-closed MutatingWebhookConfiguration..."
+
+oc apply -f - <<EOF
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: agentic-operator-mutating-webhook
+  annotations:
+    service.beta.openshift.io/inject-cabundle: "true"
+webhooks:
+  - name: proposalapproval-mutator.agentic.openshift.io
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: ${NAMESPACE}
+    clientConfig:
+      service:
+        name: agentic-operator-webhook-service
+        namespace: ${NAMESPACE}
+        path: /mutate-proposalapproval
+    rules:
+      - operations: ["UPDATE"]
+        apiGroups: ["agentic.openshift.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["proposalapprovals"]
+    failurePolicy: Fail
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+EOF
+info "MutatingWebhookConfiguration registered"
 
 # --- Done ---------------------------------------------------------------------
 

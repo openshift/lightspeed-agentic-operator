@@ -20,6 +20,31 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// ApproverInfo captures the authenticated identity of the user who approved
+// a proposal stage. Fields are set by the mutating admission webhook and
+// are webhook-authoritative — any client-submitted values are overwritten.
+// +kubebuilder:validation:MinProperties=1
+type ApproverInfo struct {
+	// uid is the Kubernetes user UID from the AdmissionReview userInfo.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	UID string `json:"uid,omitempty"`
+
+	// username is the Kubernetes username from the AdmissionReview userInfo.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Username string `json:"username,omitempty"`
+
+	// approvedAt is the server-side time (RFC 3339) when the webhook processed
+	// the approval request.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	ApprovedAt string `json:"approvedAt,omitempty"`
+}
+
 // ApprovalDecision indicates whether a stage is approved or denied.
 // +kubebuilder:validation:Enum=Approved;Denied
 type ApprovalDecision string
@@ -157,6 +182,12 @@ type ApprovalStage struct {
 // +kubebuilder:validation:XValidation:rule="oldSelf.stages.all(old, old.type != 'Execution' || !has(old.execution) || !has(old.execution.maxAttempts) || old.execution.maxAttempts == 0 || self.stages.exists(s, s.type == 'Execution' && has(s.execution) && has(s.execution.maxAttempts) && s.execution.maxAttempts == old.execution.maxAttempts))",message="maxAttempts once set cannot be changed"
 // +kubebuilder:validation:MinProperties=1
 type ProposalApprovalSpec struct {
+	// approver captures the authenticated identity of the user who last
+	// modified this resource. Set by the mutating admission webhook;
+	// client-submitted values are overwritten.
+	// +optional
+	Approver ApproverInfo `json:"approver,omitempty,omitzero"`
+
 	// stages lists the approved (or denied) workflow steps. Each entry is
 	// a discriminated union keyed by type. Users add stages one at a time
 	// via patch as they approve each step.
@@ -224,6 +255,10 @@ type ProposalApprovalStatus struct {
 //	      kind: Proposal
 //	      name: fix-crash
 //	spec:
+//	  approver:
+//	    uid: "abc123"
+//	    username: "admin@example.com"
+//	    approvedAt: "2026-06-22T10:00:00Z"
 //	  stages:
 //	    - type: Analysis
 //	      analysis: {}

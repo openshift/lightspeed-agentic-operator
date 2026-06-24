@@ -108,7 +108,7 @@ type AuditLogger interface {
 
 	// Human approval wait span (§7) — measures human decision time.
 	StartApprovalWait(ctx context.Context, proposal *agenticv1alpha1.Proposal)
-	EndApprovalWait(proposal *agenticv1alpha1.Proposal)
+	EndApprovalWait(proposal *agenticv1alpha1.Proposal, approval *agenticv1alpha1.ProposalApproval)
 
 	// Phase child spans (§6) — children of the lifecycle root.
 	StartAnalysisSpan(ctx context.Context, proposal *agenticv1alpha1.Proposal) (context.Context, trace.Span)
@@ -307,11 +307,12 @@ func (l *ProductionAuditLogger) EmitApprovalReceived(ctx context.Context, propos
 	if selectedOption != nil {
 		payload["selectedOption"] = *selectedOption
 	}
-	// Approver fields (will be empty until webhook implemented)
-	payload["approver"] = map[string]interface{}{
-		"uid":       "", // Populated by webhook (separate ticket)
-		"username":  "", // Populated by webhook
-		"timestamp": "", // Populated by webhook
+	if approval.Spec.Approver.UID != "" {
+		payload["approver"] = map[string]interface{}{
+			"uid":        approval.Spec.Approver.UID,
+			"username":   approval.Spec.Approver.Username,
+			"approvedAt": approval.Spec.Approver.ApprovedAt,
+		}
 	}
 
 	l.emitStructuredLog("audit.approval.received", traceID.String(), payload)
@@ -320,6 +321,12 @@ func (l *ProductionAuditLogger) EmitApprovalReceived(ctx context.Context, propos
 	}
 	if selectedOption != nil {
 		attrs = append(attrs, attribute.Int("selected_option", int(*selectedOption)))
+	}
+	if approval.Spec.Approver.UID != "" {
+		attrs = append(attrs,
+			attribute.String("approver.uid", approval.Spec.Approver.UID),
+			attribute.String("approver.username", approval.Spec.Approver.Username),
+		)
 	}
 	l.addSpanEvent(ctx, "audit.approval.received", attrs...)
 }
@@ -585,10 +592,25 @@ func (l *ProductionAuditLogger) StartApprovalWait(ctx context.Context, proposal 
 	l.approvalSpans.LoadOrStore(proposal.UID, &spanEntry{ctx: spanCtx, span: span})
 }
 
-// EndApprovalWait ends the human_approval span.
-func (l *ProductionAuditLogger) EndApprovalWait(proposal *agenticv1alpha1.Proposal) {
+// EndApprovalWait ends the human_approval span, recording approver identity.
+func (l *ProductionAuditLogger) EndApprovalWait(proposal *agenticv1alpha1.Proposal, approval *agenticv1alpha1.ProposalApproval) {
 	if entry, ok := l.approvalSpans.LoadAndDelete(proposal.UID); ok {
 		if se, ok := entry.(*spanEntry); ok {
+			if approval != nil {
+				if approval.Spec.Approver.UID != "" {
+					se.span.SetAttributes(
+						attribute.String("approver.uid", approval.Spec.Approver.UID),
+						attribute.String("approver.username", approval.Spec.Approver.Username),
+						attribute.String("approver.approvedAt", approval.Spec.Approver.ApprovedAt),
+					)
+				}
+				for i := len(approval.Spec.Stages) - 1; i >= 0; i-- {
+					if approval.Spec.Stages[i].Decision != "" {
+						se.span.SetAttributes(attribute.String("approval.decision", string(approval.Spec.Stages[i].Decision)))
+						break
+					}
+				}
+			}
 			se.span.End()
 		}
 	}
@@ -672,7 +694,8 @@ func (l *NoOpAuditLogger) RecoverLifecycleContext(ctx context.Context, proposal 
 func (l *NoOpAuditLogger) EndLifecycleSpan(proposal *agenticv1alpha1.Proposal) bool { return false }
 func (l *NoOpAuditLogger) StartApprovalWait(ctx context.Context, proposal *agenticv1alpha1.Proposal) {
 }
-func (l *NoOpAuditLogger) EndApprovalWait(proposal *agenticv1alpha1.Proposal) {}
+func (l *NoOpAuditLogger) EndApprovalWait(proposal *agenticv1alpha1.Proposal, approval *agenticv1alpha1.ProposalApproval) {
+}
 func (l *NoOpAuditLogger) StartAnalysisSpan(ctx context.Context, proposal *agenticv1alpha1.Proposal) (context.Context, trace.Span) {
 	return ctx, nil
 }
