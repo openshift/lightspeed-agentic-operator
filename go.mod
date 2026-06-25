@@ -4,7 +4,7 @@ go 1.25.7
 
 require (
 	github.com/openshift/api v0.0.0-20260619095050-5346161d1bf2
-	github.com/openshift/lightspeed-agentic-operator/api v0.0.0-20260625090342-5e8e27d4f9ee
+	github.com/openshift/lightspeed-agentic-operator/api v0.0.0-20260625132528-b41dd064bee7
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
