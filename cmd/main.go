@@ -9,8 +9,6 @@ import (
 	// Import auth plugins (Azure, GCP, OIDC, etc.) for local and hosted kubeconfigs.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	consolev1 "github.com/openshift/api/console/v1"
-	openshiftv1 "github.com/openshift/api/operator/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -41,8 +39,6 @@ var scheme = runtime.NewScheme()
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(agenticv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(consolev1.AddToScheme(scheme))
-	utilruntime.Must(openshiftv1.AddToScheme(scheme))
 }
 
 // initTracerProvider initializes the OTEL tracer provider.
@@ -93,7 +89,6 @@ func main() {
 		metricsAddr         string
 		healthAddr          string
 		namespace           string
-		agenticConsoleImage string
 		agenticSandboxImage string
 		sandboxMode         string
 		imagePullPolicy     string
@@ -102,7 +97,6 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
 	flag.StringVar(&namespace, "namespace", "", "The namespace where the operator runs (required).")
-	flag.StringVar(&agenticConsoleImage, "agentic-console-image", "", "The image of the agentic console plugin container.")
 	flag.StringVar(&agenticSandboxImage, "agentic-sandbox-image", "", "The image of the agentic sandbox container.")
 	flag.StringVar(&sandboxMode, "sandbox-mode", "bare-pod", "Sandbox mode: bare-pod (default) or sandbox-claim.")
 	flag.StringVar(&imagePullPolicy, "image-pull-policy", "", "Image pull policy for sandbox pods (Always, IfNotPresent, Never). Empty uses Kubernetes default.")
@@ -214,7 +208,6 @@ func main() {
 
 	if err := agenticcontroller.Setup(mgr, agenticcontroller.Options{
 		Namespace:           namespace,
-		AgenticConsoleImage: agenticConsoleImage,
 		AgenticSandboxImage: agenticSandboxImage,
 		SandboxMode:         sandboxMode,
 		ImagePullPolicy:     imagePullPolicy,
