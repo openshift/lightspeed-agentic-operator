@@ -1,0 +1,32 @@
+version: 2
+
+project_name: oc-agentic
+
+builds:
+  - main: ./cmd/oc-agentic
+    binary: oc-agentic
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/openshift/lightspeed-agentic-operator/cli.Version={{ .Summary }}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "oc-agentic_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ .Summary }}"
+
+release:
+  disable: true

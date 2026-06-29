@@ -1,0 +1,42 @@
+name: Release CLI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cmd/oc-agentic/**"
+      - "cli/**"
+      - "api/**"
+      - "go.mod"
+      - "go.sum"
+      - ".goreleaser.yaml"
+      - ".github/workflows/release-cli.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          args: release --snapshot --clean
+
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: latest
+          name: Latest CLI Build
+          prerelease: true
+          make_latest: false
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
