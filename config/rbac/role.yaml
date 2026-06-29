@@ -7,17 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - configmaps
-  - services
-  verbs:
-  - create
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - events
   verbs:
   - create
@@ -105,26 +94,6 @@ rules:
   - list
   - watch
 - apiGroups:
-  - apps
-  resources:
-  - deployments
-  verbs:
-  - create
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
-  - console.openshift.io
-  resources:
-  - consoleplugins
-  verbs:
-  - create
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
   - extensions.agents.x-k8s.io
   resources:
   - sandboxclaims
@@ -141,15 +110,6 @@ rules:
   verbs:
   - create
   - delete
-  - get
-  - list
-  - update
-  - watch
-- apiGroups:
-  - operator.openshift.io
-  resources:
-  - consoles
-  verbs:
   - get
   - list
   - update

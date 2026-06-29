@@ -8,14 +8,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticolsconfig"
-	agenticconsole "github.com/openshift/lightspeed-agentic-operator/controller/console"
 	"github.com/openshift/lightspeed-agentic-operator/controller/proposal"
 	agenticsandbox "github.com/openshift/lightspeed-agentic-operator/controller/sandbox"
 )
 
 type Options struct {
 	Namespace           string
-	AgenticConsoleImage string
 	AgenticSandboxImage string
 	SandboxMode         string
 	ImagePullPolicy     string
@@ -62,16 +60,6 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 		return err
 	}
 	log.Info("AgenticOLSConfig controller registered")
-
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		return agenticconsole.EnsureAgenticConsole(ctx, mgr.GetClient(), agenticconsole.AgenticConsoleConfig{
-			Image:     opts.AgenticConsoleImage,
-			Namespace: opts.Namespace,
-		})
-	})); err != nil {
-		return err
-	}
-	log.Info("Agentic console runnable registered")
 
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		return agenticsandbox.EnsureBootstrapResources(ctx, mgr.GetClient(), agenticsandbox.BootstrapConfig{

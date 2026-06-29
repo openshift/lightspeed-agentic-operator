@@ -12,8 +12,9 @@
 #   - Logged into the target OpenShift cluster
 #   - cluster-admin privileges
 #
-# Note: The console plugin requires OpenShift 4.21+.
+# Note: The console plugin requires OpenShift 4.22+.
 #       Set CONSOLE_IMAGE="" to skip console deployment on older clusters.
+#       The console is deployed as a standalone workload (not operator-managed).
 
 set -euo pipefail
 
@@ -125,7 +126,6 @@ $([ -n "${IMAGE_PULL_POLICY}" ] && echo "        imagePullPolicy: ${IMAGE_PULL_P
         - "--namespace=${NAMESPACE}"
         - "--sandbox-mode=${SANDBOX_MODE}"
         - "--agentic-sandbox-image=${SANDBOX_IMAGE}"
-        - "--agentic-console-image=${CONSOLE_IMAGE}"
 $([ -n "${IMAGE_PULL_POLICY}" ] && echo '        - "--image-pull-policy='"${IMAGE_PULL_POLICY}"'"')
         ports:
         - name: metrics
@@ -299,6 +299,19 @@ webhooks:
     admissionReviewVersions: ["v1"]
 EOF
 info "MutatingWebhookConfiguration registered"
+
+# --- Step: Deploy console plugin (standalone) --------------------------------
+
+if [ -n "${CONSOLE_IMAGE}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [ -f "${SCRIPT_DIR}/deploy-console.sh" ]; then
+    NAMESPACE="${NAMESPACE}" CONSOLE_IMAGE="${CONSOLE_IMAGE}" bash "${SCRIPT_DIR}/deploy-console.sh"
+  else
+    echo "  ⚠ deploy-console.sh not found — skipping console deployment"
+  fi
+else
+  echo "  CONSOLE_IMAGE is empty — skipping console deployment"
+fi
 
 # --- Done ---------------------------------------------------------------------
 
