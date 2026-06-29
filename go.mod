@@ -3,7 +3,6 @@ module github.com/openshift/lightspeed-agentic-operator
 go 1.25.7
 
 require (
-	github.com/openshift/api v0.0.0-20260619095050-5346161d1bf2
 	github.com/openshift/lightspeed-agentic-operator/api v0.0.0-20260625132528-b41dd064bee7
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel v1.44.0
@@ -17,7 +16,7 @@ require (
 	k8s.io/apimachinery v0.35.3
 	k8s.io/cli-runtime v0.35.3
 	k8s.io/client-go v0.35.3
-	k8s.io/utils v0.0.0-20260617174310-a95e086a2553
+	k8s.io/utils v0.0.0-20260626114624-be93311217bd
 	sigs.k8s.io/controller-runtime v0.23.3
 	sigs.k8s.io/yaml v1.6.0
 )
