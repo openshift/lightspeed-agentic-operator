@@ -118,6 +118,8 @@ spec:
       serviceAccountName: lightspeed-agentic-operator
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: manager
         image: ${OPERATOR_IMAGE}
