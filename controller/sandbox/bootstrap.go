@@ -103,6 +103,12 @@ func ensureSandboxTemplate(ctx context.Context, c client.Client, image, namespac
 					"spec": map[string]any{
 						"serviceAccountName":           templateName,
 						"automountServiceAccountToken": false,
+						"securityContext": map[string]any{
+							"runAsNonRoot": true,
+							"seccompProfile": map[string]any{
+								"type": "RuntimeDefault",
+							},
+						},
 						"containers": []any{
 							map[string]any{
 								"name":  "agent",
@@ -116,8 +122,12 @@ func ensureSandboxTemplate(ctx context.Context, c client.Client, image, namespac
 								},
 								"securityContext": map[string]any{
 									"allowPrivilegeEscalation": false,
+									"runAsNonRoot":             true,
 									"capabilities": map[string]any{
 										"drop": []any{"ALL"},
+									},
+									"seccompProfile": map[string]any{
+										"type": "RuntimeDefault",
 									},
 								},
 							},

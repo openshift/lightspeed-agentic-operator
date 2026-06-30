@@ -19,6 +19,10 @@ spec:
     spec:
       serviceAccountName: lightspeed-agent
       automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: agent
           image: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent
@@ -29,9 +33,12 @@ spec:
               protocol: TCP
           securityContext:
             allowPrivilegeEscalation: false
+            runAsNonRoot: true
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
       volumes:
         - name: skills
           image:
