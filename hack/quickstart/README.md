@@ -63,17 +63,8 @@ The [`examples/`](examples/) directory contains LLMProvider + Agent templates:
 
 ## CLI Plugin
 
-Install the `oc-agentic` CLI plugin to manage proposals from the command line:
-
-```bash
-# Linux amd64
-curl -L https://github.com/openshift/lightspeed-agentic-operator/releases/latest/download/oc-agentic_linux_amd64.tar.gz | tar xz
-sudo mv oc-agentic /usr/local/bin/
-
-# macOS Apple Silicon
-curl -L https://github.com/openshift/lightspeed-agentic-operator/releases/latest/download/oc-agentic_darwin_arm64.tar.gz | tar xz
-sudo mv oc-agentic /usr/local/bin/
-```
+Install the `oc-agentic` CLI plugin to manage proposals from the command line
+([install instructions](../../README.md#install)).
 
 Verify installation:
 

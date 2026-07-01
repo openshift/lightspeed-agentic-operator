@@ -35,8 +35,8 @@ jobs:
         with:
           tag_name: latest
           name: Latest CLI Build
-          prerelease: true
-          make_latest: false
+          prerelease: false
+          make_latest: true
           files: |
             dist/*.tar.gz
             dist/checksums.txt
