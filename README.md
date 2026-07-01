@@ -6,6 +6,80 @@ Kubernetes controller for the agentic proposal workflow (`agentic.openshift.io/v
 - **Two Go modules (`go.mod` / `go.sum` at root and under `api/`)**: below; **directory map, phases, conventions**: [`CLAUDE.md`](CLAUDE.md)
 - **Tests, manifests, Makefile, cluster workflow, `make api-lint`, CEL / `XValidation`**: this file
 
+## CLI Plugin (`oc-agentic`)
+
+The `oc-agentic` binary is an `oc` CLI plugin for managing proposals. Place it in `$PATH` and `oc` auto-discovers it as `oc agentic <subcommand>`. It also works standalone.
+
+### Install
+
+```bash
+# Linux amd64
+curl -L https://github.com/openshift/lightspeed-agentic-operator/releases/latest/download/oc-agentic_linux_amd64.tar.gz | tar xz
+sudo mv oc-agentic /usr/local/bin/
+
+# macOS Apple Silicon
+curl -L https://github.com/openshift/lightspeed-agentic-operator/releases/latest/download/oc-agentic_darwin_arm64.tar.gz | tar xz
+sudo mv oc-agentic /usr/local/bin/
+```
+
+### Usage
+
+```bash
+# Create a proposal
+oc agentic proposal create --request="Fix crashloop in my-app namespace" --target-namespaces=my-app
+
+# List proposals
+oc agentic proposal list
+
+# Inspect a proposal
+oc agentic proposal get ag-abc12
+
+# Approve steps (analysis → execution → verification)
+oc agentic proposal approve ag-abc12 --stage=analysis
+oc agentic proposal approve ag-abc12 --stage=execution --option=0
+oc agentic proposal approve ag-abc12 --stage=verification
+
+# Or approve all pending steps at once
+oc agentic proposal approve ag-abc12 --all --wait
+
+# Deny a step
+oc agentic proposal deny ag-abc12 --stage=execution
+
+# Watch phase transitions
+oc agentic proposal watch ag-abc12
+
+# Stream sandbox logs
+oc agentic proposal logs ag-abc12 --step=Execution -f
+
+# Delete a proposal
+oc agentic proposal delete ag-abc12
+
+# System operations
+oc agentic status                # check if system is active or suspended
+oc agentic suspend --yes         # halt all agentic operations
+oc agentic resume                # resume operations
+oc agentic version
+```
+
+### Command Reference
+
+| Command | Description |
+|---------|-------------|
+| `proposal create` | Create a new proposal (`--request`, `--agent`, `--target-namespaces`) |
+| `proposal list` (`ls`) | List proposals (`-A`, `--phase`, `-o wide\|json\|yaml`) |
+| `proposal get` | Show proposal details (`-o json\|yaml`) |
+| `proposal approve` | Approve a step (`--stage`, `--option`, `--agent`, `--all`, `--wait`) |
+| `proposal deny` | Deny a step (`--stage`, defaults to next pending) |
+| `proposal watch` | Stream phase transitions until terminal |
+| `proposal logs` | Stream sandbox pod logs (`--step`, `-f`) |
+| `proposal delete` | Delete a proposal |
+| `status` | Show system suspension state |
+| `suspend` | Suspend all operations (`--yes` to skip prompt) |
+| `resume` | Resume operations |
+| `version` | Print plugin version |
+
+Default namespace is `openshift-lightspeed` unless overridden with `-n` or kubeconfig context.
+
 ## Development
 
 Run the manager against a cluster using the usual controller-runtime kubeconfig rules (`KUBECONFIG`, default kubeconfig path, or in-cluster as a pod). Auth plugins (OIDC, GCP, Azure, …) are registered via `k8s.io/client-go/plugin/pkg/client/auth`.
