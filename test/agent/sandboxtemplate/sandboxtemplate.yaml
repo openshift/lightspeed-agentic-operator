@@ -39,7 +39,12 @@ spec:
             readOnlyRootFilesystem: true
             seccompProfile:
               type: RuntimeDefault
+          volumeMounts:
+            - name: home
+              mountPath: /home/agent
       volumes:
         - name: skills
           image:
             reference: placeholder:latest
+        - name: home
+          emptyDir: {}
