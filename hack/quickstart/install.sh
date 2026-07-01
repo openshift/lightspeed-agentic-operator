@@ -305,11 +305,15 @@ info "MutatingWebhookConfiguration registered"
 # --- Step: Deploy console plugin (standalone) --------------------------------
 
 if [ -n "${CONSOLE_IMAGE}" ]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  if [ -f "${SCRIPT_DIR}/deploy-console.sh" ]; then
+  SCRIPT_DIR=""
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  fi
+  if [ -n "${SCRIPT_DIR}" ] && [ -f "${SCRIPT_DIR}/deploy-console.sh" ]; then
     NAMESPACE="${NAMESPACE}" CONSOLE_IMAGE="${CONSOLE_IMAGE}" bash "${SCRIPT_DIR}/deploy-console.sh"
   else
-    echo "  ⚠ deploy-console.sh not found — skipping console deployment"
+    curl -fsL "${GITHUB_RAW}/hack/quickstart/deploy-console.sh" \
+      | NAMESPACE="${NAMESPACE}" CONSOLE_IMAGE="${CONSOLE_IMAGE}" bash
   fi
 else
   echo "  CONSOLE_IMAGE is empty — skipping console deployment"
