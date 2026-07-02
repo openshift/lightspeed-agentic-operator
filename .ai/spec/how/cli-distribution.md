@@ -8,7 +8,7 @@ How the CLI binary is built, versioned, and published for end-user download.
 
 ## Overview
 
-Pre-built `oc-agentic` binaries are published to a rolling `latest` GitHub Release via GoReleaser and GitHub Actions. The binary is an `oc` CLI plugin: the `oc-` name prefix lets `oc` auto-discover it as `oc agentic <subcommand>` when placed in `$PATH`. It also works standalone (`./oc-agentic proposal list`) without `oc` installed.
+Pre-built `oc-agentic` binaries are published to a rolling `latest` GitHub Release via GoReleaser and GitHub Actions. The binary is an `oc` CLI plugin: the `oc-` name prefix lets `oc` auto-discover it as `oc agentic <subcommand>` when placed in `$PATH`. It also works standalone (`./oc-agentic run list`) without `oc` installed.
 
 ---
 

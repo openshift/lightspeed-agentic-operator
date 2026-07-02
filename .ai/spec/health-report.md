@@ -8,7 +8,7 @@ Layout: software (.ai/spec/)
 
 1. **how/reconciler.md line 61** — Console integration note says `EnsureAgenticConsole` is "not registered in `cmd/main.go` in this repo snapshot; another binary or future setup is expected to call it." This is stale: `controller/setup.go` registers it as a `manager.RunnableFunc` called from `cmd/main.go` via `controller.Setup()`. The note should be updated to reflect the current wiring.
 
-2. **what/crd-api.md rule 18** — States "Agent — `status.conditions`: Observed readiness; `Ready` condition documents whether referenced provider resources are accessible (see operator reconcile behavior)." No Agent reconciler exists in the codebase; the operator only reconciles `Proposal` CRs. Rule 18 should be marked `[PLANNED]` or reworded to clarify this is aspirational rather than implemented behavior.
+2. **what/crd-api.md rule 18** — States "Agent — `status.conditions`: Observed readiness; `Ready` condition documents whether referenced provider resources are accessible (see operator reconcile behavior)." No Agent reconciler exists in the codebase; the operator only reconciles `AgenticRun` CRs. Rule 18 should be marked `[PLANNED]` or reworded to clarify this is aspirational rather than implemented behavior.
 
 ## Missing
 

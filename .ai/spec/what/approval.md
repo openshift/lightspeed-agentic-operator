@@ -1,51 +1,51 @@
 # Human approval and policy
 
-Behavioral specification for gating asynchronous workflow steps. **Phase derivation** is in `proposal-lifecycle.md`. **CRD field shapes** are in `crd-api.md`.
+Behavioral specification for gating asynchronous workflow steps. **Phase derivation** is in `run-lifecycle.md`. **CRD field shapes** are in `crd-api.md`.
 
 ## Behavioral Rules
 
 1. **Policy resource**: Default cluster behavior is read from a cluster-scoped `ApprovalPolicy` named `cluster`. If the object is absent, the controller MUST behave as if all stages require manual human approval entries (no automatic stages).
-2. **Per-proposal resource**: Each `Proposal` MUST have a paired `ProposalApproval` with identical `metadata.name` and `metadata.namespace`. The controller MUST create it on first reconcile if missing, with an initial `spec.stages` containing only stages marked `Automatic` in the policy **that the proposal actually defines** (each auto stage is inserted with empty parameters and without an explicit `decision` — see rule 6). Stages for steps the proposal omits (e.g. `Verification` on an analysis-only proposal) MUST NOT be seeded regardless of the policy.
-3. **Owner reference**: The created `ProposalApproval` MUST be owned by its `Proposal` (controller owner ref, block owner deletion) so it is garbage-collected with the proposal.
+2. **Per-run resource**: Each `AgenticRun` MUST have a paired `AgenticRunApproval` with identical `metadata.name` and `metadata.namespace`. The controller MUST create it on first reconcile if missing, with an initial `spec.stages` containing only stages marked `Automatic` in the policy **that the run actually defines** (each auto stage is inserted with empty parameters and without an explicit `decision` — see rule 6). Stages for steps the run omits (e.g. `Verification` on an analysis-only run) MUST NOT be seeded regardless of the policy.
+3. **Owner reference**: The created `AgenticRunApproval` MUST be owned by its `AgenticRun` (controller owner ref, block owner deletion) so it is garbage-collected with the run.
 4. **Stage coverage**: Policy lists optional `spec.stages[]` entries named `Analysis`, `Execution`, `Verification`, or `Escalation`. Any workflow step **not** listed in the policy defaults to **Manual** gate behavior.
-5. **API vocabulary — `ApprovalMode`**: `Automatic` means the step is treated as approved without requiring a user-appended `ProposalApproval` stage entry (policy alone suffices). `Manual` means the step MUST have a matching entry in `ProposalApproval.spec.stages` unless no longer needed because the workflow ended earlier.
+5. **API vocabulary — `ApprovalMode`**: `Automatic` means the step is treated as approved without requiring a user-appended `AgenticRunApproval` stage entry (policy alone suffices). `Manual` means the step MUST have a matching entry in `AgenticRunApproval.spec.stages` unless no longer needed because the workflow ended earlier.
 6. **Auto seed shapes**: On creation only, automatic stages MUST be represented as `ApprovalStage` entries with the correct `type`, empty nested `analysis|execution|verification|escalation` struct, and **no** explicit `decision` field (implicitly not denied).
-7. **Approved vs denied — `ProposalApproval` entry**: A stage is **approved** for gating if a `ProposalApproval.spec.stages` element exists with matching `type` and `decision` is **not** `Denied`. Omitted `decision` MUST be treated as approved (not denied).
-8. **Denied terminal**: If any stage has `decision: Denied`, the controller MUST transition the proposal to a denied terminal condition (`Denied=True` at proposal level). Denial MUST be honored at the gate for the matching step when evaluated (analysis, execution, verification, or escalation).
-9. **Combined gate function**: For a sandbox step `S`, the effective **approve** signal is true if either (a) `ProposalApproval` contains an approved (non-denied) stage entry for `S`, OR (b) `ApprovalPolicy.spec.stages` contains `name=S` with `approval: Automatic`. This allows policy changes after creation to unblock proposals that still have empty `ProposalApproval` stages (fallback path).
+7. **Approved vs denied — `AgenticRunApproval` entry**: A stage is **approved** for gating if a `AgenticRunApproval.spec.stages` element exists with matching `type` and `decision` is **not** `Denied`. Omitted `decision` MUST be treated as approved (not denied).
+8. **Denied terminal**: If any stage has `decision: Denied`, the controller MUST transition the run to a denied terminal condition (`Denied=True` at run level). Denial MUST be honored at the gate for the matching step when evaluated (analysis, execution, verification, or escalation).
+9. **Combined gate function**: For a sandbox step `S`, the effective **approve** signal is true if either (a) `AgenticRunApproval` contains an approved (non-denied) stage entry for `S`, OR (b) `ApprovalPolicy.spec.stages` contains `name=S` with `approval: Automatic`. This allows policy changes after creation to unblock runs that still have empty `AgenticRunApproval` stages (fallback path).
 10. **Order of operations**: Analysis MUST pass its gate before the controller runs analysis. Execution MUST pass execution gate after analysis succeeds AND before RBAC + execution. Verification MUST pass verification gate before verification runs. Escalation MUST pass escalation gate before escalation runs.
-11. **Proposed idle**: When analysis is complete and execution is configured, the proposal remains in the **Proposed** derived phase until the execution gate opens (manual approval or automatic policy) — reconciliation MUST be idempotent while waiting.
-12. **Verifying idle**: After execution succeeds and verification is configured, the proposal remains **Verifying** while waiting for verification approval when manual.
-13. **Escalation idle**: When escalation is required, the proposal remains **Escalating** until escalation is approved (or auto policy) and the escalation agent completes or fails.
-14. **Execution option selection**: When multiple `RemediationOption` entries exist on the latest `AnalysisResult`, the user MUST select one via `ProposalApproval` execution stage `option`. If omitted, the effective index MUST default to option `0`.
+11. **Proposed idle**: When analysis is complete and execution is configured, the run remains in the **Proposed** derived phase until the execution gate opens (manual approval or automatic policy) — reconciliation MUST be idempotent while waiting.
+12. **Verifying idle**: After execution succeeds and verification is configured, the run remains **Verifying** while waiting for verification approval when manual.
+13. **Escalation idle**: When escalation is required, the run remains **Escalating** until escalation is approved (or auto policy) and the escalation agent completes or fails.
+14. **Execution option selection**: When multiple `RemediationOption` entries exist on the latest `AnalysisResult`, the user MUST select one via `AgenticRunApproval` execution stage `option`. If omitted, the effective index MUST default to option `0`.
 15. **Trim-on-execute**: Before executing, when more than one option remains stored, the controller SHOULD persist a trimmed `AnalysisResult.status.options` containing only the selected option; when only one option exists, trimming is a no-op beyond selection.
-16. **Execution agent override**: `ProposalApproval` execution stage `agent`, when set, MUST override `spec.execution.agent` / default agent naming for resolving the `Agent` CR for that step.
-17. **Analysis/verification/escalation agent overrides**: Each stage’s nested object MAY carry `agent` which MUST override the proposal’s step agent for that stage when non-empty (escalation default remains analysis agent if no override — per controller resolution rules).
+16. **Execution agent override**: `AgenticRunApproval` execution stage `agent`, when set, MUST override `spec.execution.agent` / default agent naming for resolving the `Agent` CR for that step.
+17. **Analysis/verification/escalation agent overrides**: Each stage’s nested object MAY carry `agent` which MUST override the run’s step agent for that stage when non-empty (escalation default remains analysis agent if no override — per controller resolution rules).
 18. **Max attempts — ceiling**: Let `ceiling` be `ApprovalPolicy.spec.maxAttempts` when that value is positive; otherwise `ceiling` MUST be treated as `1` for attempt budgeting.
-19. **Max attempts — execution cap**: When `ProposalApproval` execution stage sets `maxAttempts` > 0, the effective maximum attempts MUST be the lesser of that value and `ceiling`. When execution stage omits `maxAttempts` or sets zero, the effective maximum MUST be `ceiling`.
+19. **Max attempts — execution cap**: When `AgenticRunApproval` execution stage sets `maxAttempts` > 0, the effective maximum attempts MUST be the lesser of that value and `ceiling`. When execution stage omits `maxAttempts` or sets zero, the effective maximum MUST be `ceiling`.
 20. **Max attempts — policy absent**: With no `ApprovalPolicy` object, `ceiling` MUST be `1`; execution stage `maxAttempts` MUST still be capped by that effective ceiling (cannot raise attempts without a policy defining a higher ceiling).
-21. **Attempts semantics**: “Max attempts” counts total execution runs in the current analysis context (initial run plus post-verification retries) until success or escalation per `proposal-lifecycle.md`.
+21. **Attempts semantics**: “Max attempts” counts total execution runs in the current analysis context (initial run plus post-verification retries) until success or escalation per `run-lifecycle.md`.
 22. **Verification approval persistence**: User approval for verification MUST apply across verification retries within the same analysis iteration (tests verify a single verification approval covers multiple verify invocations after execution retries).
-23. **CEL invariants on `ProposalApproval`**: Users MUST NOT remove prior stages; MUST NOT flip decisions; MUST NOT lower execution `maxAttempts` once set — CRD validation enforces these.
+23. **CEL invariants on `AgenticRunApproval`**: Users MUST NOT remove prior stages; MUST NOT flip decisions; MUST NOT lower execution `maxAttempts` once set — CRD validation enforces these.
 24. **Append-only human workflow**: Operators SHOULD instruct users to add new stages by patching `spec.stages` append-only rather than replacing the whole list, to respect CEL.
-25. **Escalation stage existence**: Escalation is not in `Proposal.spec`; it appears only when retry/verification logic escalates. Approval for escalation follows the same Automatic/Manual rules as other stages.
+25. **Escalation stage existence**: Escalation is not in `AgenticRun.spec`; it appears only when retry/verification logic escalates. Approval for escalation follows the same Automatic/Manual rules as other stages.
 
 ## Configuration Surface
 
 - `ApprovalPolicy.metadata.name` (must equal `cluster`)
 - `ApprovalPolicy.spec.stages[].name`, `ApprovalPolicy.spec.stages[].approval`
-- `ApprovalPolicy.spec.maxAttempts`, `ApprovalPolicy.spec.maxConcurrentProposals`
-- `ProposalApproval.metadata.name`, `ProposalApproval.metadata.namespace`
-- `ProposalApproval.spec.stages[].type`, `ProposalApproval.spec.stages[].decision`
-- `ProposalApproval.spec.stages[].analysis.agent`
-- `ProposalApproval.spec.stages[].execution.agent`, `.option`, `.maxAttempts`
-- `ProposalApproval.spec.stages[].verification.agent`
-- `ProposalApproval.spec.stages[].escalation.agent`
+- `ApprovalPolicy.spec.maxAttempts`, `ApprovalPolicy.spec.maxConcurrentRuns`
+- `AgenticRunApproval.metadata.name`, `AgenticRunApproval.metadata.namespace`
+- `AgenticRunApproval.spec.stages[].type`, `AgenticRunApproval.spec.stages[].decision`
+- `AgenticRunApproval.spec.stages[].analysis.agent`
+- `AgenticRunApproval.spec.stages[].execution.agent`, `.option`, `.maxAttempts`
+- `AgenticRunApproval.spec.stages[].verification.agent`
+- `AgenticRunApproval.spec.stages[].escalation.agent`
 
 ### Approval Authorization
 
-26. **Cluster-admin gate.** Only users in the `system:cluster-admins` group MAY approve proposal execution via `patch` on `proposalapprovals`. This is enforced by Kubernetes RBAC.
-27. **Dedicated approver ClusterRole.** The operator ships a ClusterRole `agentic-proposal-approver` granting `get`, `list`, `watch`, and `patch` on `proposalapprovals`, plus `get`, `list`, `watch` on `proposals` (so approvers can see what they're approving). A ClusterRoleBinding `agentic-proposal-approver-binding` binds this role to the `system:cluster-admins` group. No other operator-shipped binding grants `patch proposalapprovals` to human actors. The operator's own `agentic-operator-manager-role` retains `patch` since it seeds ProposalApproval CRs programmatically (bound to the `controller-manager` ServiceAccount, not a human).
+26. **Cluster-admin gate.** Only users in the `system:cluster-admins` group MAY approve run execution via `patch` on `agenticrunapprovals`. This is enforced by Kubernetes RBAC.
+27. **Dedicated approver ClusterRole.** The operator ships a ClusterRole `agentic-run-approver` granting `get`, `list`, `watch`, and `patch` on `agenticrunapprovals`, plus `get`, `list`, `watch` on `agenticruns` (so approvers can see what they're approving). A ClusterRoleBinding `agentic-run-approver-binding` binds this role to the `system:cluster-admins` group. No other operator-shipped binding grants `patch agenticrunapprovals` to human actors. The operator's own `agentic-operator-manager-role` retains `patch` since it seeds AgenticRunApproval CRs programmatically (bound to the `controller-manager` ServiceAccount, not a human).
 28. **Implementation.** Manifests live in `config/rbac/proposal_approver_role.yaml` and `config/rbac/proposal_approver_binding.yaml`, included via `config/rbac/kustomization.yaml`. Applied automatically on `make deploy`.
 
 ## Constraints
@@ -56,6 +56,7 @@ Behavioral specification for gating asynchronous workflow steps. **Phase derivat
 
 ## Planned Changes
 
-- [PLANNED: OLS-2894] **Proposal-scoped policy hints** (e.g. annotations) evaluated **before** cluster `ApprovalPolicy` for enterprise overrides.
+- [PLANNED: OLS-2894] **Run-scoped policy hints** (e.g. annotations) evaluated **before** cluster `ApprovalPolicy` for enterprise overrides.
 - [PLANNED: OLS-2894] **Namespace-scoped `ApprovalPolicy`** or additional policy CRDs if tenancy demands policies per namespace instead of a single cluster singleton.
 - [PLANNED: OLS-3019] Re-authorization or **re-approval** for long-running or deviating executions beyond append-only stage semantics.
+- [PLANNED: OLS-3295] Rename `ProposalApproval` CRD to `AgenticRunApproval`, `proposals` RBAC resource to `agenticruns`, and update approver ClusterRole name.

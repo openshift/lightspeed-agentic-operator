@@ -15,7 +15,7 @@ Audience: AI agents. Command behavior and user-facing rules belong in **what/** 
 
 | File | Types | Key functions |
 |------|-------|----------------|
-| `root.go` | — | `NewRootCmd(streams)` — registers `proposal` subtree, `system` commands (`status`, `suspend`, `resume`), and `version` |
+| `root.go` | — | `NewRootCmd(streams)` — registers `run` subtree, `system` commands (`status`, `suspend`, `resume`), and `version` |
 | `version.go` | Package var `Version` (default `dev`) | `NewVersionCmd(streams)` |
 
 ---
@@ -47,7 +47,7 @@ Audience: AI agents. Command behavior and user-facing rules belong in **what/** 
 | `approve.go` | `ApproveOptions` | `NewApproveCmd`, `Complete`, `Validate`, `Run`, `getOrCreateApproval`, `pendingStages`, `normalizeStageType` |
 | `deny.go` | `DenyOptions` | `NewDenyCmd`, `Complete`, `Run`, `nextPendingStage` |
 | `delete.go` | `DeleteOptions` | `NewDeleteCmd`, `Complete`, `Run` |
-| `watch.go` | `WatchOptions`; package var `proposalGVR` | `NewWatchCmd`, `Complete`, `Run`, `doWatch`, `extractConditions` |
+| `watch.go` | `WatchOptions`; package var `agenticRunGVR` | `NewWatchCmd`, `Complete`, `Run`, `doWatch`, `extractConditions` |
 | `logs.go` | `LogsOptions` | `NewLogsCmd`, `Complete`, `Validate`, `Run`, `resolveSandbox` |
 
 `*_test.go` files under `cli/` exercise commands (not fully enumerated here).
@@ -58,7 +58,7 @@ Audience: AI agents. Command behavior and user-facing rules belong in **what/** 
 
 ```
 oc-agentic
-├── proposal (aliases: proposals, prop)
+├── run (aliases: runs)
 │   ├── list (ls)
 │   ├── get NAME
 │   ├── create
@@ -78,11 +78,11 @@ oc-agentic
 ## Kubernetes client usage (not generic “dynamic” for CRUD)
 
 - **Primary:** `sigs.k8s.io/controller-runtime/pkg/client.Client` constructed by `NewClient(configFlags)` → `configFlags.ToRESTConfig()` → `client.New(cfg, client.Options{Scheme: scheme})`.
-- **Typed API:** `Create`/`Get`/`List`/`Patch`/`Delete` use `agenticv1alpha1` types (`Proposal`, `ProposalList`, `ProposalApproval`).
-- **Watch:** `cli/proposal/watch.go` uses **`k8s.io/client-go/dynamic`** `Resource(proposalGVR).Namespace(ns).Watch` with `FieldSelector` on `metadata.name` — events arrive as `*unstructured.Unstructured`.
-- **Logs:** `k8s.io/client-go/kubernetes.Clientset` `CoreV1().Pods(ns).GetLogs(name, opts).Stream` — pod name taken from proposal status sandbox info (see below).
+- **Typed API:** `Create`/`Get`/`List`/`Patch`/`Delete` use `agenticv1alpha1` types (`AgenticRun`, `AgenticRunList`, `AgenticRunApproval`).
+- **Watch:** `cli/proposal/watch.go` uses **`k8s.io/client-go/dynamic`** `Resource(agenticRunGVR).Namespace(ns).Watch` with `FieldSelector` on `metadata.name` — events arrive as `*unstructured.Unstructured`.
+- **Logs:** `k8s.io/client-go/kubernetes.Clientset` `CoreV1().Pods(ns).GetLogs(name, opts).Stream` — pod name taken from run status sandbox info (see below).
 
-There is **no** unstructured client for proposal CRUD in the main commands; only watch uses dynamic + unstructured.
+There is **no** unstructured client for run CRUD in the main commands; only watch uses dynamic + unstructured.
 
 ---
 
@@ -97,14 +97,14 @@ There is **no** unstructured client for proposal CRUD in the main commands; only
 
 ## Per-command API behavior (concise)
 
-- **`create`:** Builds `Proposal` with `GenerateName: "ag-"`, `Spec.Request`, `TargetNamespaces`, `Analysis.Agent` from flag default `"default"`. `client.Create`. Output: line message or `-o json|yaml` via `MarshalOutput`.
-- **`list`:** `client.List` `ProposalList`, optional `client.InNamespace`, filter by `--phase` using `agenticv1alpha1.DerivePhase` on each item. Table via `PrintTable` + `ColoredPhase` + `HumanDuration`; `-o wide` adds target namespaces column; `-A` lists cluster-wide.
+- **`create`:** Builds `AgenticRun` with `GenerateName: "ag-"`, `Spec.Request`, `TargetNamespaces`, `Analysis.Agent` from flag default `"default"`. `client.Create`. Output: line message or `-o json|yaml` via `MarshalOutput`.
+- **`list`:** `client.List` `AgenticRunList`, optional `client.InNamespace`, filter by `--phase` using `agenticv1alpha1.DerivePhase` on each item. Table via `PrintTable` + `ColoredPhase` + `HumanDuration`; `-o wide` adds target namespaces column; `-A` lists cluster-wide.
 - **`get`:** `client.Get` by name; human-readable sections from `Spec`, `Status.Steps`, and `Status.Conditions` (step summaries via `stepStatusFromConditions`).
-- **`approve`:** Loads `Proposal`; `getOrCreateApproval` (get or create `ProposalApproval` with owner ref — create path omits controller flags present in controller’s `ensureProposalApproval`; operator reconciler may enrich). Builds `[]ApprovalStage` entries, `client.Patch(MergeFrom)` on approval. `--all` uses `pendingStages` derived from spec non-zero steps vs existing stage types. `--wait` delegates to `doWatch`.
-- **`deny`:** Requires existing `ProposalApproval`; appends denied stage with `ApprovalDecisionDenied`. `--stage` defaults via `nextPendingStage` walk order analysis → execution → verification.
-- **`delete`:** `client.Delete` minimal `Proposal` object keyed by name/namespace.
+- **`approve`:** Loads `AgenticRun`; `getOrCreateApproval` (get or create `AgenticRunApproval` with owner ref — create path omits controller flags present in controller’s `ensureAgenticRunApproval`; operator reconciler may enrich). Builds `[]ApprovalStage` entries, `client.Patch(MergeFrom)` on approval. `--all` uses `pendingStages` derived from spec non-zero steps vs existing stage types. `--wait` delegates to `doWatch`.
+- **`deny`:** Requires existing `AgenticRunApproval`; appends denied stage with `ApprovalDecisionDenied`. `--stage` defaults via `nextPendingStage` walk order analysis → execution → verification.
+- **`delete`:** `client.Delete` minimal `AgenticRun` object keyed by name/namespace.
 - **`watch`:** Dynamic watch; `extractConditions` pulls `status.conditions` into `[]metav1.Condition`; phase from `DerivePhase`; prints only on phase change; stops when `IsTerminalPhase` (Completed, Failed, Escalated, Denied — note helpers.go set).
-- **`logs`:** Loads proposal via controller-runtime client; `resolveSandbox` picks explicit `--step` (normalized via `NormalizeStep`) or prefers verification, then execution, then analysis sandbox info. Uses **`SandboxInfo.ClaimName` as pod name** and `SandboxInfo.Namespace` (fallback proposal namespace). Streams with optional `-f`.
+- **`logs`:** Loads run via controller-runtime client; `resolveSandbox` picks explicit `--step` (normalized via `NormalizeStep`) or prefers verification, then execution, then analysis sandbox info. Uses **`SandboxInfo.ClaimName` as pod name** and `SandboxInfo.Namespace` (fallback run namespace). Streams with optional `-f`.
 
 ---
 
@@ -120,7 +120,7 @@ There is **no** unstructured client for proposal CRUD in the main commands; only
 ## Shared helpers (`cli/proposal/helpers.go`)
 
 - **Scheme:** Registers `clientgoscheme` + `agenticv1alpha1` for typed client.
-- **Phase/step validation:** `validProposalPhases` slice must stay aligned with API constants (comment in file). `validSandboxSteps` for logs `--step`.
+- **Phase/step validation:** `validAgenticRunPhases` slice must stay aligned with API constants (comment in file). `validSandboxSteps` for logs `--step`.
 - **Sorting:** `SortProposalsByAge` descending by `CreationTimestamp`.
 - **Duration:** `k8s.io/apimachinery/pkg/util/duration.HumanDuration`.
 
@@ -129,7 +129,7 @@ There is **no** unstructured client for proposal CRUD in the main commands; only
 ## Data Flow
 
 ```
-User invokes oc-agentic proposal <cmd> [flags]
+User invokes oc-agentic run <cmd> [flags]
   │
   ├─ Cobra dispatches to subcommand Run()
   │    ├─ Complete(): resolve namespace, build K8s client
@@ -144,7 +144,7 @@ User invokes oc-agentic proposal <cmd> [flags]
 
 ## Key Abstractions
 
-- **Typed client** (`controller-runtime`): Used for all CRUD operations on `Proposal`, `ProposalApproval`. Provides compile-time safety via `agenticv1alpha1` types.
+- **Typed client** (`controller-runtime`): Used for all CRUD operations on `AgenticRun`, `AgenticRunApproval`. Provides compile-time safety via `agenticv1alpha1` types.
 - **Dynamic client** (`client-go`): Used only for watch operations. Returns `*unstructured.Unstructured` events decoded via `DerivePhase`.
 - **Clientset** (`client-go`): Used only for pod log streaming. Direct CoreV1 API access.
 - **`ConfigFlags`**: Standard kubeconfig/context/namespace flag bundle shared across all subcommands.
@@ -152,13 +152,13 @@ User invokes oc-agentic proposal <cmd> [flags]
 
 ## Cross-references
 
-- Proposal phases and condition → phase mapping: **`api/v1alpha1` `DerivePhase`** — see **what/proposal-lifecycle.md** (not duplicated here).
-- Approval stage types and policy interaction: reconciler and CLI both append to `ProposalApproval.Spec.Stages` — see **what/approval.md**.
+- Run phases and condition → phase mapping: **`api/v1alpha1` `DerivePhase`** — see **what/run-lifecycle.md** (not duplicated here).
+- Approval stage types and policy interaction: reconciler and CLI both append to `AgenticRunApproval.Spec.Stages` — see **what/approval.md**.
 - Sandbox claim/pod relationship for log streaming: **what/sandbox-execution.md** if documented; this how spec notes the CLI’s use of `Status.Steps.*.Sandbox` only.
 
 ---
 
 ## Implementation notes
 
-- **`validProposalPhases` in `helpers.go`** includes all terminal phases including `EmergencyStopped`. Still missing `Proposed` and `Escalating` relative to `ProposalPhase` in `api/v1alpha1/proposal_types.go`. `list --phase` validation (`IsValidPhase`) can reject phase strings that `DerivePhase` still produces; align the slice with API constants when fixing UX.
+- **`validAgenticRunPhases` in `helpers.go`** includes all terminal phases including `EmergencyStopped`. Still missing `Proposed` and `Escalating` relative to `AgenticRunPhase` in `api/v1alpha1/proposal_types.go`. `list --phase` validation (`IsValidPhase`) can reject phase strings that `DerivePhase` still produces; align the slice with API constants when fixing UX.
 - **`watch` terminal set:** `IsTerminalPhase` matches five phases (includes `Escalated` and `EmergencyStopped`); matches common completion paths; verify against **what/** if `Analyzing` as terminal edge cases matter.
