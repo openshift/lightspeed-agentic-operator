@@ -6,20 +6,20 @@
 |---|---|---|
 | `go.mod` | module `github.com/openshift/lightspeed-agentic-operator` | Root module: controller, CLI, build targets |
 | `api/go.mod` | module `github.com/openshift/lightspeed-agentic-operator/api` | Standalone API module for downstream consumers |
-| `api/v1alpha1/` | `Proposal`, `Agent`, `LLMProvider`, `ApprovalPolicy`, `ProposalApproval`, result types, `DerivePhase` | CRD type definitions, phase derivation, CEL markers, deepcopy |
+| `api/v1alpha1/` | `AgenticRun`, `Agent`, `LLMProvider`, `ApprovalPolicy`, `AgenticRunApproval`, result types, `DerivePhase` | CRD type definitions, phase derivation, CEL markers, deepcopy |
 | `cmd/main.go` | `main`, `scheme` | Operator binary entry point |
 | `cmd/oc-agentic/main.go` | `main` | CLI binary entry point |
-| `controller/setup.go` | `Setup`, `Options` | Wires proposal controller + console plugin into manager |
-| `controller/proposal/` | `ProposalReconciler`, `SandboxAgentCaller`, `SandboxManager` | Proposal reconciler, sandbox management, agent HTTP client, RBAC, results, templates |
+| `controller/setup.go` | `Setup`, `Options` | Wires run controller + console plugin into manager |
+| `controller/proposal/` | `AgenticRunReconciler`, `SandboxAgentCaller`, `SandboxManager` | Proposal reconciler, sandbox management, agent HTTP client, RBAC, results, templates |
 | `controller/console/` | `EnsureAgenticConsole`, `AgenticConsoleConfig` | Console plugin deployment (Deployment, Service, ConfigMap, ConsolePlugin CR) |
 | `controller/sandbox/` | `EnsureBaseSandboxTemplate`, `BaseSandboxConfig` | Bootstrap base SandboxTemplate + ServiceAccount at startup |
 | `cli/` | `NewRootCmd` | CLI root command |
-| `cli/proposal/` | `CreateOptions`, `ListOptions`, `GetOptions`, `ApproveOptions`, `DenyOptions`, `WatchOptions`, `LogsOptions`, `DeleteOptions` | CLI subcommands for proposal lifecycle operations |
+| `cli/proposal/` | `CreateOptions`, `ListOptions`, `GetOptions`, `ApproveOptions`, `DenyOptions`, `WatchOptions`, `LogsOptions`, `DeleteOptions` | CLI subcommands for run lifecycle operations |
 | `config/crd/bases/` | Generated YAML | CRD manifests (regenerate with `make manifests`) |
 | `config/rbac/` | Generated YAML | RBAC manifests: ServiceAccount, ClusterRole, bindings |
 | `config/manager/` | Kustomize patches | Operator Deployment kustomize overlays |
 | `config/default/` | Kustomize base | Default kustomize composition for full deployment |
-| `examples/setup/` | YAML fixtures | Day-0 resources: Agent, LLMProvider, ApprovalPolicy, sample Proposals |
+| `examples/setup/` | YAML fixtures | Day-0 resources: Agent, LLMProvider, ApprovalPolicy, sample AgenticRuns |
 | `test/agent/` | Mock HTTP server | `POST /v1/agent/run` mock for integration testing |
 | `test/agent/sandboxtemplate/` | Kustomize base | Base `SandboxTemplate` for in-cluster mock agent |
 | `test/e2e/` | Build tag `e2e` | Black-box tests against live cluster + running operator |
@@ -30,7 +30,7 @@
 **Operator binary** (`cmd/main.go`):
 - Parses flags (`--namespace`, `--metrics-bind-address`, `--health-probe-bind-address`, `--agentic-console-image`, `--agentic-sandbox-image`)
 - Builds controller-runtime `Manager` with scheme (core + `agenticv1alpha1` + OpenShift console/operator)
-- Calls `controller.Setup(mgr, opts)` which registers proposal controller and console runnable
+- Calls `controller.Setup(mgr, opts)` which registers run controller and console runnable
 - Starts manager with signal handler
 
 **CLI binary** (`cmd/oc-agentic/main.go`):
@@ -39,7 +39,7 @@
 
 **Controller setup** (`controller/setup.go`):
 - Creates `SandboxManager` and `SandboxAgentCaller` with dependency injection
-- Registers `ProposalReconciler` via `SetupWithManager`
+- Registers `AgenticRunReconciler` via `SetupWithManager`
 - Registers `EnsureAgenticConsole` as a `RunnableFunc`
 - Registers `EnsureBaseSandboxTemplate` as a `RunnableFunc`
 

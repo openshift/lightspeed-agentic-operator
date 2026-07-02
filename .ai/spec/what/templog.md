@@ -10,17 +10,17 @@ Implementation details for the agentic-operator's role in the templog feature. S
 2. Structured JSON to stdout always emits when audit is enabled, regardless of whether the OTLP log endpoint is set. This is dual emission — stdout is never replaced.
 3. The OTLP log endpoint is independent of `spec.audit.otel.endpoint` (tracing). The operator can emit to both simultaneously: OTLP logs to the Collector, OTLP spans to the tracing endpoint.
 4. Each OTLP log record carries:
-   - `trace_id` in the log record's trace context (Proposal `metadata.uid`, hyphens stripped, 32-char hex)
-   - `event` as a log record attribute (the event discriminator, e.g., `audit.proposal.received`)
+   - `trace_id` in the log record's trace context (AgenticRun `metadata.uid`, hyphens stripped, 32-char hex)
+   - `event` as a log record attribute (the event discriminator, e.g., `audit.agenticrun.received`)
    - The full structured JSON audit event as the log record body
 5. When the OTLP log endpoint is absent, no OTLP log records are emitted. No error, no warning — same graceful degradation as the tracing no-op exporter.
 
-### Proposal Finalizer
+### AgenticRun Finalizer
 
-6. When a new Proposal CR is created and templog is enabled (agentic-operator reads this from an environment variable set by the lightspeed-operator), the operator adds the finalizer `agentic.openshift.io/templog-cleanup` to the Proposal.
-7. When a Proposal CR is deleted and the `agentic.openshift.io/templog-cleanup` finalizer is present:
+6. When a new AgenticRun CR is created and templog is enabled (agentic-operator reads this from an environment variable set by the lightspeed-operator), the operator adds the finalizer `agentic.openshift.io/templog-cleanup` to the AgenticRun.
+7. When a AgenticRun CR is deleted and the `agentic.openshift.io/templog-cleanup` finalizer is present:
    a. The operator connects to PostgreSQL using the credentials from the shared secret.
-   b. Executes `DELETE FROM templogs.logs WHERE trace_id = $1` where `$1` is the Proposal `metadata.uid` with hyphens stripped.
+   b. Executes `DELETE FROM templogs.logs WHERE trace_id = $1` where `$1` is the AgenticRun `metadata.uid` with hyphens stripped.
    c. On success, removes the finalizer — CR deletion proceeds.
    d. On failure (Postgres unreachable, query error), the finalizer blocks deletion. The reconciler requeues with standard controller-runtime exponential backoff.
 8. The finalizer does not depend on the Collector being present. It connects directly to PostgreSQL. This handles the case where `spec.templog` was disabled after logs were written — the finalizer still fires and cleans up.
@@ -33,13 +33,13 @@ Implementation details for the agentic-operator's role in the templog feature. S
 
 ## Edge Cases
 
-- **Templog disabled after Proposal creation.** The finalizer was already added. On deletion, the finalizer fires and deletes rows from Postgres. The Collector being absent does not affect this — the operator connects directly to Postgres.
-- **Postgres unavailable during Proposal deletion.** The finalizer blocks. The Proposal CR cannot be deleted until cleanup succeeds. This is correct for a compliance-adjacent feature.
+- **Templog disabled after AgenticRun creation.** The finalizer was already added. On deletion, the finalizer fires and deletes rows from Postgres. The Collector being absent does not affect this — the operator connects directly to Postgres.
+- **Postgres unavailable during AgenticRun deletion.** The finalizer blocks. The AgenticRun CR cannot be deleted until cleanup succeeds. This is correct for a compliance-adjacent feature.
 - **No rows to delete.** The `DELETE` query returns 0 rows affected. The finalizer succeeds and is removed. No error.
-- **Templog enabled mid-lifecycle.** Proposals created before templog was enabled do not have the finalizer. Their audit events were not stored in Postgres (the Collector was not deployed). No cleanup needed.
+- **Templog enabled mid-lifecycle.** Runs created before templog was enabled do not have the finalizer. Their audit events were not stored in Postgres (the Collector was not deployed). No cleanup needed.
 
 ## Cross-References
 
 - Parent spec: `what/templog.md`
 - `what/audit-logging.md` — Audit event catalog, structured JSON format, OTEL span hierarchy
-- `what/proposal-lifecycle.md` — Proposal CR lifecycle, phase transitions, finalizers
+- `what/run-lifecycle.md` — AgenticRun CR lifecycle, phase transitions, finalizers

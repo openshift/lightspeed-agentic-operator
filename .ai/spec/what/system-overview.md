@@ -1,12 +1,12 @@
 # System Overview
 
-The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal` custom resources and drives them through a multi-phase AI-assisted workflow. Each phase (analysis, execution, verification) invokes an LLM-backed agent running in an ephemeral sandbox pod, with human approval gates between phases. The operator manages the full lifecycle: CRD reconciliation, sandbox provisioning, RBAC materialization, result recording, and garbage collection.
+The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRun` custom resources and drives them through a multi-phase AI-assisted workflow. Each phase (analysis, execution, verification) invokes an LLM-backed agent running in an ephemeral sandbox pod, with human approval gates between phases. The operator manages the full lifecycle: CRD reconciliation, sandbox provisioning, RBAC materialization, result recording, and garbage collection.
 
 ## Behavioral Rules
 
 ### System Role
 
-1. The operator MUST watch `Proposal` resources across all namespaces and reconcile them through the proposal lifecycle defined in `proposal-lifecycle.md`.
+1. The operator MUST watch `AgenticRun` resources across all namespaces and reconcile them through the run lifecycle defined in `run-lifecycle.md`.
 2. The operator MUST run as a single-replica controller-runtime manager in a designated operator namespace, not in workload namespaces.
 3. The operator MUST register health (`/healthz`) and readiness (`/readyz`) probes.
 4. The operator MUST accept its namespace via `--namespace` flag or `POD_NAMESPACE` environment variable; it MUST exit if neither is provided.
@@ -14,11 +14,11 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 ### Component Inventory
 
 5. The system comprises three functional components:
-   - **Proposal controller** — reconciles `Proposal` CRs through the workflow state machine.
-   - **CLI plugin** (`oc-agentic`) — provides `oc agentic proposal` commands for proposal CRUD, approval, watch, and log streaming.
+   - **AgenticRun controller** — reconciles `AgenticRun` CRs through the workflow state machine.
+   - **CLI plugin** (`oc-agentic`) — provides `oc agentic run` commands for run CRUD, approval, watch, and log streaming.
    - **API types** (`api/v1alpha1`) — CRD type definitions published as a separate Go module for downstream consumers.
 5a. [PLANNED: OLS-3236] The **console plugin** deployment is migrated to the lightspeed-operator for full reconciliation lifecycle management. The agentic-operator no longer deploys any console plugins. The **alerts adapter** deployment is also managed by the lightspeed-operator.
-6. The proposal controller runs in the operator binary via `controller.Setup()`. [PLANNED: OLS-3236] The console plugin `RunnableFunc` and `controller/console/` package are removed.
+6. The run controller runs in the operator binary via `controller.Setup()`. [PLANNED: OLS-3236] The console plugin `RunnableFunc` and `controller/console/` package are removed.
 7. The CLI is a separate binary (`cmd/oc-agentic`) that communicates directly with the Kubernetes API server.
 
 ### External Dependencies
@@ -36,7 +36,7 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `Proposal`
 
 ### Multi-Tenancy
 
-15. Proposals are namespace-scoped; the operator reconciles proposals across all namespaces.
+15. Runs are namespace-scoped; the operator reconciles runs across all namespaces.
 16. Cluster-scoped resources (`Agent`, `LLMProvider`, `ApprovalPolicy`) are shared across all tenants.
 17. Sandbox pods and claims run in the operator namespace, not in tenant namespaces.
 

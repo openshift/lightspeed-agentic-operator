@@ -1,6 +1,6 @@
 # Lightspeed Agentic Operator -- Specifications
 
-Behavioral rules, architecture specs, and implementation guides for the lightspeed-agentic-operator -- a Kubernetes operator that drives AI-assisted `Proposal` workflows through analysis, execution, and verification phases with human approval gates.
+Behavioral rules, architecture specs, and implementation guides for the lightspeed-agentic-operator -- a Kubernetes operator that drives AI-assisted `AgenticRun` workflows through analysis, execution, and verification phases with human approval gates.
 
 ## Structure
 
@@ -22,7 +22,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Task | Start here |
 |---|---|
 | Understand the system | `what/system-overview.md` |
-| Understand the proposal workflow | `what/proposal-lifecycle.md` |
+| Understand the run workflow | `what/run-lifecycle.md` |
 | Look up a CRD field | `what/crd-api.md` |
 | Understand the approval system | `what/approval.md` |
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
@@ -37,7 +37,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | what/ | how/ |
 |---|---|
 | `what/system-overview.md` | `how/project-structure.md` |
-| `what/proposal-lifecycle.md` | `how/reconciler.md` |
+| `what/run-lifecycle.md` | `how/reconciler.md` |
 | `what/crd-api.md` | `how/reconciler.md`, `how/cli.md` |
 | `what/approval.md` | `how/reconciler.md`, `how/cli.md` |
 | `what/sandbox-execution.md` | `how/reconciler.md` |
@@ -54,6 +54,6 @@ AI agents. Content is optimized for precision and machine consumption.
 
 ## Project Context
 
-This operator watches `Proposal` CRs and drives them through a multi-phase workflow (analysis, execution, verification) by calling the sandbox runtime's `POST /v1/agent/run` endpoint. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
+This operator watches `AgenticRun` CRs and drives them through a multi-phase workflow (analysis, execution, verification) by calling the sandbox runtime's `POST /v1/agent/run` endpoint. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
 
 Jira tracking: Feature OCPSTRAT-3095, Epic OLS-2894, Kill Switch OLS-3018.

@@ -22,12 +22,12 @@ All specifications live in `.ai/spec/`. Start with `.ai/spec/README.md` for proj
 | `config/crd/bases/` | Generated CRD YAML (regen: **`README.md`** → **`make manifests`**) |
 | `config/rbac/` | SA, bindings, generated `role.yaml` |
 | `config/manager/`, `config/default/` | In-cluster Deployment kustomize |
-| `examples/setup/` | Day-0 YAML (agents, policies, proposals) |
+| `examples/setup/` | Day-0 YAML (agents, policies, runs) |
 | `test/agent/` | Mock agent HTTP server (`POST /v1/agent/run`), image Makefile, `cmd/schemadump` |
 | `test/agent/sandboxtemplate/` | Kustomize base `SandboxTemplate` for in-cluster mock |
 | `test/e2e/` | Build tag **`e2e`**: black-box tests against live cluster + running operator (`make test-e2e`) |
 
-## Proposal lifecycle phases
+## Run lifecycle phases
 
 Derived from conditions via **`DerivePhase()`** — never stored on the spec:
 
