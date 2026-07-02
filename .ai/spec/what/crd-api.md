@@ -39,7 +39,8 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 33. **EscalationResult**: `status.summary`, `status.content`, optional `failureReason`, `sandbox`; no `retryIndex`.
 34. **RemediationOption**: Cohesion rules require `diagnosis` and `proposal` to be paired when present; `components` holds schemaless JSON for adapter data shaped by `spec.analysisOutput.schema`.
 35. **RBACResult / RBACRule**: Analysis MAY request namespace-scoped and cluster-scoped rules with verb/apigroup/resource metadata and mandatory `justification`; `namespace` on rules MUST align with proposal targeting rules (validated at runtime by policy engine per field comments).
-36. **ToolsSpec**: MAY include `skills` (unique images), `mcpServers` (unique names), `requiredSecrets` (unique names). `SkillsSource.image` MUST be a valid pullspec; optional `paths` restrict mounted subtrees.
+36. **ToolsSpec**: MAY include `skills` (unique images), `mcpServers` (unique names), `requiredSecrets` (unique names), and `disableDefaultMCP` (bool). `SkillsSource.image` MUST be a valid pullspec; optional `paths` restrict mounted subtrees.
+36a. **ToolsSpec — `disableDefaultMCP`**: Optional bool, default `false`. When `true`, the operator MUST NOT auto-inject the default OpenShift MCP server into `LIGHTSPEED_MCP_SERVERS` for sandbox pods using this `ToolsSpec`, even when introspection is enabled on the classic `OLSConfig`. User-defined `mcpServers` entries are unaffected. When `false` or absent and introspection is enabled, the operator prepends the default OpenShift MCP server entry to the MCP server list (see `sandbox-execution.md`).
 37. **SecretRequirement**: Names a namespace-local `Secret`; `mountAs` discriminates `EnvVar` vs `FilePath` with required nested config per type.
 38. **MCPHeaderValueSource**: Discriminated by `type`; `Secret` requires nested `secret` name reference.
 39. **Result CR ownership**: Result CRs MUST declare controller `ownerReferences` to their `Proposal` for GC; naming follows operator conventions (see `sandbox-execution.md` for when they are created).
@@ -79,7 +80,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `metadata.name`, `metadata.namespace`, `spec.*`, `status.*`
 
 ### Shared / embedded types
-- `ToolsSpec`: `skills[]`, `mcpServers[]`, `requiredSecrets[]`
+- `ToolsSpec`: `skills[]`, `mcpServers[]`, `requiredSecrets[]`, `disableDefaultMCP`
 - `SkillsSource`: `image`, `paths[]`
 - `SecretRequirement`: `name`, `description`, `mountAs.*`
 - `StepResultRef`: `name`, `outcome`
