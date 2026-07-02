@@ -61,6 +61,15 @@ func (b *PodSpecBuilder) Build(
 
 	var volumes []corev1.Volume
 
+	volumes = append(volumes, corev1.Volume{
+		Name:         "home",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      "home",
+		MountPath: "/home/agent",
+	})
+
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: "LIGHTSPEED_PROVIDER", Value: providerTypeString(llm.Spec.Type)},
 		corev1.EnvVar{Name: "LIGHTSPEED_MODEL", Value: agent.Spec.Model},
