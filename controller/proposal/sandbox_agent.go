@@ -14,6 +14,8 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+var defaultSystemPrompt = renderTemplate("system_prompt.tmpl", nil)
+
 const (
 	defaultSandboxTimeout   = 5 * time.Minute
 	defaultBaseTemplateName = "lightspeed-agent"
@@ -216,7 +218,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	}
 
 	client := s.ClientFactory(agentURL)
-	resp, err := client.Run(ctx, "", query, schema, agentCtx, headers)
+	resp, err := client.Run(ctx, defaultSystemPrompt, query, schema, agentCtx, headers)
 	if err != nil {
 		return nil, err
 	}
