@@ -100,6 +100,18 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 		t.Errorf("missing credential volume mount at %s", llmCredsMountPath)
 	}
 
+	// Verify home volume mount
+	foundHomeMount := false
+	for _, m := range container.VolumeMounts {
+		if m.Name == "home" && m.MountPath == "/home/agent" {
+			foundHomeMount = true
+			break
+		}
+	}
+	if !foundHomeMount {
+		t.Error("missing home volume mount at /home/agent")
+	}
+
 	// Verify volume
 	foundVolume := false
 	for _, v := range podSpec.Volumes {
@@ -116,6 +128,21 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 	}
 	if !foundVolume {
 		t.Error("missing llm-credentials volume")
+	}
+
+	// Verify home volume
+	foundHomeVolume := false
+	for _, v := range podSpec.Volumes {
+		if v.Name == "home" {
+			foundHomeVolume = true
+			if v.EmptyDir == nil {
+				t.Fatal("home volume should be emptyDir")
+			}
+			break
+		}
+	}
+	if !foundHomeVolume {
+		t.Error("missing home emptyDir volume")
 	}
 
 	// Verify readiness probe
