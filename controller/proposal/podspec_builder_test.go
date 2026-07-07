@@ -100,6 +100,18 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 		t.Errorf("missing credential volume mount at %s", llmCredsMountPath)
 	}
 
+	// Verify home volume mount
+	foundHomeMount := false
+	for _, m := range container.VolumeMounts {
+		if m.Name == "home" && m.MountPath == "/home/agent" {
+			foundHomeMount = true
+			break
+		}
+	}
+	if !foundHomeMount {
+		t.Error("missing home volume mount at /home/agent")
+	}
+
 	// Verify volume
 	foundVolume := false
 	for _, v := range podSpec.Volumes {
@@ -116,6 +128,21 @@ func TestPodSpecBuilder_Anthropic(t *testing.T) {
 	}
 	if !foundVolume {
 		t.Error("missing llm-credentials volume")
+	}
+
+	// Verify home volume
+	foundHomeVolume := false
+	for _, v := range podSpec.Volumes {
+		if v.Name == "home" {
+			foundHomeVolume = true
+			if v.EmptyDir == nil {
+				t.Fatal("home volume should be emptyDir")
+			}
+			break
+		}
+	}
+	if !foundHomeVolume {
+		t.Error("missing home emptyDir volume")
 	}
 
 	// Verify readiness probe
@@ -327,6 +354,7 @@ func TestPodSpecBuilder_Skills(t *testing.T) {
 	}
 
 	foundVolume := false
+	foundWorkdirVolume := false
 	for _, v := range podSpec.Volumes {
 		if v.Name == "skills" {
 			foundVolume = true
@@ -339,11 +367,33 @@ func TestPodSpecBuilder_Skills(t *testing.T) {
 			if v.Image.PullPolicy != corev1.PullAlways {
 				t.Errorf("skills pullPolicy = %v, want PullAlways", v.Image.PullPolicy)
 			}
-			break
+		}
+		if v.Name == "skills-workdir" {
+			foundWorkdirVolume = true
+			if v.EmptyDir == nil {
+				t.Fatal("skills-workdir volume should be emptyDir")
+			}
 		}
 	}
 	if !foundVolume {
 		t.Error("missing skills volume")
+	}
+	if !foundWorkdirVolume {
+		t.Error("missing skills-workdir volume")
+	}
+
+	container := podSpec.Containers[0]
+	foundWorkdirMount := false
+	for _, m := range container.VolumeMounts {
+		if m.Name == "skills-workdir" && m.MountPath == "/app/skills/.agents" {
+			foundWorkdirMount = true
+			if m.ReadOnly {
+				t.Error("skills-workdir mount should be writable")
+			}
+		}
+	}
+	if !foundWorkdirMount {
+		t.Error("missing skills-workdir mount at /app/skills/.agents")
 	}
 }
 
@@ -372,6 +422,7 @@ func TestPodSpecBuilder_SkillsWithPaths(t *testing.T) {
 
 	foundSearch := false
 	foundAnalyze := false
+	foundWorkdirMount := false
 	for _, m := range container.VolumeMounts {
 		if m.Name == "skills" {
 			if m.MountPath == "/app/skills/search.md" && m.SubPath == "skills/search.md" {
@@ -384,12 +435,34 @@ func TestPodSpecBuilder_SkillsWithPaths(t *testing.T) {
 				t.Error("skills mount should be readOnly")
 			}
 		}
+		if m.Name == "skills-workdir" && m.MountPath == "/app/skills/.agents" {
+			foundWorkdirMount = true
+			if m.ReadOnly {
+				t.Error("skills-workdir mount should be writable")
+			}
+		}
 	}
 	if !foundSearch {
 		t.Error("missing search.md skill mount")
 	}
 	if !foundAnalyze {
 		t.Error("missing analyze.md skill mount")
+	}
+	if !foundWorkdirMount {
+		t.Error("missing skills-workdir mount at /app/skills/.agents")
+	}
+
+	foundWorkdirVolume := false
+	for _, v := range podSpec.Volumes {
+		if v.Name == "skills-workdir" {
+			foundWorkdirVolume = true
+			if v.EmptyDir == nil {
+				t.Fatal("skills-workdir volume should be emptyDir")
+			}
+		}
+	}
+	if !foundWorkdirVolume {
+		t.Error("missing skills-workdir volume")
 	}
 }
 

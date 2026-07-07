@@ -61,6 +61,15 @@ func (b *PodSpecBuilder) Build(
 
 	var volumes []corev1.Volume
 
+	volumes = append(volumes, corev1.Volume{
+		Name:         "home",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      "home",
+		MountPath: "/home/agent",
+	})
+
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: "LIGHTSPEED_PROVIDER", Value: providerTypeString(llm.Spec.Type)},
 		corev1.EnvVar{Name: "LIGHTSPEED_MODEL", Value: agent.Spec.Model},
@@ -205,8 +214,15 @@ func (b *PodSpecBuilder) buildSkills(skills []agenticv1alpha1.SkillsSource) ([]c
 			},
 		},
 	}
+	workdirVol := corev1.Volume{
+		Name:         "skills-workdir",
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}
 
-	var mounts []corev1.VolumeMount
+	mounts := []corev1.VolumeMount{{
+		Name:      "skills-workdir",
+		MountPath: "/app/skills/.agents",
+	}}
 	if len(s.Paths) > 0 {
 		baseMountPath := "/app/skills"
 		for _, p := range s.Paths {
@@ -221,7 +237,7 @@ func (b *PodSpecBuilder) buildSkills(skills []agenticv1alpha1.SkillsSource) ([]c
 		}
 	}
 
-	return []corev1.Volume{vol}, mounts
+	return []corev1.Volume{vol, workdirVol}, mounts
 }
 
 func (b *PodSpecBuilder) buildMCPServers(servers []agenticv1alpha1.MCPServerConfig) ([]corev1.Volume, []corev1.VolumeMount, []corev1.EnvVar, error) {

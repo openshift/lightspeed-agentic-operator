@@ -71,14 +71,53 @@ func TestEnsureBootstrapResources_CreatesResources(t *testing.T) {
 
 	volumes, _, _ := unstructured.NestedSlice(tmpl.Object, "spec", "podTemplate", "spec", "volumes")
 	foundSkills := false
+	foundHomeVolume := false
+	foundWorkdirVolume := false
 	for _, v := range volumes {
 		vol := v.(map[string]any)
 		if vol["name"] == "skills" {
 			foundSkills = true
 		}
+		if vol["name"] == "home" {
+			foundHomeVolume = true
+			if vol["emptyDir"] == nil {
+				t.Error("home volume should be emptyDir")
+			}
+		}
+		if vol["name"] == "skills-workdir" {
+			foundWorkdirVolume = true
+			if vol["emptyDir"] == nil {
+				t.Error("skills-workdir volume should be emptyDir")
+			}
+		}
 	}
 	if !foundSkills {
 		t.Error("SandboxTemplate missing skills volume")
+	}
+	if !foundHomeVolume {
+		t.Error("SandboxTemplate missing home volume")
+	}
+	if !foundWorkdirVolume {
+		t.Error("SandboxTemplate missing skills-workdir volume")
+	}
+
+	mounts, _, _ := unstructured.NestedSlice(container, "volumeMounts")
+	foundHomeMount := false
+	foundWorkdirMount := false
+	for _, m := range mounts {
+		mount := m.(map[string]any)
+		if mount["name"] == "home" && mount["mountPath"] == "/home/agent" {
+			foundHomeMount = true
+		}
+		if mount["name"] == "skills-workdir" && mount["mountPath"] == "/app/skills/.agents" {
+			foundWorkdirMount = true
+		}
+	}
+	if !foundHomeMount {
+		t.Error("SandboxTemplate missing home mount at /home/agent")
+	}
+	if !foundWorkdirMount {
+		t.Error("SandboxTemplate missing skills-workdir mount at /app/skills/.agents")
 	}
 
 	lbls := tmpl.GetLabels()

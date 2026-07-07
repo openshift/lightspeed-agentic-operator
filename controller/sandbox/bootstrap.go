@@ -130,6 +130,16 @@ func ensureSandboxTemplate(ctx context.Context, c client.Client, image, namespac
 										"type": "RuntimeDefault",
 									},
 								},
+								"volumeMounts": []any{
+									map[string]any{
+										"name":      "home",
+										"mountPath": "/home/agent",
+									},
+									map[string]any{
+										"name":      "skills-workdir",
+										"mountPath": "/app/skills/.agents",
+									},
+								},
 							},
 						},
 						"volumes": []any{
@@ -138,6 +148,14 @@ func ensureSandboxTemplate(ctx context.Context, c client.Client, image, namespac
 								"image": map[string]any{
 									"reference": "placeholder:latest",
 								},
+							},
+							map[string]any{
+								"name":     "home",
+								"emptyDir": map[string]any{},
+							},
+							map[string]any{
+								"name":     "skills-workdir",
+								"emptyDir": map[string]any{},
 							},
 						},
 					},
