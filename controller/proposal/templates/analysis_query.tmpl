@@ -4,12 +4,32 @@ For each option you propose, include:
 - A diagnosis with root cause and confidence level
 - A detailed remediation plan with specific actions
 {{- if .HasExecution}}
-- The RBAC permissions the execution agent will need
+- The RBAC permissions the execution agent will need (see RBAC guidelines below)
 {{- end}}
 {{- if .HasVerification}}
 - A verification plan to confirm the fix worked
 {{- end}}
 - Risk assessment and reversibility
+{{- if .HasExecution}}
+
+## RBAC Guidelines
+
+A separate execution agent will carry out your plan in an isolated pod. It receives ONLY the permissions you specify here — nothing else. If a permission is missing, the execution fails with a 403 Forbidden and cannot recover or request more access.
+
+When defining RBAC, follow these principles:
+
+1. **Always include baseline read access without resourceNames.** The execution agent needs to orient itself in the namespace before acting. Include `get` and `list` on pods, pods/log, pods/exec, deployments, replicasets, services, endpoints, events, configmaps, and secrets in the target namespace — without `resourceNames` restrictions. This lets the agent inspect any resource to confirm conditions before making changes.
+
+2. **Cover the full action scope.** For every action in your plan, include the Kubernetes API group, resource type (plural), and all required verbs. Always include `get` alongside any mutation verb (`patch`, `update`, `delete`) so the agent can read current state before changing it.
+
+3. **Do not use resourceNames for ephemeral resources.** Pod names change after restarts, rollouts, and scaling. Never put specific pod names in `resourceNames`. Use `resourceNames` only for stable, named resources like Deployments, Services, ConfigMaps, or Secrets where you are highly confident the execution will only need those exact resources.
+
+4. **Omit resourceNames on write rules when the target is not fully confirmed.** Your analysis identifies a likely cause, but the execution agent may discover a different resource is the actual target. If your plan involves investigating and then acting (e.g., "identify the component causing the leak and restart it"), do not restrict write verbs with `resourceNames` — the agent needs freedom to act on whichever resource it confirms as the culprit.
+
+5. **Account for resource changes caused by your actions.** If your plan involves restarting a Deployment, the resulting new Pods and ReplicaSets will have different names. Ensure RBAC covers the resource type without restricting to current names.
+
+6. **Err on the side of granting access.** A missing permission causes unrecoverable failure. An extra permission within the target namespace is low risk because the execution agent is already instructed to follow the approved plan. When in doubt, include the permission.
+{{- end}}
 
 ## Request
 
