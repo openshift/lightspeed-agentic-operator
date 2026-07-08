@@ -252,7 +252,9 @@ func cannedResponse(phase, targetNS string) []byte {
       "proposal": {
         "description": "mock proposal description",
         "actions": [
-          { "type": "patch", "description": "mock proposed action" }
+          { "command": "kubectl get configmap -n %s", "type": "pre-check", "description": "Check current configmap state" },
+          { "command": "kubectl patch configmap mock-cm -n %s -p '{\"data\":{\"key\":\"value\"}}'", "type": "mutation", "description": "Patch configmap with fix" },
+          { "command": "kubectl get configmap mock-cm -n %s -o jsonpath='{.data.key}'", "type": "post-check", "description": "Verify configmap was patched" }
         ],
         "risk": "Low",
         "reversible": "Reversible",
@@ -275,14 +277,14 @@ func cannedResponse(phase, targetNS string) []byte {
             "namespace": %q,
             "apiGroups": [""],
             "resources": ["configmaps"],
-            "verbs": ["get", "list"],
-            "justification": "mock e2e RBAC"
+            "verbs": ["get", "list", "patch"],
+            "justification": "Read and patch configmaps for mock remediation"
           }
         ],
         "clusterScoped": []
       }
     }
   ]
-}`, targetNS))
+}`, targetNS, targetNS, targetNS, targetNS))
 	}
 }

@@ -91,6 +91,15 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, proposal *agenticv1alp
 		return nil, fmt.Errorf("%s: %w", ErrParseAnalysisResponse, err)
 	}
 
+	log := logf.FromContext(ctx)
+	for i, opt := range resp.Options {
+		for j, action := range opt.Proposal.Actions {
+			if action.Command == "" {
+				log.Info("analysis action missing command field", "option", i, "action", j, "type", action.Type, "proposal", proposal.Name)
+			}
+		}
+	}
+
 	return &AnalysisOutput{
 		Success: resp.Success,
 		Options: resp.Options,
