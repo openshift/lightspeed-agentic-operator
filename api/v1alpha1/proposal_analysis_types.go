@@ -90,6 +90,7 @@ type ProposedAction struct {
 	// Must be a concrete command that can be copy-pasted and run.
 	// Maximum 4096 characters.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=4096
 	Command string `json:"command,omitempty"`
 	// type is the action phase category: "pre-check", "mutation", "wait",
