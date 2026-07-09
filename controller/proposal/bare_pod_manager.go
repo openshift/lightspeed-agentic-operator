@@ -19,6 +19,8 @@ const (
 	ErrBuildPodSpec = "build pod spec"
 	ErrCreatePod    = "create pod for"
 	ErrDeletePod    = "delete pod"
+
+	defaultDeletionTimeout = 2 * time.Minute
 )
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
@@ -26,9 +28,10 @@ const (
 // BarePodManager is a SandboxProvider that creates bare Pods using PodSpecBuilder
 // instead of relying on the Sandbox API (SandboxClaim/SandboxTemplate).
 type BarePodManager struct {
-	Client    client.Client
-	Builder   *PodSpecBuilder
-	Namespace string
+	Client          client.Client
+	Builder         *PodSpecBuilder
+	Namespace       string
+	DeletionTimeout time.Duration
 
 	agent          *agenticv1alpha1.Agent
 	llm            *agenticv1alpha1.LLMProvider
@@ -84,10 +87,29 @@ func (m *BarePodManager) Claim(ctx context.Context, proposalName, step, _ string
 	}
 
 	if err := m.Client.Create(ctx, pod); err != nil {
-		if apierrors.IsAlreadyExists(err) {
+		if !apierrors.IsAlreadyExists(err) {
+			return "", fmt.Errorf("%s %s: %w", ErrCreatePod, step, err)
+		}
+
+		var existing corev1.Pod
+		key := types.NamespacedName{Name: podName, Namespace: m.Namespace}
+		if getErr := m.Client.Get(ctx, key, &existing); getErr != nil {
+			return "", fmt.Errorf("get existing pod %q: %w", podName, getErr)
+		}
+		if existing.DeletionTimestamp.IsZero() {
 			return podName, nil
 		}
-		return "", fmt.Errorf("%s %s: %w", ErrCreatePod, step, err)
+
+		log.Info("Waiting for terminating pod to disappear", LogKeyName, podName)
+		if err := m.waitForDeletion(ctx, key); err != nil {
+			return "", fmt.Errorf("wait for terminating pod %q: %w", podName, err)
+		}
+		if err := m.Client.Create(ctx, pod); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return podName, nil
+			}
+			return "", fmt.Errorf("%s %s: %w", ErrCreatePod, step, err)
+		}
 	}
 
 	log.Info("Created bare pod", LogKeyName, podName, LogKeyStep, step)
@@ -129,6 +151,39 @@ func (m *BarePodManager) WaitReady(ctx context.Context, podName string, timeout 
 					return pod.Status.PodIP, nil
 				}
 			}
+		}
+	}
+}
+
+// waitForDeletion polls until the named pod no longer exists. It is used
+// by Claim to wait for a terminating pod to disappear before creating a
+// replacement with the same name. The timeout is controlled by DeletionTimeout
+// (defaults to defaultDeletionTimeout).
+func (m *BarePodManager) waitForDeletion(ctx context.Context, key types.NamespacedName) error {
+	timeout := m.DeletionTimeout
+	if timeout == 0 {
+		timeout = defaultDeletionTimeout
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		var pod corev1.Pod
+		err := m.Client.Get(ctx, key, &pod)
+		switch {
+		case apierrors.IsNotFound(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("get pod %q: %w", key.Name, err)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for pod %q to be deleted after %s", key.Name, timeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 		}
 	}
 }

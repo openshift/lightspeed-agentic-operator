@@ -1,12 +1,12 @@
 package proposal
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -33,7 +33,7 @@ func TestBarePodManager_Claim_Creates(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	name, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestBarePodManager_Claim_Creates(t *testing.T) {
 	}
 
 	var pod corev1.Pod
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
 	if pod.Spec.Containers[0].Image != "quay.io/test/sandbox:latest" {
@@ -67,13 +67,13 @@ func TestBarePodManager_Claim_UsesPerProposalSA(t *testing.T) {
 		"ls-exec-default-my-proposal",
 	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "execution", "")
+	name, err := m.Claim(t.Context(), "my-proposal", "execution", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	var pod corev1.Pod
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
 	if pod.Spec.ServiceAccountName != "ls-exec-default-my-proposal" {
@@ -93,13 +93,13 @@ func TestBarePodManager_Claim_TruncatesLongProposalNameInLabel(t *testing.T) {
 	)
 
 	longName := strings.Repeat("a", 80)
-	name, err := m.Claim(context.Background(), longName, "analysis", "")
+	name, err := m.Claim(t.Context(), longName, "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	var pod corev1.Pod
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
 	if len(pod.Labels[LabelProposal]) > 63 {
@@ -122,12 +122,91 @@ func TestBarePodManager_Claim_AlreadyExists(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	name, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim should succeed for existing pod: %v", err)
 	}
 	if name != "ls-analysis-my-proposal" {
 		t.Errorf("name = %q", name)
+	}
+}
+
+func TestBarePodManager_Claim_TerminatingPodReplacedAfterDeletion(t *testing.T) {
+	now := metav1.Now()
+	existing := &corev1.Pod{}
+	existing.Name = "ls-analysis-my-proposal"
+	existing.Namespace = "test-ns"
+	existing.DeletionTimestamp = &now
+	existing.Finalizers = []string{"test-finalizer"}
+
+	fc := newBarePodClient().WithObjects(existing).Build()
+	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}
+	m := NewBarePodManager(fc, builder, "test-ns")
+	m.DeletionTimeout = 30 * time.Second
+	m.SetStep(
+		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}},
+		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
+		nil,
+		defaultSandboxSA,
+	)
+
+	// Remove the finalizer after a short delay so the fake client
+	// allows the pod to disappear. The generous DeletionTimeout above
+	// avoids flakiness on slow CI nodes.
+	go func() {
+		time.Sleep(1 * time.Second)
+		var pod corev1.Pod
+		key := types.NamespacedName{Name: "ls-analysis-my-proposal", Namespace: "test-ns"}
+		if err := fc.Get(t.Context(), key, &pod); err != nil {
+			return
+		}
+		pod.Finalizers = nil
+		_ = fc.Update(t.Context(), &pod)
+		_ = fc.Delete(t.Context(), &pod)
+	}()
+
+	name, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
+	if err != nil {
+		t.Fatalf("Claim should succeed after terminating pod disappears: %v", err)
+	}
+	if name != "ls-analysis-my-proposal" {
+		t.Errorf("name = %q, want ls-analysis-my-proposal", name)
+	}
+
+	var pod corev1.Pod
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+		t.Fatalf("new pod not created: %v", err)
+	}
+	if pod.Spec.Containers[0].Image != "quay.io/test/sandbox:latest" {
+		t.Errorf("container image = %q", pod.Spec.Containers[0].Image)
+	}
+}
+
+func TestBarePodManager_Claim_TerminatingPodTimeout(t *testing.T) {
+	now := metav1.Now()
+	existing := &corev1.Pod{}
+	existing.Name = "ls-analysis-my-proposal"
+	existing.Namespace = "test-ns"
+	existing.DeletionTimestamp = &now
+	existing.Finalizers = []string{"test-finalizer"}
+
+	fc := newBarePodClient().WithObjects(existing).Build()
+	builder := &PodSpecBuilder{Image: "img"}
+	m := NewBarePodManager(fc, builder, "test-ns")
+	m.DeletionTimeout = 3 * time.Second
+	m.SetStep(
+		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}},
+		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
+		nil,
+		defaultSandboxSA,
+	)
+
+	_, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
+	if err == nil {
+		t.Fatal("Claim should fail when terminating pod never disappears")
+	}
+	if !strings.Contains(err.Error(), "timeout waiting for pod") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -139,12 +218,12 @@ func TestBarePodManager_Release(t *testing.T) {
 	fc := newBarePodClient().WithObjects(existing).Build()
 	m := NewBarePodManager(fc, &PodSpecBuilder{Image: "img"}, "test-ns")
 
-	if err := m.Release(context.Background(), "ls-analysis-my-proposal"); err != nil {
+	if err := m.Release(t.Context(), "ls-analysis-my-proposal"); err != nil {
 		t.Fatalf("Release: %v", err)
 	}
 
 	var pod corev1.Pod
-	err := fc.Get(context.Background(), types.NamespacedName{Name: "ls-analysis-my-proposal", Namespace: "test-ns"}, &pod)
+	err := fc.Get(t.Context(), types.NamespacedName{Name: "ls-analysis-my-proposal", Namespace: "test-ns"}, &pod)
 	if err == nil {
 		t.Error("pod should be deleted")
 	}
@@ -154,7 +233,7 @@ func TestBarePodManager_Release_NotFound(t *testing.T) {
 	fc := newBarePodClient().Build()
 	m := NewBarePodManager(fc, &PodSpecBuilder{Image: "img"}, "test-ns")
 
-	if err := m.Release(context.Background(), "nonexistent"); err != nil {
+	if err := m.Release(t.Context(), "nonexistent"); err != nil {
 		t.Fatalf("Release should not error for not-found: %v", err)
 	}
 }
@@ -170,13 +249,13 @@ func TestBarePodManager_Claim_AuditEnabled_DefaultsTrue(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	name, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	var pod corev1.Pod
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
 	env := envToMap(pod.Spec.Containers[0].Env)
@@ -205,13 +284,13 @@ func TestBarePodManager_Claim_AuditWithOTELEndpoint(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	name, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	var pod corev1.Pod
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
 	env := envToMap(pod.Spec.Containers[0].Env)
@@ -239,13 +318,13 @@ func TestBarePodManager_Claim_AuditDisabled(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-proposal", "analysis", "")
+	name, err := m.Claim(t.Context(), "my-proposal", "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	var pod corev1.Pod
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+	if err := fc.Get(t.Context(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
 	env := envToMap(pod.Spec.Containers[0].Env)
@@ -267,7 +346,7 @@ func TestBarePodManager_WaitReady_ImmediateReady(t *testing.T) {
 	fc := newBarePodClient().WithObjects(pod).Build()
 	m := NewBarePodManager(fc, &PodSpecBuilder{Image: "img"}, "test-ns")
 
-	endpoint, err := m.WaitReady(context.Background(), "ls-analysis-my-proposal", 10*time.Second)
+	endpoint, err := m.WaitReady(t.Context(), "ls-analysis-my-proposal", 10*time.Second)
 	if err != nil {
 		t.Fatalf("WaitReady: %v", err)
 	}
