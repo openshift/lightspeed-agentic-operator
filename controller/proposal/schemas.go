@@ -50,7 +50,6 @@ var AnalysisOutputSchema = json.RawMessage(`{
               },
               "risk": { "type": "string", "enum": ["Low", "Medium", "High", "Critical"], "description": "Risk assessment. Low: safe to apply. Medium: review recommended. High: careful review required. Critical: manual approval strongly recommended" },
               "reversible": { "type": "string", "enum": ["Reversible", "Irreversible", "Partial"], "description": "Whether this remediation can be rolled back. Reversible: fully undoable. Irreversible: cannot undo. Partial: some actions undoable" },
-              "estimatedImpact": { "type": "string", "description": "Expected impact on the system (e.g., 'Brief pod restart, ~30s downtime')" },
               "rollbackPlan": {
                 "type": "object",
                 "description": "How to undo the remediation if it fails or causes issues. Required when reversible is Reversible or Partial.",
@@ -77,10 +76,12 @@ var AnalysisOutputSchema = json.RawMessage(`{
                     "command": { "type": "string", "description": "Command or API call to run (e.g., 'oc get pod -n production -l app=web -o jsonpath={.status.phase}')" },
                     "expected": { "type": "string", "description": "Expected output or condition (e.g., 'Running', 'ready=true')" },
                     "type": { "type": "string", "description": "Check category (e.g., 'command', 'metric', 'condition')" }
-                  }
+                  },
+                  "required": ["name", "type"]
                 }
               }
-            }
+            },
+            "required": ["description"]
           },
           "rbac": {
             "type": "object",
@@ -175,7 +176,8 @@ var ExecutionOutputSchema = json.RawMessage(`{
       "properties": {
         "conditionOutcome": { "type": "string", "enum": ["Improved", "Unchanged", "Degraded"], "description": "Whether the target condition improved after remediation" },
         "summary": { "type": "string", "description": "Brief inline verification summary of what you observed after applying the fix" }
-      }
+      },
+      "required": ["conditionOutcome", "summary"]
     }
   },
   "required": ["success", "actionsTaken"]
@@ -196,7 +198,7 @@ var VerificationOutputSchema = json.RawMessage(`{
           "value": { "type": "string", "description": "Actual observed value (e.g., 'Running', '3 replicas')" },
           "result": { "type": "string", "enum": ["Passed", "Failed"], "description": "Whether the observed value matches expectations" }
         },
-        "required": ["name", "result"]
+        "required": ["name", "result", "source", "value"]
       }
     },
     "summary": { "type": "string", "description": "Overall verification summary in Markdown" }

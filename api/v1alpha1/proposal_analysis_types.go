@@ -137,14 +137,6 @@ type ProposalResult struct {
 	// Must be one of: Reversible, Irreversible, Partial.
 	// +optional
 	Reversible Reversibility `json:"reversible,omitempty"`
-	// estimatedImpact is a Markdown-formatted description of the expected
-	// impact of the remediation on the system
-	// (e.g., "Brief pod restart, ~30s downtime").
-	// Maximum 1024 characters.
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=1024
-	EstimatedImpact string `json:"estimatedImpact,omitempty"`
 	// rollbackPlan describes how to undo the remediation if execution fails
 	// or causes unexpected issues. Only the execution step mutates cluster
 	// state, so rollback lives here alongside the actions it would undo.

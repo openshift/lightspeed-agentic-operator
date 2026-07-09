@@ -243,15 +243,6 @@ spec:
                           maxLength: 8192
                           minLength: 1
                           type: string
-                        estimatedImpact:
-                          description: |-
-                            estimatedImpact is a Markdown-formatted description of the expected
-                            impact of the remediation on the system
-                            (e.g., "Brief pod restart, ~30s downtime").
-                            Maximum 1024 characters.
-                          maxLength: 1024
-                          minLength: 1
-                          type: string
                         reversible:
                           description: |-
                             reversible indicates whether the remediation can be rolled back
@@ -298,7 +289,6 @@ spec:
                       required:
                       - actions
                       - description
-                      - estimatedImpact
                       - risk
                       type: object
                     rbac:
