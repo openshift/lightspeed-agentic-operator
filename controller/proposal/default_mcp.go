@@ -64,12 +64,12 @@ func defaultMCPServer(namespace string) agenticv1alpha1.MCPServerConfig {
 
 // effectiveTools returns a copy of the given ToolsSpec with the default
 // ocp-mcp server prepended when introspection is enabled and the Proposal
-// has not opted out via disableDefaultMCP. Returns the original pointer
+// has not opted out via defaultMCP: Disabled. Returns the original pointer
 // unmodified when no injection is needed.
 func effectiveTools(ctx context.Context, c client.Client, namespace string, tools *agenticv1alpha1.ToolsSpec) *agenticv1alpha1.ToolsSpec {
 	log := logf.FromContext(ctx).WithName("default-mcp")
 
-	if tools != nil && tools.DisableDefaultMCP {
+	if tools != nil && tools.DefaultMCP == agenticv1alpha1.DefaultMCPModeDisabled {
 		return tools
 	}
 

@@ -70,15 +70,15 @@ func TestEffectiveTools_IntrospectionOmitted_DefaultsTrue(t *testing.T) {
 	}
 }
 
-func TestEffectiveTools_DisableDefaultMCP(t *testing.T) {
+func TestEffectiveTools_DefaultMCPDisabled(t *testing.T) {
 	scheme := runtime.NewScheme()
 	config := olsConfigUnstructured(boolPtr(true))
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config).Build()
 
-	tools := &agenticv1alpha1.ToolsSpec{DisableDefaultMCP: true}
+	tools := &agenticv1alpha1.ToolsSpec{DefaultMCP: agenticv1alpha1.DefaultMCPModeDisabled}
 	result := effectiveTools(context.Background(), fc, "openshift-lightspeed", tools)
 	if result != tools {
-		t.Error("expected original tools pointer returned when DisableDefaultMCP is true")
+		t.Error("expected original tools pointer returned when DefaultMCP is Disabled")
 	}
 }
 

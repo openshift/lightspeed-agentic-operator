@@ -108,6 +108,24 @@ type SecretRequirement struct {
 	MountAs SecretMountSpec `json:"mountAs,omitzero"`
 }
 
+// DefaultMCPMode controls whether the operator auto-injects the default
+// OpenShift MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS
+// env var.
+//
+// Allowed values:
+//   - "Enabled"  — The default ocp-mcp server is prepended when
+//     OLSConfig.introspectionEnabled is true.
+//   - "Disabled" — The default ocp-mcp server is never injected.
+//     User-defined mcpServers are unaffected.
+//
+// +kubebuilder:validation:Enum=Enabled;Disabled
+type DefaultMCPMode string
+
+const (
+	DefaultMCPModeEnabled  DefaultMCPMode = "Enabled"
+	DefaultMCPModeDisabled DefaultMCPMode = "Disabled"
+)
+
 // ToolsSpec defines the tools available to an agent in its sandbox pod.
 // This includes skills images, MCP servers, and required secrets.
 //
@@ -148,15 +166,15 @@ type ToolsSpec struct {
 	// +kubebuilder:validation:MaxItems=20
 	RequiredSecrets []SecretRequirement `json:"requiredSecrets,omitempty"`
 
-	// disableDefaultMCP suppresses auto-injection of the default OpenShift
-	// MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
-	// When true, the operator will not prepend the built-in ocp-mcp server even
-	// if OLSConfig.introspectionEnabled is true. User-defined mcpServers are
-	// unaffected. Default is false.
+	// defaultMCP controls whether the default OpenShift MCP server is
+	// auto-injected into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
+	// When set to "Disabled", the operator will not prepend the built-in
+	// ocp-mcp server even if OLSConfig.introspectionEnabled is true.
+	// User-defined mcpServers are unaffected. Default is "Enabled".
 	// +optional
-	DisableDefaultMCP bool `json:"disableDefaultMCP,omitempty"`
+	DefaultMCP DefaultMCPMode `json:"defaultMCP,omitempty"`
 }
 
 func (t ToolsSpec) IsZero() bool {
-	return len(t.Skills) == 0 && len(t.MCPServers) == 0 && len(t.RequiredSecrets) == 0 && !t.DisableDefaultMCP
+	return len(t.Skills) == 0 && len(t.MCPServers) == 0 && len(t.RequiredSecrets) == 0 && t.DefaultMCP == ""
 }
