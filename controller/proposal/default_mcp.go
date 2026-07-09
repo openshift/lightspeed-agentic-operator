@@ -19,7 +19,7 @@ var olsConfigGVK = schema.GroupVersionKind{
 
 const (
 	defaultMCPServerName = "openshift"
-	defaultMCPServerPort = 8080
+	defaultMCPServerPort = 8443
 	olsConfigName        = "cluster"
 )
 
@@ -49,7 +49,7 @@ func readIntrospectionEnabled(ctx context.Context, c client.Client) (bool, error
 func defaultMCPServer(namespace string) agenticv1alpha1.MCPServerConfig {
 	return agenticv1alpha1.MCPServerConfig{
 		Name:           defaultMCPServerName,
-		URL:            fmt.Sprintf("http://openshift-mcp-server.%s.svc:%d/mcp", namespace, defaultMCPServerPort),
+		URL:            fmt.Sprintf("https://openshift-mcp-server.%s.svc:%d/mcp", namespace, defaultMCPServerPort),
 		TimeoutSeconds: 60,
 		Headers: []agenticv1alpha1.MCPHeader{
 			{

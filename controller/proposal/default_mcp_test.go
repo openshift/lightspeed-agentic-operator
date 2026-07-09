@@ -40,7 +40,7 @@ func TestEffectiveTools_IntrospectionEnabled(t *testing.T) {
 	if result.MCPServers[0].Name != defaultMCPServerName {
 		t.Errorf("expected server name %q, got %q", defaultMCPServerName, result.MCPServers[0].Name)
 	}
-	if result.MCPServers[0].URL != "http://openshift-mcp-server.openshift-lightspeed.svc:8080/mcp" {
+	if result.MCPServers[0].URL != "https://openshift-mcp-server.openshift-lightspeed.svc:8443/mcp" {
 		t.Errorf("unexpected URL: %s", result.MCPServers[0].URL)
 	}
 }
@@ -122,7 +122,7 @@ func TestDefaultMCPServer(t *testing.T) {
 	if server.Name != defaultMCPServerName {
 		t.Errorf("unexpected name: %s", server.Name)
 	}
-	if server.URL != "http://openshift-mcp-server.my-namespace.svc:8080/mcp" {
+	if server.URL != "https://openshift-mcp-server.my-namespace.svc:8443/mcp" {
 		t.Errorf("unexpected URL: %s", server.URL)
 	}
 	if len(server.Headers) != 1 {
