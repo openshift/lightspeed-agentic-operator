@@ -115,6 +115,13 @@ rules:
   - update
   - watch
 - apiGroups:
+  - ols.openshift.io
+  resources:
+  - olsconfigs
+  verbs:
+  - get
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings

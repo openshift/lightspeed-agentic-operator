@@ -62,7 +62,8 @@ func (m *BarePodManager) Claim(ctx context.Context, proposalName, step, _ string
 
 	podName := truncateK8sName(fmt.Sprintf("ls-%s-%s", step, proposalName))
 
-	podSpec, err := m.Builder.Build(m.agent, m.llm, m.tools, step, m.serviceAccount)
+	tools := effectiveTools(ctx, m.Client, m.Namespace, m.tools)
+	podSpec, err := m.Builder.Build(m.agent, m.llm, tools, step, m.serviceAccount)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", ErrBuildPodSpec, err)
 	}

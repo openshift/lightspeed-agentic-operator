@@ -147,8 +147,16 @@ type ToolsSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=20
 	RequiredSecrets []SecretRequirement `json:"requiredSecrets,omitempty"`
+
+	// disableDefaultMCP suppresses auto-injection of the default OpenShift
+	// MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
+	// When true, the operator will not prepend the built-in ocp-mcp server even
+	// if OLSConfig.introspectionEnabled is true. User-defined mcpServers are
+	// unaffected. Default is false.
+	// +optional
+	DisableDefaultMCP bool `json:"disableDefaultMCP,omitempty"`
 }
 
 func (t ToolsSpec) IsZero() bool {
-	return len(t.Skills) == 0 && len(t.MCPServers) == 0 && len(t.RequiredSecrets) == 0
+	return len(t.Skills) == 0 && len(t.MCPServers) == 0 && len(t.RequiredSecrets) == 0 && !t.DisableDefaultMCP
 }

@@ -164,6 +164,8 @@ func EnsureAgentTemplate(
 		return "", fmt.Errorf("%s %q: %w", ErrReadBaseTemplate, baseTemplateName, err)
 	}
 
+	tools = effectiveTools(ctx, c, namespace, tools)
+
 	var skills []agenticv1alpha1.SkillsSource
 	var mcpServers []agenticv1alpha1.MCPServerConfig
 	var requiredSecrets []agenticv1alpha1.SecretRequirement

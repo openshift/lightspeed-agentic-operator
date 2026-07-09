@@ -89,6 +89,14 @@ spec:
                       for this step. Use this when different steps need different skills.
                     minProperties: 1
                     properties:
+                      disableDefaultMCP:
+                        description: |-
+                          disableDefaultMCP suppresses auto-injection of the default OpenShift
+                          MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
+                          When true, the operator will not prepend the built-in ocp-mcp server even
+                          if OLSConfig.introspectionEnabled is true. User-defined mcpServers are
+                          unaffected. Default is false.
+                        type: boolean
                       mcpServers:
                         description: |-
                           mcpServers defines external MCP (Model Context Protocol) servers the
@@ -506,6 +514,14 @@ spec:
                       for this step. Use this when different steps need different skills.
                     minProperties: 1
                     properties:
+                      disableDefaultMCP:
+                        description: |-
+                          disableDefaultMCP suppresses auto-injection of the default OpenShift
+                          MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
+                          When true, the operator will not prepend the built-in ocp-mcp server even
+                          if OLSConfig.introspectionEnabled is true. User-defined mcpServers are
+                          unaffected. Default is false.
+                        type: boolean
                       mcpServers:
                         description: |-
                           mcpServers defines external MCP (Model Context Protocol) servers the
@@ -925,6 +941,14 @@ spec:
                   assumptions of an in-progress analysis or execution.
                 minProperties: 1
                 properties:
+                  disableDefaultMCP:
+                    description: |-
+                      disableDefaultMCP suppresses auto-injection of the default OpenShift
+                      MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
+                      When true, the operator will not prepend the built-in ocp-mcp server even
+                      if OLSConfig.introspectionEnabled is true. User-defined mcpServers are
+                      unaffected. Default is false.
+                    type: boolean
                   mcpServers:
                     description: |-
                       mcpServers defines external MCP (Model Context Protocol) servers the
@@ -1300,6 +1324,14 @@ spec:
                       for this step. Use this when different steps need different skills.
                     minProperties: 1
                     properties:
+                      disableDefaultMCP:
+                        description: |-
+                          disableDefaultMCP suppresses auto-injection of the default OpenShift
+                          MCP server entry into the sandbox pod's LIGHTSPEED_MCP_SERVERS env var.
+                          When true, the operator will not prepend the built-in ocp-mcp server even
+                          if OLSConfig.introspectionEnabled is true. User-defined mcpServers are
+                          unaffected. Default is false.
+                        type: boolean
                       mcpServers:
                         description: |-
                           mcpServers defines external MCP (Model Context Protocol) servers the
