@@ -126,6 +126,7 @@ func TestSchemasCoverCRDRequiredFields(t *testing.T) {
 				t.Fatal("LLM schema is missing the expected comparison node")
 			}
 
+			checked := false
 			for _, v := range crd.Spec.Versions {
 				if v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
 					continue
@@ -134,11 +135,15 @@ func TestSchemasCoverCRDRequiredFields(t *testing.T) {
 				if !ok {
 					continue
 				}
+				checked = true
 				crdStart, ok := tc.crdNode(&status)
 				if !ok {
 					t.Fatalf("CRD version %s is missing the expected status schema node", v.Name)
 				}
 				assertRequiredCoverage(t, tc.path, crdStart, llmStart)
+			}
+			if !checked {
+				t.Fatal("no CRD version contained a comparable status schema")
 			}
 		})
 	}
@@ -160,6 +165,7 @@ func assertRequiredCoverage(t *testing.T, path string, crd *apiextensionsv1.JSON
 		}
 		llmItems, ok := asJSONObject(llm["items"])
 		if !ok {
+			t.Errorf("schema/CRD drift at %s: LLM schema is missing object-shaped array items", path)
 			return
 		}
 		assertRequiredCoverage(t, path+"[]", crd.Items.Schema, llmItems)
