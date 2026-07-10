@@ -257,8 +257,7 @@ func cannedResponse(phase, targetNS string) []byte {
           { "command": "kubectl get configmap mock-cm -n %s -o jsonpath='{.data.key}'", "type": "post-check", "description": "Verify configmap was patched" }
         ],
         "risk": "Low",
-        "reversible": "Reversible",
-        "estimatedImpact": "Brief pod restart, ~30s downtime"
+        "reversible": "Reversible"
       },
       "verification": {
         "description": "mock verification plan",
