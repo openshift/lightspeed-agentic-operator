@@ -248,6 +248,8 @@ spec:
     approval: Automatic
   - name: Execution
     approval: Manual
+  - name: Verification
+    approval: Automatic
 EOF
 info "ApprovalPolicy created"
 
