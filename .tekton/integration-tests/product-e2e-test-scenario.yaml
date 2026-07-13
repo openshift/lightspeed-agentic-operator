@@ -1,0 +1,38 @@
+# IntegrationTestScenario for lightspeed-agentic-operator product e2e.
+# Full-stack test: deploys operator with real sandbox image, runs BDD tests
+# against all LLM providers (Claude, Gemini, OpenAI) with live credentials.
+#
+# Intended for nightly runs triggered by an external CronJob that creates
+# snapshots. Can also be triggered manually.
+#
+# Apply to tenant namespace: kubectl apply -f .tekton/integration-tests/product-e2e-test-scenario.yaml
+---
+apiVersion: appstudio.redhat.com/v1beta2
+kind: IntegrationTestScenario
+metadata:
+  name: agentic-product-e2e
+  namespace: crt-nshift-lightspeed-tenant
+  labels:
+    test.appstudio.openshift.io/optional: "true"
+spec:
+  application: ols
+  contexts:
+    - description: Product e2e — full stack with real LLM providers (nightly)
+      name: component_lightspeed-agentic-operator
+  params:
+    - name: test-name
+      value: agentic-product-e2e
+    - name: namespace
+      value: openshift-lightspeed
+    - name: openshift-version-prefix
+      value: "4.19."
+  resolverRef:
+    resolver: git
+    resourceKind: pipeline
+    params:
+      - name: url
+        value: https://github.com/openshift/lightspeed-agentic-operator
+      - name: revision
+        value: main
+      - name: pathInRepo
+        value: .tekton/integration-tests/pipelines/agentic-product-e2e-pipeline.yaml
