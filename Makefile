@@ -86,6 +86,10 @@ test: fmt-check vet ## Run unit tests (main + api + cli modules).
 test-e2e: ## Run e2e tests against a live cluster (operator must be running). See test/e2e/ for prereqs.
 	go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 30m
 
+.PHONY: product-e2e
+product-e2e: ## Run product e2e: deploy operator, run all providers against live LLMs, collect artifacts.
+	bash scripts/e2e-cluster.sh $(PROVIDERS)
+
 .PHONY: api-lint
 api-lint: golangci-lint ## Kube API linter on api/ (installs golangci-lint to bin/; see README.md).
 	$(GOLANGCI_LINT) custom
