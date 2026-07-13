@@ -1,3 +1,4 @@
+// Throwaway PR to confirm E2E RBAC failure exists on main (not PR-specific).
 package main
 
 import (
