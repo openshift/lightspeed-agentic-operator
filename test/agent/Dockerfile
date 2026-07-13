@@ -22,6 +22,6 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /mock-agent /mock-agent
 COPY --from=builder /workspace/test/agent/skills/ /skills/
 EXPOSE 8080
-USER nonroot:nonroot
+USER 65532:65532
 ENTRYPOINT ["/mock-agent"]
 CMD ["-addr", ":8080"]
