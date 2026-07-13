@@ -55,6 +55,23 @@ subjects:
   namespace: ${OPERATOR_NAMESPACE}
 EOF
 
+# Grant cluster-reader to agent SA (required by execution RBAC discovery).
+echo "Granting cluster-reader to agent SA..."
+oc apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lightspeed-agent-cluster-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-reader
+subjects:
+- kind: ServiceAccount
+  name: lightspeed-agent
+  namespace: ${OPERATOR_NAMESPACE}
+EOF
+
 # Wait for rollout.
 echo "Waiting for operator rollout..."
 oc rollout status deployment/controller-manager -n "${OPERATOR_NAMESPACE}" --timeout=120s
