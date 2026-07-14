@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -684,7 +685,8 @@ func TestReconcile_RevisionWithFeedback(t *testing.T) {
 func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 	agent := newTestAgentCaller()
 	agent.analyzeResult = &AnalysisOutput{
-		Success: true,
+		Success:        true,
+		ActionRequired: ptr.To(true),
 		Options: []agenticv1alpha1.RemediationOption{{
 			Title: "Increase memory",
 			Diagnosis: agenticv1alpha1.DiagnosisResult{
@@ -769,7 +771,8 @@ func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 func TestReconcile_ExecutionRBACCleanedOnFailure(t *testing.T) {
 	agent := newTestAgentCaller()
 	agent.analyzeResult = &AnalysisOutput{
-		Success: true,
+		Success:        true,
+		ActionRequired: ptr.To(true),
 		Options: []agenticv1alpha1.RemediationOption{{
 			Title: "Fix it",
 			Diagnosis: agenticv1alpha1.DiagnosisResult{
@@ -1082,7 +1085,8 @@ func TestReconcile_ExecutionSelectsOption(t *testing.T) {
 
 	agent := newTestAgentCaller()
 	agent.analyzeResult = &AnalysisOutput{
-		Success: true,
+		Success:        true,
+		ActionRequired: ptr.To(true),
 		Options: []agenticv1alpha1.RemediationOption{
 			{Title: "Option A", Diagnosis: agenticv1alpha1.DiagnosisResult{Summary: "diag-A"}},
 			{Title: "Option B", Diagnosis: agenticv1alpha1.DiagnosisResult{Summary: "diag-B"}},
@@ -1159,7 +1163,8 @@ func TestReconcile_TrimOptionsOnExecution(t *testing.T) {
 
 	agent := newTestAgentCaller()
 	agent.analyzeResult = &AnalysisOutput{
-		Success: true,
+		Success:        true,
+		ActionRequired: ptr.To(true),
 		Options: []agenticv1alpha1.RemediationOption{
 			{Title: "Option A", Diagnosis: agenticv1alpha1.DiagnosisResult{Summary: "diag-A"}},
 			{Title: "Option B", Diagnosis: agenticv1alpha1.DiagnosisResult{Summary: "diag-B"}},

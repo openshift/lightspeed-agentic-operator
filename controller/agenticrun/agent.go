@@ -7,9 +7,19 @@ import (
 )
 
 // AnalysisOutput holds the analysis agent's output.
+// ActionRequired is a pointer: nil means "action required" (safe default,
+// backward-compatible with agents that don't emit the field).
 type AnalysisOutput struct {
-	Success bool
-	Options []agenticv1alpha1.RemediationOption
+	Success        bool
+	ActionRequired *bool
+	Options        []agenticv1alpha1.RemediationOption
+	Diagnosis      *agenticv1alpha1.DiagnosisResult
+}
+
+// IsActionRequired returns true when ActionRequired is nil (safe default)
+// or explicitly true.
+func (a *AnalysisOutput) IsActionRequired() bool {
+	return a.ActionRequired == nil || *a.ActionRequired
 }
 
 // ExecutionOutput holds the execution agent's output.
@@ -54,8 +64,10 @@ type AgentCaller interface {
 type StubAgentCaller struct{}
 
 func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string) (*AnalysisOutput, error) {
+	actionRequired := true
 	return &AnalysisOutput{
-		Success: true,
+		Success:        true,
+		ActionRequired: &actionRequired,
 		Options: []agenticv1alpha1.RemediationOption{{
 			Title: "Stub remediation",
 			Diagnosis: agenticv1alpha1.DiagnosisResult{

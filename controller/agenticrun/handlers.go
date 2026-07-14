@@ -117,6 +117,11 @@ func (r *AgenticRunReconciler) handleAnalysis(
 		r.Audit.EmitAnalysisCompleted(spanCtx, run, analysisCR)
 	}
 	run.Status.Steps.Analysis.Results = append(run.Status.Steps.Analysis.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFromBool(analysisResult.Success)})
+
+	if !analysisResult.IsActionRequired() {
+		return r.setNoActionRequired(ctx, run, base, ErrUpdateAfterAnalysis, "Analysis determined no remediation action is required")
+	}
+
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
 		Status:             metav1.ConditionTrue,
@@ -202,6 +207,11 @@ func (r *AgenticRunReconciler) handleRevision(
 		r.Audit.EmitAnalysisCompleted(spanCtx, run, analysisCR)
 	}
 	run.Status.Steps.Analysis.Results = append(run.Status.Steps.Analysis.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFromBool(analysisResult.Success)})
+
+	if !analysisResult.IsActionRequired() {
+		return r.setNoActionRequired(ctx, run, base, ErrUpdateAfterRevision, "Revision analysis determined no remediation action is required")
+	}
+
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
 		Status:             metav1.ConditionTrue,
@@ -723,6 +733,22 @@ func (r *AgenticRunReconciler) handleEscalation(
 	}
 
 	log.Info("escalation complete", LogKeySummary, escalationResult.Summary)
+	return ctrl.Result{}, nil
+}
+
+func (r *AgenticRunReconciler) setNoActionRequired(ctx context.Context, run *agenticv1alpha1.AgenticRun, base *agenticv1alpha1.AgenticRun, errSentinel, message string) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonNoActionRequired,
+		Message:            message,
+		ObservedGeneration: run.Generation,
+	})
+	if err := r.statusPatch(ctx, run, base); err != nil {
+		return ctrl.Result{}, fmt.Errorf("%s: %w", errSentinel, err)
+	}
+	log.Info("no action required", "message", message)
 	return ctrl.Result{}, nil
 }
 

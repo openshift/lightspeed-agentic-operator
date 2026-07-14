@@ -31,8 +31,10 @@ const (
 )
 
 type analysisResponse struct {
-	Success bool                                `json:"success"`
-	Options []agenticv1alpha1.RemediationOption `json:"options"`
+	Success        bool                                `json:"success"`
+	ActionRequired *bool                               `json:"actionRequired,omitempty"`
+	Diagnosis      *agenticv1alpha1.DiagnosisResult    `json:"diagnosis,omitempty"`
+	Options        []agenticv1alpha1.RemediationOption `json:"options"`
 }
 
 type executionResponse struct {
@@ -100,9 +102,16 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.A
 		}
 	}
 
+	actionRequired := resp.ActionRequired == nil || *resp.ActionRequired
+	if resp.Diagnosis == nil && !actionRequired {
+		log.Error(nil, "analysis response missing diagnosis for no-action-required result", "run", run.Name)
+	}
+
 	return &AnalysisOutput{
-		Success: resp.Success,
-		Options: resp.Options,
+		Success:        resp.Success,
+		ActionRequired: &actionRequired,
+		Options:        resp.Options,
+		Diagnosis:      resp.Diagnosis,
 	}, nil
 }
 

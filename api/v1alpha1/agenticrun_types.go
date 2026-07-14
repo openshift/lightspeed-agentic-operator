@@ -39,6 +39,7 @@ const (
 	AgenticRunPhaseEscalating       AgenticRunPhase = "Escalating"
 	AgenticRunPhaseEscalated        AgenticRunPhase = "Escalated"
 	AgenticRunPhaseEmergencyStopped AgenticRunPhase = "EmergencyStopped"
+	AgenticRunPhaseNoActionRequired AgenticRunPhase = "NoActionRequired"
 )
 
 // Condition reasons used by DerivePhase for state transitions.
@@ -46,6 +47,7 @@ const (
 const (
 	ReasonRetryingExecution = "RetryingExecution"
 	ReasonRetriesExhausted  = "RetriesExhausted"
+	ReasonNoActionRequired  = "NoActionRequired"
 )
 
 // DerivePhase computes the display phase from conditions. Conditions are
@@ -112,6 +114,9 @@ func DerivePhase(conditions []metav1.Condition) AgenticRunPhase {
 	if c := get(AgenticRunConditionAnalyzed); c != nil {
 		switch c.Status {
 		case metav1.ConditionTrue:
+			if c.Reason == ReasonNoActionRequired {
+				return AgenticRunPhaseNoActionRequired
+			}
 			return AgenticRunPhaseProposed
 		case metav1.ConditionUnknown:
 			return AgenticRunPhaseAnalyzing
