@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1056,6 +1057,134 @@ func TestPolicyChange_ManualToAutomatic(t *testing.T) {
 	}
 
 	// Reconcile — analysis should now proceed via policy fallback in isStageApproved
+	reconcileOnce(r, "fix-crash")
+	assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseProposed)
+}
+
+// ---------------------------------------------------------------------------
+// NoActionRequired: analysis terminates without execution
+// ---------------------------------------------------------------------------
+
+func TestNoActionRequired_TerminalWithoutExecution(t *testing.T) {
+	run := testAgenticRun()
+	agent := newTestAgentCaller()
+	agent.analyzeResult = &AnalysisOutput{
+		Success:        true,
+		ActionRequired: ptr.To(false),
+		Diagnosis: &agenticv1alpha1.DiagnosisResult{
+			Summary:    "Alert is a false alarm — pod restarted once due to a transient OOM but has been stable since",
+			Confidence: "High",
+			RootCause:  "Transient OOM, already self-healed",
+		},
+	}
+	r, fc := newReconcilerWithPolicy(t, run, agent, testAutoApprovePolicy())
+
+	// Analysis auto-approved → NoActionRequired (terminal)
+	reconcileOnce(r, "fix-crash")
+	p := assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseNoActionRequired)
+
+	// Verify AnalysisResult CR was created with ActionRequired=False and Diagnosis
+	if len(p.Status.Steps.Analysis.Results) == 0 {
+		t.Fatal("expected analysis result ref")
+	}
+	var ar agenticv1alpha1.AnalysisResult
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: p.Status.Steps.Analysis.Results[0].Name, Namespace: "default"}, &ar); err != nil {
+		t.Fatalf("get AnalysisResult: %v", err)
+	}
+	if ar.Status.ActionRequired != agenticv1alpha1.ActionRequiredFalse {
+		t.Errorf("ActionRequired = %q, want %q", ar.Status.ActionRequired, agenticv1alpha1.ActionRequiredFalse)
+	}
+	if ar.Status.Diagnosis.Summary == "" {
+		t.Fatal("expected Diagnosis to be set")
+	}
+	if ar.Status.Diagnosis.Confidence != "High" {
+		t.Errorf("Diagnosis.Confidence = %q, want High", ar.Status.Diagnosis.Confidence)
+	}
+
+	// Execution and verification should never have run
+	if len(p.Status.Steps.Execution.Results) != 0 {
+		t.Error("execution should not have run")
+	}
+	if len(p.Status.Steps.Verification.Results) != 0 {
+		t.Error("verification should not have run")
+	}
+
+	// Re-reconcile is a no-op (terminal)
+	result, err := reconcileOnce(r, "fix-crash")
+	mustNotRequeue(t, result, err, "terminal no-op re-reconcile")
+	assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseNoActionRequired)
+}
+
+func TestNoActionRequired_RevisionTriggersReanalysis(t *testing.T) {
+	run := testAgenticRun()
+	agent := newTestAgentCaller()
+	agent.analyzeResult = &AnalysisOutput{
+		Success:        true,
+		ActionRequired: ptr.To(false),
+		Diagnosis: &agenticv1alpha1.DiagnosisResult{
+			Summary:    "False alarm",
+			Confidence: "Medium",
+			RootCause:  "Transient issue",
+		},
+	}
+	r, fc := newReconcilerWithPolicy(t, run, agent, testAutoApprovePolicy())
+
+	// Analysis → NoActionRequired
+	result, err := reconcileOnce(r, "fix-crash")
+	mustNotRequeue(t, result, err, "initial no-action-required analysis")
+	assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseNoActionRequired)
+
+	// Admin disagrees — submits revision feedback to re-analyze
+	agent.analyzeResult = &AnalysisOutput{
+		Success:        true,
+		ActionRequired: ptr.To(true),
+		Options: []agenticv1alpha1.RemediationOption{{
+			Title: "Increase memory",
+			Diagnosis: agenticv1alpha1.DiagnosisResult{
+				Summary: "OOM", Confidence: "High", RootCause: "Low limit",
+			},
+			RemediationPlan: agenticv1alpha1.RemediationPlan{
+				Description: "Increase to 512Mi",
+				Actions:     []agenticv1alpha1.ProposedAction{{Command: "kubectl patch deploy/web -n production -p '{}'", Type: "mutation", Description: "Patch"}},
+				Risk:        "Low",
+				Reversible:  agenticv1alpha1.ReversibilityReversible,
+			},
+		}},
+	}
+	reviseAgenticRun(t, fc, "fix-crash", "This is NOT a false alarm, the pod keeps crashing")
+
+	// Revision triggers re-analysis → should now be Proposed
+	result, err = reconcileOnce(r, "fix-crash")
+	mustNotRequeue(t, result, err, "revision-triggered reanalysis")
+	assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseProposed)
+
+	p := mustGetAgenticRun(t, r, "fix-crash")
+	if len(p.Status.Steps.Analysis.Results) < 2 {
+		t.Fatalf("expected at least 2 analysis results (initial + revision), got %d", len(p.Status.Steps.Analysis.Results))
+	}
+}
+
+func TestNoActionRequired_NilActionRequiredDefaultsToTrue(t *testing.T) {
+	run := testAgenticRun()
+	agent := newTestAgentCaller()
+	agent.analyzeResult = &AnalysisOutput{
+		Success:        true,
+		ActionRequired: nil,
+		Options: []agenticv1alpha1.RemediationOption{{
+			Title: "Increase memory",
+			Diagnosis: agenticv1alpha1.DiagnosisResult{
+				Summary: "OOM", Confidence: "High", RootCause: "Low limit",
+			},
+			RemediationPlan: agenticv1alpha1.RemediationPlan{
+				Description: "Increase to 512Mi",
+				Actions:     []agenticv1alpha1.ProposedAction{{Command: "kubectl patch deploy/web -n production -p '{}'", Type: "mutation", Description: "Patch"}},
+				Risk:        "Low",
+				Reversible:  agenticv1alpha1.ReversibilityReversible,
+			},
+		}},
+	}
+	r, _ := newReconcilerWithPolicy(t, run, agent, testAutoApprovePolicy())
+
 	reconcileOnce(r, "fix-crash")
 	assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseProposed)
 }

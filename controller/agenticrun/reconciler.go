@@ -85,6 +85,21 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// --- Terminal phases (before suspension guard so audit cleanup always runs) ---
 	switch phase {
+	case agenticv1alpha1.AgenticRunPhaseNoActionRequired:
+		if !needsRevision(&run) {
+			if hasSandboxClaims(&run) {
+				if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
+					log.Error(err, "sandbox cleanup failed at terminal phase")
+				}
+			}
+			if r.Audit != nil {
+				r.Audit.EndApprovalWait(&run, nil)
+				r.Audit.EmitAgenticRunTerminal(ctx, &run, string(phase), terminalReason(&run))
+				r.Audit.EndLifecycleSpan(&run)
+			}
+			return ctrl.Result{}, nil
+		}
+
 	case agenticv1alpha1.AgenticRunPhaseCompleted,
 		agenticv1alpha1.AgenticRunPhaseDenied,
 		agenticv1alpha1.AgenticRunPhaseEscalated,
@@ -135,7 +150,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Recover lifecycle trace context for in-progress runs after operator restart (§5).
 	// Uses RecoverLifecycleContext (not EnsureLifecycleSpan) to avoid exporting a duplicate span.
 	// Also restarts the approval wait span if the run is waiting for execution approval.
-	if r.Audit != nil && !isTerminal(phase) {
+	if r.Audit != nil && (!isTerminal(phase) || (phase == agenticv1alpha1.AgenticRunPhaseNoActionRequired && needsRevision(&run))) {
 		r.Audit.RecoverLifecycleContext(ctx, &run)
 		if phase == agenticv1alpha1.AgenticRunPhaseProposed {
 			r.Audit.StartApprovalWait(ctx, &run)
@@ -196,6 +211,12 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return r.handleRevision(ctx, &run, resolved, approval, policy)
 		}
 		return r.handleEscalation(ctx, &run, resolved, approval, policy)
+
+	case agenticv1alpha1.AgenticRunPhaseNoActionRequired:
+		if needsRevision(&run) {
+			return r.handleRevision(ctx, &run, resolved, approval, policy)
+		}
+		return ctrl.Result{}, nil
 
 	default:
 		log.V(1).Info("unhandled phase, no-op", LogKeyPhase, phase)

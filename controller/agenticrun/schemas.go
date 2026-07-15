@@ -14,10 +14,24 @@ import (
 var AnalysisOutputSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "actionRequired": {
+      "type": "boolean",
+      "description": "Whether remediation action is required. Set to false when the issue is a false alarm, already self-healed, or no cluster changes are needed. When false, provide a diagnosis explaining why no action is needed and omit options."
+    },
+    "diagnosis": {
+      "type": "object",
+      "description": "Top-level root cause analysis. Required when actionRequired is false. When actionRequired is true, diagnosis is provided per-option instead.",
+      "properties": {
+        "summary": { "type": "string", "description": "Markdown-formatted diagnosis summary explaining the problem, symptoms, and findings" },
+        "confidence": { "type": "string", "enum": ["Low", "Medium", "High"], "description": "Your confidence in this diagnosis" },
+        "rootCause": { "type": "string", "description": "Concise one-line root cause" }
+      },
+      "required": ["summary", "confidence", "rootCause"]
+    },
     "options": {
       "type": "array",
-      "description": "One or more remediation options, ordered by recommendation. Provide at least one.",
-      "minItems": 1,
+      "description": "One or more remediation options, ordered by recommendation. Required when actionRequired is true. Provide an empty array [] when actionRequired is false.",
+      "minItems": 0,
       "items": {
         "type": "object",
         "properties": {
@@ -125,7 +139,7 @@ var AnalysisOutputSchema = json.RawMessage(`{
       }
     }
   },
-  "required": ["options"]
+  "required": ["actionRequired", "options"]
 }`)
 
 // MinimalAnalysisOutputSchema is the base analysis output schema used
@@ -136,10 +150,24 @@ var AnalysisOutputSchema = json.RawMessage(`{
 var MinimalAnalysisOutputSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
+    "actionRequired": {
+      "type": "boolean",
+      "description": "Whether remediation action is required. Set to false when the issue is a false alarm, already self-healed, or no cluster changes are needed."
+    },
+    "diagnosis": {
+      "type": "object",
+      "description": "Top-level root cause analysis. Required when actionRequired is false.",
+      "properties": {
+        "summary": { "type": "string", "description": "Markdown-formatted diagnosis summary" },
+        "confidence": { "type": "string", "enum": ["Low", "Medium", "High"], "description": "Your confidence in this diagnosis" },
+        "rootCause": { "type": "string", "description": "Concise one-line root cause" }
+      },
+      "required": ["summary", "confidence", "rootCause"]
+    },
     "options": {
       "type": "array",
-      "description": "One or more output options, ordered by recommendation. Provide at least one.",
-      "minItems": 1,
+      "description": "One or more output options, ordered by recommendation. Required when actionRequired is true.",
+      "minItems": 0,
       "items": {
         "type": "object",
         "properties": {
@@ -149,7 +177,7 @@ var MinimalAnalysisOutputSchema = json.RawMessage(`{
       }
     }
   },
-  "required": ["options"]
+  "required": ["actionRequired", "options"]
 }`)
 
 var ExecutionOutputSchema = json.RawMessage(`{

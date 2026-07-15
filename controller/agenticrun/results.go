@@ -111,6 +111,10 @@ func (r *AgenticRunReconciler) createAnalysisResult(
 
 	if result != nil {
 		cr.Status.Options = result.Options
+		cr.Status.ActionRequired = agenticv1alpha1.ActionRequiredFromBool(result.IsActionRequired())
+		if result.Diagnosis != nil {
+			cr.Status.Diagnosis = *result.Diagnosis
+		}
 	}
 
 	snapshot := cr.DeepCopy()
@@ -294,6 +298,8 @@ func copyResultStatus(dst, src client.Object) {
 	case *agenticv1alpha1.AnalysisResult:
 		if s, ok := src.(*agenticv1alpha1.AnalysisResult); ok {
 			d.Status.Options = s.Status.Options
+			d.Status.ActionRequired = s.Status.ActionRequired
+			d.Status.Diagnosis = s.Status.Diagnosis
 			d.Status.FailureReason = s.Status.FailureReason
 			d.Status.Sandbox = s.Status.Sandbox
 		}

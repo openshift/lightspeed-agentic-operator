@@ -1,0 +1,38 @@
+# Example AgenticRun that triggers NoActionRequired — the analysis agent
+# determines no remediation is needed (false alarm / self-healed).
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: hello-printer
+  namespace: openshift-lightspeed
+spec:
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: hello
+      image: busybox
+      command: ["sh", "-c", "while true; do echo hello; sleep 1; done"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+---
+apiVersion: agentic.openshift.io/v1alpha1
+kind: AgenticRun
+metadata:
+  name: false-alarm-crashloop
+  namespace: openshift-lightspeed
+spec:
+  request: "Pod hello-printer is crash looping in openshift-lightspeed namespace"
+  targetNamespaces:
+    - openshift-lightspeed
+  analysis:
+    agent: default
+  execution:
+    agent: default
+  verification:
+    agent: default

@@ -371,6 +371,78 @@ func extractOptionProperties(t *testing.T, schema json.RawMessage) map[string]an
 	return extractOptionItems(t, schema)["properties"].(map[string]any)
 }
 
+func TestAnalysisOutputSchema_ActionRequiredAndDiagnosis(t *testing.T) {
+	var parsed map[string]any
+	if err := json.Unmarshal(AnalysisOutputSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	props := parsed["properties"].(map[string]any)
+
+	ar, ok := props["actionRequired"]
+	if !ok {
+		t.Fatal("schema missing actionRequired property")
+	}
+	if ar.(map[string]any)["type"] != "boolean" {
+		t.Error("actionRequired should be boolean")
+	}
+
+	diag, ok := props["diagnosis"]
+	if !ok {
+		t.Fatal("schema missing diagnosis property")
+	}
+	diagProps := diag.(map[string]any)["properties"].(map[string]any)
+	for _, key := range []string{"summary", "confidence", "rootCause"} {
+		if _, ok := diagProps[key]; !ok {
+			t.Errorf("diagnosis missing property %q", key)
+		}
+	}
+
+	required := parsed["required"].([]any)
+	requiredSet := map[string]bool{}
+	for _, r := range required {
+		requiredSet[r.(string)] = true
+	}
+	if !requiredSet["actionRequired"] {
+		t.Error("actionRequired should be required")
+	}
+
+	options := props["options"].(map[string]any)
+	minItems := options["minItems"].(float64)
+	if minItems != 0 {
+		t.Errorf("options minItems = %v, want 0", minItems)
+	}
+}
+
+func TestMinimalAnalysisOutputSchema_ActionRequiredAndDiagnosis(t *testing.T) {
+	var parsed map[string]any
+	if err := json.Unmarshal(MinimalAnalysisOutputSchema, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	props := parsed["properties"].(map[string]any)
+
+	if _, ok := props["actionRequired"]; !ok {
+		t.Fatal("MinimalAnalysisOutputSchema missing actionRequired property")
+	}
+	if _, ok := props["diagnosis"]; !ok {
+		t.Fatal("MinimalAnalysisOutputSchema missing diagnosis property")
+	}
+
+	required := parsed["required"].([]any)
+	requiredSet := map[string]bool{}
+	for _, r := range required {
+		requiredSet[r.(string)] = true
+	}
+	if !requiredSet["actionRequired"] {
+		t.Error("actionRequired should be required in minimal schema")
+	}
+
+	options := props["options"].(map[string]any)
+	minItems := options["minItems"].(float64)
+	if minItems != 0 {
+		t.Errorf("minimal options minItems = %v, want 0", minItems)
+	}
+}
+
 func TestMinimalAnalysisOutputSchema_ValidJSON(t *testing.T) {
 	var parsed map[string]any
 	if err := json.Unmarshal(MinimalAnalysisOutputSchema, &parsed); err != nil {

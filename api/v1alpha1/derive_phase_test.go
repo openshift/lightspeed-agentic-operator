@@ -217,6 +217,29 @@ func TestDerivePhase(t *testing.T) {
 			},
 			want: AgenticRunPhaseProposed,
 		},
+		{
+			name: "no action required",
+			conditions: []metav1.Condition{
+				cond(AgenticRunConditionAnalyzed, metav1.ConditionTrue, ReasonNoActionRequired),
+			},
+			want: AgenticRunPhaseNoActionRequired,
+		},
+		{
+			name: "no action required overridden by denied",
+			conditions: []metav1.Condition{
+				cond(AgenticRunConditionAnalyzed, metav1.ConditionTrue, ReasonNoActionRequired),
+				cond(AgenticRunConditionDenied, metav1.ConditionTrue, "UserDenied"),
+			},
+			want: AgenticRunPhaseDenied,
+		},
+		{
+			name: "no action required overridden by emergency stopped",
+			conditions: []metav1.Condition{
+				cond(AgenticRunConditionAnalyzed, metav1.ConditionTrue, ReasonNoActionRequired),
+				cond(AgenticRunConditionEmergencyStopped, metav1.ConditionTrue, "SystemSuspended"),
+			},
+			want: AgenticRunPhaseEmergencyStopped,
+		},
 	}
 
 	for _, tt := range tests {

@@ -51,6 +51,7 @@ const (
 	reasonRetryingExecution = agenticv1alpha1.ReasonRetryingExecution
 	reasonRetriesExhausted  = agenticv1alpha1.ReasonRetriesExhausted
 	reasonSystemSuspended   = "SystemSuspended"
+	reasonNoActionRequired  = agenticv1alpha1.ReasonNoActionRequired
 
 	LogKeyName      = "name"
 	LogKeyStep      = "step"
@@ -150,7 +151,7 @@ func terminalReason(run *agenticv1alpha1.AgenticRun) string {
 		if c.Status == metav1.ConditionFalse && c.Reason == reasonFailed {
 			return c.Message
 		}
-		if c.Status == metav1.ConditionTrue && (c.Reason == reasonUserDenied || c.Reason == reasonSystemSuspended) {
+		if c.Status == metav1.ConditionTrue && (c.Reason == reasonUserDenied || c.Reason == reasonSystemSuspended || c.Reason == reasonNoActionRequired) {
 			return c.Message
 		}
 	}
@@ -159,7 +160,7 @@ func terminalReason(run *agenticv1alpha1.AgenticRun) string {
 
 func isTerminal(phase agenticv1alpha1.AgenticRunPhase) bool {
 	switch phase {
-	case agenticv1alpha1.AgenticRunPhaseCompleted, agenticv1alpha1.AgenticRunPhaseFailed, agenticv1alpha1.AgenticRunPhaseDenied, agenticv1alpha1.AgenticRunPhaseEscalated, agenticv1alpha1.AgenticRunPhaseEmergencyStopped:
+	case agenticv1alpha1.AgenticRunPhaseCompleted, agenticv1alpha1.AgenticRunPhaseFailed, agenticv1alpha1.AgenticRunPhaseDenied, agenticv1alpha1.AgenticRunPhaseEscalated, agenticv1alpha1.AgenticRunPhaseEmergencyStopped, agenticv1alpha1.AgenticRunPhaseNoActionRequired:
 		return true
 	}
 	return false

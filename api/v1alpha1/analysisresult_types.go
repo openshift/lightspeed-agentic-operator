@@ -20,6 +20,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// ActionRequiredValue is a string enum indicating whether the analysis
+// determined that remediation action is required. Uses string values
+// "True"/"False" instead of a boolean to satisfy the kube-api-linter
+// nobools rule.
+// +kubebuilder:validation:Enum=True;False
+type ActionRequiredValue string
+
+const (
+	ActionRequiredTrue  ActionRequiredValue = "True"
+	ActionRequiredFalse ActionRequiredValue = "False"
+)
+
+// ActionRequiredFromBool converts a Go bool to ActionRequiredValue.
+func ActionRequiredFromBool(b bool) ActionRequiredValue {
+	if b {
+		return ActionRequiredTrue
+	}
+	return ActionRequiredFalse
+}
+
 // AnalysisResultStatus is the status of an AnalysisResult.
 //
 // +kubebuilder:validation:MinProperties=1
@@ -34,10 +54,22 @@ type AnalysisResultStatus struct {
 	// +kubebuilder:validation:MaxItems=8
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
 
+	// actionRequired indicates whether the analysis determined that
+	// remediation action is needed. When "False", the run transitions
+	// to NoActionRequired (terminal) instead of Proposed.
+	// +optional
+	ActionRequired ActionRequiredValue `json:"actionRequired,omitempty"`
+
+	// diagnosis is the top-level root cause analysis, populated when
+	// actionRequired is "False" (no remediation options are generated).
+	// When options are present, each option carries its own diagnosis.
+	// +optional
+	Diagnosis DiagnosisResult `json:"diagnosis,omitzero"`
+
 	// options contains the remediation options returned by the analysis agent.
 	// +optional
 	// +listType=atomic
-	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MinItems=0
 	// +kubebuilder:validation:MaxItems=10
 	Options []RemediationOption `json:"options,omitempty"`
 
