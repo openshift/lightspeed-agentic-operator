@@ -57,14 +57,14 @@ spec:
             properties:
               audit:
                 description: |-
-                  audit configures compliance audit logging and OpenTelemetry tracing.
-                  When absent, logging defaults to enabled with no OTEL export.
+                  audit configures compliance audit tracing.
+                  When absent, defaults to enabled with stdout OTLP JSON export only.
                 minProperties: 1
                 properties:
                   logging:
                     default: Enabled
                     description: |-
-                      logging enables structured JSON audit events to stdout.
+                      logging enables audit tracing.
                       Default: Enabled (when field is empty or config CR absent).
                     enum:
                     - Enabled
@@ -72,8 +72,8 @@ spec:
                     type: string
                   otel:
                     description: |-
-                      otel configures OpenTelemetry tracing export.
-                      When nil or endpoint empty, uses no-op tracer (no export).
+                      otel configures OpenTelemetry tracing export to a remote collector.
+                      When nil or endpoint empty, only the stdout JSON exporter is active.
                     minProperties: 1
                     properties:
                       endpoint:

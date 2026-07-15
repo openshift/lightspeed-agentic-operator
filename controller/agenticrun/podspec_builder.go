@@ -152,7 +152,10 @@ func appendAuditEnvVars(ctx context.Context, c client.Client, container *corev1.
 		return fmt.Errorf("read audit config: %w", err)
 	}
 	if audit.LoggingEnabled() {
-		container.Env = append(container.Env, corev1.EnvVar{Name: "LIGHTSPEED_AUDIT_ENABLED", Value: "true"})
+		container.Env = append(container.Env,
+			corev1.EnvVar{Name: "LIGHTSPEED_AUDIT_ENABLED", Value: "true"},
+			corev1.EnvVar{Name: "LIGHTSPEED_CAPTURE_CONTENT", Value: "true"},
+		)
 	}
 	if endpoint := audit.OTELEndpoint(); endpoint != "" {
 		container.Env = append(container.Env, corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: endpoint})

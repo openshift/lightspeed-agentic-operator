@@ -192,8 +192,7 @@ func TestBarePodManager_Claim_AuditWithOTELEndpoint(t *testing.T) {
 	config := &agenticv1alpha1.AgenticOLSConfig{}
 	config.Name = "cluster"
 	config.Spec.Audit = agenticv1alpha1.AuditConfig{
-		Logging: agenticv1alpha1.AuditLoggingEnabled,
-		OTEL:    agenticv1alpha1.AuditOTELConfig{Endpoint: "jaeger:4317"},
+		OTEL: agenticv1alpha1.AuditOTELConfig{Endpoint: "jaeger:4317"},
 	}
 	fc := newBarePodClient().WithObjects(config).Build()
 	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}

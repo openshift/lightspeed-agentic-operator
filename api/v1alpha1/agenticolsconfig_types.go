@@ -56,7 +56,7 @@ const (
 	AuditOTELTLSInsecure AuditOTELTLSMode = "Insecure"
 )
 
-// AuditLoggingMode defines whether structured audit logging is enabled.
+// AuditLoggingMode defines whether audit tracing is enabled.
 // +kubebuilder:validation:Enum=Enabled;Disabled
 type AuditLoggingMode string
 
@@ -65,24 +65,23 @@ const (
 	AuditLoggingDisabled AuditLoggingMode = "Disabled"
 )
 
-// AuditConfig configures compliance audit logging and tracing.
-// Logging and OTEL tracing are independent controls.
+// AuditConfig configures compliance audit tracing.
 //
 // +kubebuilder:validation:MinProperties=1
 type AuditConfig struct {
-	// logging enables structured JSON audit events to stdout.
+	// logging enables audit tracing.
 	// Default: Enabled (when field is empty or config CR absent).
 	// +default="Enabled"
 	// +optional
 	Logging AuditLoggingMode `json:"logging,omitempty"`
 
-	// otel configures OpenTelemetry tracing export.
-	// When nil or endpoint empty, uses no-op tracer (no export).
+	// otel configures OpenTelemetry tracing export to a remote collector.
+	// When nil or endpoint empty, only the stdout JSON exporter is active.
 	// +optional
 	OTEL AuditOTELConfig `json:"otel,omitzero"`
 }
 
-// LoggingEnabled returns true when audit logging should be enabled.
+// LoggingEnabled returns true when audit tracing should be active.
 // Defaults to true when config is nil or Logging field is empty.
 func (c *AuditConfig) LoggingEnabled() bool {
 	if c == nil || c.Logging == "" {
@@ -120,8 +119,8 @@ type AgenticOLSConfigSpec struct {
 	// +default=false
 	Suspended bool `json:"suspended,omitempty"` //nolint:kubeapilinter // kill switch is genuinely binary; bool is the right type
 
-	// audit configures compliance audit logging and OpenTelemetry tracing.
-	// When absent, logging defaults to enabled with no OTEL export.
+	// audit configures compliance audit tracing.
+	// When absent, defaults to enabled with stdout OTLP JSON export only.
 	// +optional
 	Audit AuditConfig `json:"audit,omitzero"`
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
-	uberzap "go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -42,8 +42,8 @@ func init() {
 }
 
 // initTracerProvider initializes the OTEL tracer provider.
-// When endpoint is empty, returns a no-op tracer provider (no export).
-// When endpoint is set, creates OTLP gRPC exporter to that endpoint.
+// Always adds a stdout OTLP JSON exporter for compliance records.
+// When endpoint is set, also adds an OTLP gRPC exporter.
 func initTracerProvider(endpoint string, otlpInsecure bool) (*sdktrace.TracerProvider, error) {
 	res := resource.NewWithAttributes(
 		semconv.SchemaURL,
@@ -51,37 +51,26 @@ func initTracerProvider(endpoint string, otlpInsecure bool) (*sdktrace.TracerPro
 		semconv.ServiceVersion("dev"),
 	)
 
-	idGen := &agenticrun.AgenticRunIDGenerator{}
-
-	// No endpoint - create tracer provider without exporter (no traces exported)
-	if endpoint == "" {
-		tp := sdktrace.NewTracerProvider(
-			sdktrace.WithResource(res),
-			sdktrace.WithIDGenerator(idGen),
-		)
-		return tp, nil
-	}
-
-	// Create OTLP gRPC exporter
-	opts := []otlptracegrpc.Option{
-		otlptracegrpc.WithEndpoint(endpoint),
-	}
-	if otlpInsecure {
-		opts = append(opts, otlptracegrpc.WithInsecure())
-	}
-
-	exporter, err := otlptracegrpc.New(context.Background(), opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	tp := sdktrace.NewTracerProvider(
+	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithIDGenerator(idGen),
-		sdktrace.WithBatcher(exporter),
-	)
+		sdktrace.WithSyncer(&otlpJSONStdoutExporter{}),
+	}
 
-	return tp, nil
+	if endpoint != "" {
+		opts := []otlptracegrpc.Option{
+			otlptracegrpc.WithEndpoint(endpoint),
+		}
+		if otlpInsecure {
+			opts = append(opts, otlptracegrpc.WithInsecure())
+		}
+		otlpExp, err := otlptracegrpc.New(context.Background(), opts...)
+		if err != nil {
+			return nil, fmt.Errorf("OTLP exporter: %w", err)
+		}
+		tpOpts = append(tpOpts, sdktrace.WithBatcher(otlpExp))
+	}
+
+	return sdktrace.NewTracerProvider(tpOpts...), nil
 }
 
 func main() {
@@ -180,7 +169,7 @@ func main() {
 	}()
 
 	if otlpEndpoint == "" {
-		log.Info("OTEL tracing disabled (no endpoint configured)")
+		log.Info("OTEL remote export disabled (stdout JSON only, no endpoint configured)")
 	} else if otlpInsecure {
 		log.Info("OTEL tracing enabled (insecure)", "endpoint", otlpEndpoint)
 	} else {
@@ -189,21 +178,12 @@ func main() {
 
 	// Create AuditLogger
 	var auditLogger agenticrun.AuditLogger
-	loggingEnabled := auditConfig.LoggingEnabled()
-
-	if loggingEnabled {
-		// Use zap logger for structured JSON
-		zapLogger, err := uberzap.NewProduction()
-		if err != nil {
-			log.Error(err, "unable to create zap logger for audit")
-			os.Exit(1)
-		}
-		defer zapLogger.Sync()
-		auditLogger = agenticrun.NewProductionAuditLogger(zapLogger)
-		log.Info("Audit logging enabled")
+	if auditConfig.LoggingEnabled() {
+		auditLogger = agenticrun.NewProductionAuditLogger()
+		log.Info("Audit tracing enabled")
 	} else {
 		auditLogger = agenticrun.NewNoOpAuditLogger()
-		log.Info("Audit logging disabled")
+		log.Info("Audit tracing disabled")
 	}
 
 	if err := agenticcontroller.Setup(mgr, agenticcontroller.Options{

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# Enable audit logging and OTEL tracing for Agentic OLS.
+# Enable audit tracing for Agentic OLS.
 # Run after install.sh — creates an AgenticOLSConfig CR that turns on
-# structured JSON audit logs and (optionally) exports OTEL traces.
+# audit tracing (stdout OTLP JSON) and optionally exports to a collector.
 #
 # Usage:
-#   # Audit logging only (no OTEL):
+#   # Audit tracing only (stdout OTLP JSON, no remote collector):
 #   bash hack/quickstart/setup-audit.sh
 #
-#   # Audit logging + OTEL tracing to a Jaeger instance:
+#   # Audit tracing + OTEL export to a Jaeger instance:
 #   OTEL_ENDPOINT=jaeger-otlp-grpc.observability.svc:4317 bash hack/quickstart/setup-audit.sh
 #
-#   # Disable audit logging:
+#   # Disable audit tracing:
 #   AUDIT_LOGGING=Disabled bash hack/quickstart/setup-audit.sh
 #
 # Need a Jaeger instance? See hack/deploy-jaeger.sh
@@ -23,7 +23,7 @@ AUDIT_LOGGING="${AUDIT_LOGGING:-Enabled}"
 OTEL_ENDPOINT="${OTEL_ENDPOINT:-}"
 OTEL_TLS_MODE="${OTEL_TLS_MODE:-Insecure}"
 
-echo "Configuring audit logging..."
+echo "Configuring audit tracing..."
 
 # Build the CR YAML — otel block is only included when OTEL_ENDPOINT is set.
 if [[ -n "${OTEL_ENDPOINT}" ]]; then

@@ -24,7 +24,7 @@ COPY LICENSE /licenses/
 USER 0
 
 # Build (TARGETOS / TARGETARCH are supplied by the container build client when cross-building).
-RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -tags strictfipsruntime -o manager cmd/main.go
+RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -tags strictfipsruntime -o manager ./cmd/
 # Verify manager is built for at most x86-64-v2 (on amd64 only; check is a no-op elsewhere)
 RUN go build -o check-isa-level ./cmd/check-isa-level && ./check-isa-level ./manager
 

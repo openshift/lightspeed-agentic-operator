@@ -55,8 +55,7 @@ func (r *AgenticRunReconciler) handleAnalysis(
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepAnalysis) {
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(run, approval)
-			r.Audit.EmitApprovalReceived(ctx, run, approval)
+			r.Audit.EmitApprovalSpan(ctx, run, approval, "")
 		}
 		return r.denyAgenticRun(ctx, run, "Analysis denied by user")
 	}
@@ -97,6 +96,7 @@ func (r *AgenticRunReconciler) handleAnalysis(
 		if span != nil {
 			defer span.End()
 		}
+		r.Audit.EmitAgenticRunReceived(spanCtx, run)
 	}
 
 	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, run.Spec.Request, defaultSandboxSA)
@@ -131,10 +131,6 @@ func (r *AgenticRunReconciler) handleAnalysis(
 	})
 	if err := r.statusPatch(ctx, run, base); err != nil {
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateAfterAnalysis, err)
-	}
-
-	if r.Audit != nil && !isStageApproved(approval, policy, agenticv1alpha1.SandboxStepExecution) {
-		r.Audit.StartApprovalWait(ctx, run)
 	}
 
 	log.Info("analysis complete", "options", len(analysisResult.Options))
@@ -223,10 +219,6 @@ func (r *AgenticRunReconciler) handleRevision(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateAfterRevision, err)
 	}
 
-	if r.Audit != nil && !isStageApproved(approval, policy, agenticv1alpha1.SandboxStepExecution) {
-		r.Audit.StartApprovalWait(ctx, run)
-	}
-
 	log.Info("revision analysis complete", "generation", generation, "options", len(analysisResult.Options))
 	return ctrl.Result{}, nil
 }
@@ -269,8 +261,7 @@ func (r *AgenticRunReconciler) handleExecution(
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepExecution) {
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(run, approval)
-			r.Audit.EmitApprovalReceived(ctx, run, approval)
+			r.Audit.EmitApprovalSpan(ctx, run, approval, "")
 		}
 		return r.denyAgenticRun(ctx, run, "Execution denied by user")
 	}
@@ -292,14 +283,17 @@ func (r *AgenticRunReconciler) handleExecution(
 		}
 	}
 
-	if r.Audit != nil {
-		r.Audit.EndApprovalWait(run, approval)
-		r.Audit.EmitApprovalReceived(ctx, run, approval)
-	}
-
 	selectedOption, trimErr := r.trimNonSelectedOptions(ctx, run, approval, policy)
 	if trimErr != nil {
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionExecuted, trimErr)
+	}
+
+	if r.Audit != nil && !isAutoApprovedByPolicy(policy, agenticv1alpha1.SandboxStepExecution) {
+		optTitle := ""
+		if selectedOption != nil {
+			optTitle = selectedOption.Title
+		}
+		r.Audit.EmitApprovalSpan(ctx, run, approval, optTitle)
 	}
 
 	// Determine which SA the execution pod should run as.
@@ -418,8 +412,7 @@ func (r *AgenticRunReconciler) handleVerification(
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepVerification) {
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(run, approval)
-			r.Audit.EmitApprovalReceived(ctx, run, approval)
+			r.Audit.EmitApprovalSpan(ctx, run, approval, "")
 		}
 		return r.denyAgenticRun(ctx, run, "Verification denied by user")
 	}
@@ -442,6 +435,10 @@ func (r *AgenticRunReconciler) handleVerification(
 		Message:            "Verification agent is running",
 		ObservedGeneration: run.Generation,
 	})
+	if err := r.statusPatch(ctx, run, base); err != nil {
+		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToVerifying, err)
+	}
+	base = run.DeepCopy()
 
 	selectedOption, selErr := r.selectedOption(ctx, run)
 	if selErr != nil {
@@ -573,9 +570,8 @@ func (r *AgenticRunReconciler) handleFailed(
 	log.Info("handling system failure (terminal)")
 
 	if r.Audit != nil {
-		r.Audit.EndApprovalWait(run, nil)
-		r.Audit.EmitAgenticRunTerminal(ctx, run, string(agenticv1alpha1.AgenticRunPhaseFailed), terminalReason(run))
-		r.Audit.EndLifecycleSpan(run)
+		r.Audit.EmitTerminalSpan(ctx, run, string(agenticv1alpha1.AgenticRunPhaseFailed), terminalReason(run))
+		r.Audit.Cleanup(run)
 	}
 
 	if run.Annotations[rbacNamespacesAnnotation] != "" {
@@ -640,8 +636,7 @@ func (r *AgenticRunReconciler) handleEscalation(
 
 	if isStageDenied(approval, agenticv1alpha1.SandboxStepEscalation) {
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(run, approval)
-			r.Audit.EmitApprovalReceived(ctx, run, approval)
+			r.Audit.EmitApprovalSpan(ctx, run, approval, "")
 		}
 		return r.denyAgenticRun(ctx, run, "Escalation denied by user")
 	}

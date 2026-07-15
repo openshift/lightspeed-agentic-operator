@@ -753,6 +753,9 @@ func patchAuditEnvVars(tmpl *unstructured.Unstructured, audit *agenticv1alpha1.A
 		if err := setEnvVar(tmpl, "LIGHTSPEED_AUDIT_ENABLED", "true"); err != nil {
 			return fmt.Errorf("set LIGHTSPEED_AUDIT_ENABLED: %w", err)
 		}
+		if err := setEnvVar(tmpl, "LIGHTSPEED_CAPTURE_CONTENT", "true"); err != nil {
+			return fmt.Errorf("set LIGHTSPEED_CAPTURE_CONTENT: %w", err)
+		}
 	}
 	if endpoint := audit.OTELEndpoint(); endpoint != "" {
 		if err := setEnvVar(tmpl, "OTEL_EXPORTER_OTLP_ENDPOINT", endpoint); err != nil {

@@ -2,8 +2,6 @@ package agenticrun
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,129 +12,71 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
-	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"go.opentelemetry.io/otel/trace/noop"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
-
-type contextKeyAgenticRunTraceID struct{}
-type contextKeyAgenticRunSpanID struct{}
-
-// ContextWithAgenticRunTraceID stores a desired trace ID in the context.
-// The AgenticRunIDGenerator extracts it when creating root spans.
-func ContextWithAgenticRunTraceID(ctx context.Context, traceID trace.TraceID) context.Context {
-	return context.WithValue(ctx, contextKeyAgenticRunTraceID{}, traceID)
-}
-
-// ContextWithAgenticRunSpanID stores a desired span ID in the context.
-// Used by EnsureLifecycleSpan to create a deterministic lifecycle span ID
-// that can be reconstructed after operator restart.
-func ContextWithAgenticRunSpanID(ctx context.Context, spanID trace.SpanID) context.Context {
-	return context.WithValue(ctx, contextKeyAgenticRunSpanID{}, spanID)
-}
-
-// lifecycleSpanID derives a deterministic span ID from the trace ID.
-// XORs the two halves of the 16-byte trace ID to produce an 8-byte span ID.
-// This allows RecoverLifecycleContext to reconstruct the exact parent span
-// context after operator restart, preserving parent-child relationships.
-func lifecycleSpanID(traceID trace.TraceID) trace.SpanID {
-	var sid trace.SpanID
-	for i := 0; i < 8; i++ {
-		sid[i] = traceID[i] ^ traceID[i+8]
-	}
-	return sid
-}
-
-// AgenticRunIDGenerator is an OTEL IDGenerator that uses the run-derived
-// trace ID (and optionally span ID) from the context when available. This
-// allows lifecycle spans to be true root spans with deterministic IDs.
-type AgenticRunIDGenerator struct{}
-
-var _ sdktrace.IDGenerator = (*AgenticRunIDGenerator)(nil)
-
-func (*AgenticRunIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
-	if tid, ok := ctx.Value(contextKeyAgenticRunTraceID{}).(trace.TraceID); ok {
-		if sid, ok := ctx.Value(contextKeyAgenticRunSpanID{}).(trace.SpanID); ok {
-			return tid, sid
-		}
-		var sid trace.SpanID
-		_, _ = rand.Read(sid[:])
-		return tid, sid
-	}
-	var tid trace.TraceID
-	var sid trace.SpanID
-	_, _ = rand.Read(tid[:])
-	_, _ = rand.Read(sid[:])
-	return tid, sid
-}
-
-func (*AgenticRunIDGenerator) NewSpanID(_ context.Context, _ trace.TraceID) trace.SpanID {
-	var sid trace.SpanID
-	_, _ = rand.Read(sid[:])
-	return sid
-}
 
 const (
 	tracerName    = "github.com/openshift/lightspeed-agentic-operator/controller/agenticrun"
 	tracerVersion = "v1alpha1"
 )
 
-// AuditLogger emits compliance audit events as structured JSON logs and OTEL spans.
+// AuditLogger emits compliance audit data as OTel spans and span events.
+// Each phase of an AgenticRun gets its own independent trace (fresh trace ID).
+// Phase spans link back to the prior phase's root span via span links.
 type AuditLogger interface {
-	EmitAgenticRunReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun)
-	EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult)
-	EmitApprovalReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval)
-	EmitExecutionCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.ExecutionResult)
-	EmitVerificationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult)
-	EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int)
-	EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult)
-	EmitAgenticRunTerminal(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase, reason string)
-
-	InjectTraceContext(ctx context.Context, run *agenticv1alpha1.AgenticRun, headers http.Header)
-
-	// Lifecycle root span (§4) — persists across reconciliations.
-	EnsureLifecycleSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) context.Context
-	// RecoverLifecycleContext reconstructs trace context after operator restart
-	// without exporting a duplicate lifecycle span.
-	RecoverLifecycleContext(ctx context.Context, run *agenticv1alpha1.AgenticRun) context.Context
-	EndLifecycleSpan(run *agenticv1alpha1.AgenticRun) bool
-
-	// Human approval wait span (§7) — measures human decision time.
-	StartApprovalWait(ctx context.Context, run *agenticv1alpha1.AgenticRun)
-	EndApprovalWait(run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval)
-
-	// Phase child spans (§6) — children of the lifecycle root.
+	// Phase spans — each creates a new root trace with auto-generated trace ID.
 	StartAnalysisSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span)
 	StartExecutionSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span)
 	StartVerificationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span)
 	StartEscalationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span)
+
+	// Short-lived phase spans (created and ended immediately).
+	EmitApprovalSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval, selectedOptionTitle string)
+	EmitTerminalSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase, reason string)
+
+	// Span events — emitted on the current span from ctx.
+	EmitAgenticRunReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun)
+	EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult)
+	EmitExecutionCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.ExecutionResult)
+	EmitVerificationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult)
+	EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int)
+	EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult)
+
+	// InjectTraceContext injects W3C traceparent header for downstream propagation.
+	InjectTraceContext(ctx context.Context, run *agenticv1alpha1.AgenticRun, headers http.Header)
+
+	// Cleanup removes in-memory state for a completed run (except terminal guard).
+	Cleanup(run *agenticv1alpha1.AgenticRun)
+
+	// CleanupDeleted removes all in-memory state including the terminal guard.
+	// Called when the AgenticRun is deleted (NotFound on Get).
+	CleanupDeleted(key types.NamespacedName)
 }
 
-type spanEntry struct {
-	ctx  context.Context
-	span trace.Span
-}
-
-// ProductionAuditLogger implements AuditLogger with zap + OTEL.
+// ProductionAuditLogger implements AuditLogger with per-phase OTel traces.
+// Known limitation: priorPhase is in-memory only. On operator restart the span
+// link chain between phases is broken — the first post-restart phase span has
+// no link to the prior phase. The agenticrun.uid correlation attribute (from
+// metadata.uid) still connects all phases across the restart boundary.
 type ProductionAuditLogger struct {
-	logger         *zap.Logger
-	tracer         trace.Tracer
-	lifecycleSpans sync.Map // map[types.UID]*spanEntry
-	approvalSpans  sync.Map // map[types.UID]*spanEntry
+	tracer          trace.Tracer
+	priorPhase      sync.Map // map[types.UID]trace.SpanContext
+	emittedTerminal sync.Map // map[types.UID]bool — prevents duplicate terminal spans
+	emittedApproval sync.Map // map[types.UID]bool — prevents duplicate approval spans on retry
+	knownUIDs       sync.Map // map[string]types.UID — "namespace/name" → UID for cleanup after deletion
 }
 
 // NoOpAuditLogger implements AuditLogger with no-op behavior (audit disabled).
 type NoOpAuditLogger struct{}
 
-// NewProductionAuditLogger creates an audit logger that emits JSON logs and OTEL spans.
-func NewProductionAuditLogger(logger *zap.Logger) AuditLogger {
+// NewProductionAuditLogger creates an audit logger that emits OTel spans.
+func NewProductionAuditLogger() AuditLogger {
 	return &ProductionAuditLogger{
-		logger: logger,
 		tracer: otel.Tracer(tracerName, trace.WithInstrumentationVersion(tracerVersion)),
 	}
 }
@@ -146,28 +86,7 @@ func NewNoOpAuditLogger() AuditLogger {
 	return &NoOpAuditLogger{}
 }
 
-// traceIDFromAgenticRun converts AgenticRun UID to OTEL trace ID.
-// Strips hyphens from UID to produce 32 hex chars.
-func traceIDFromAgenticRun(run *agenticv1alpha1.AgenticRun) trace.TraceID {
-	uidStr := string(run.UID)
-	// Remove hyphens: "a1b2c3d4-e5f6-..." → "a1b2c3d4e5f6..."
-	hexStr := strings.ReplaceAll(uidStr, "-", "")
-
-	// Decode hex string to bytes (16 bytes = 32 hex chars)
-	var traceID trace.TraceID
-	decoded, err := hex.DecodeString(hexStr)
-	if err != nil || len(decoded) != 16 {
-		// Invalid UID format - return zero trace ID (caller handles)
-		return traceID
-	}
-	copy(traceID[:], decoded)
-	return traceID
-}
-
-// serializeCR builds an audit-safe representation of a CR:
-// - metadata: {name, namespace, creationTimestamp, uid} (only these 4 fields)
-// - spec: full spec
-// - status: full status (for Result CRs)
+// serializeCR builds an audit-safe representation of a CR.
 func serializeCR(obj client.Object) (map[string]interface{}, error) {
 	metadata := map[string]interface{}{
 		"name":      obj.GetName(),
@@ -199,77 +118,152 @@ func serializeCR(obj client.Object) (map[string]interface{}, error) {
 	return result, nil
 }
 
-func truncateAttr(s string, max int) string {
-	runes := []rune(s)
-	if len(runes) <= max {
-		return s
-	}
-	return string(runes[:max]) + "…"
-}
-
-// emitStructuredLog writes a JSON audit event to stdout.
-// Format per spec §20: {timestamp, level, event, trace_id, payload}
-func (l *ProductionAuditLogger) emitStructuredLog(event, traceID string, payload interface{}) {
-	l.logger.Info(event,
-		zap.String("event", event),
-		zap.String("trace_id", traceID),
-		zap.Any("payload", payload),
-	)
-}
-
-// addSpanEvent adds an event to the current span with attributes.
-func (l *ProductionAuditLogger) addSpanEvent(ctx context.Context, event string, attrs ...attribute.KeyValue) {
-	span := trace.SpanFromContext(ctx)
-	if span != nil && span.IsRecording() {
-		span.AddEvent(event, trace.WithAttributes(attrs...))
-	}
-}
-
-// agenticRunRootContext creates a context that carries the run's trace ID
-// for the AgenticRunIDGenerator. When tracer.Start is called with this context
-// and no parent span, the IDGenerator picks up the trace ID and the resulting
-// span is a true root — no phantom parent in Jaeger.
-func agenticRunRootContext(traceID trace.TraceID) context.Context {
-	return ContextWithAgenticRunTraceID(context.Background(), traceID)
-}
-
-// EmitAgenticRunReceived logs when a new AgenticRun is received.
-func (l *ProductionAuditLogger) EmitAgenticRunReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun) {
-	traceID := traceIDFromAgenticRun(run)
-	serialized, err := serializeCR(run)
+// serializeCRJSON returns a JSON string of the audit-safe CR representation.
+func serializeCRJSON(obj client.Object) string {
+	safe, err := serializeCR(obj)
 	if err != nil {
-		l.logger.Error("Failed to serialize AgenticRun for audit", zap.Error(err))
-		return
+		return "{}"
 	}
-
-	payload := map[string]interface{}{
-		"run": serialized,
+	data, err := json.Marshal(safe)
+	if err != nil {
+		return "{}"
 	}
+	return string(data)
+}
 
-	l.emitStructuredLog("audit.agenticrun.received", traceID.String(), payload)
-	l.addSpanEvent(ctx, "audit.agenticrun.received",
+// runAttrs returns the standard span attributes for an AgenticRun.
+func runAttrs(run *agenticv1alpha1.AgenticRun) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("agenticrun.uid", strings.ReplaceAll(string(run.UID), "-", "")),
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("agenticrun.namespace", run.Namespace),
-		attribute.String("agenticrun.uid", string(run.UID)),
-		attribute.String("agenticrun.request", truncateAttr(run.Spec.Request, 500)),
-	)
+	}
 }
 
-// EmitAnalysisCompleted logs when analysis completes.
-func (l *ProductionAuditLogger) EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult) {
-	traceID := traceIDFromAgenticRun(run)
-	serialized, err := serializeCR(result)
-	if err != nil {
-		l.logger.Error("Failed to serialize AnalysisResult for audit", zap.Error(err))
+// startPhaseSpan creates a new root span for a phase with span link to prior phase.
+func (l *ProductionAuditLogger) startPhaseSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun, spanName string, extraAttrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	attrs := runAttrs(run)
+	attrs = append(attrs, extraAttrs...)
+
+	opts := []trace.SpanStartOption{
+		trace.WithNewRoot(),
+		trace.WithAttributes(attrs...),
+		trace.WithSpanKind(trace.SpanKindInternal),
+	}
+
+	if prior, ok := l.priorPhase.Load(run.UID); ok {
+		if sc, ok := prior.(trace.SpanContext); ok && sc.IsValid() {
+			opts = append(opts, trace.WithLinks(trace.Link{SpanContext: sc}))
+		}
+	}
+
+	spanCtx, span := l.tracer.Start(ctx, spanName, opts...)
+	l.priorPhase.Store(run.UID, span.SpanContext())
+	l.knownUIDs.Store(run.Namespace+"/"+run.Name, run.UID)
+	return spanCtx, span
+}
+
+func (l *ProductionAuditLogger) StartAnalysisSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	return l.startPhaseSpan(ctx, run, "agenticrun.analyze")
+}
+
+func (l *ProductionAuditLogger) StartExecutionSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	var extra []attribute.KeyValue
+	if run.Status.Steps.Execution.RetryCount != nil && *run.Status.Steps.Execution.RetryCount > 0 {
+		extra = append(extra, attribute.Int("retry_index", int(*run.Status.Steps.Execution.RetryCount)))
+	}
+	return l.startPhaseSpan(ctx, run, "agenticrun.execute", extra...)
+}
+
+func (l *ProductionAuditLogger) StartVerificationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	var extra []attribute.KeyValue
+	if run.Status.Steps.Execution.RetryCount != nil && *run.Status.Steps.Execution.RetryCount > 0 {
+		extra = append(extra, attribute.Int("retry_index", int(*run.Status.Steps.Execution.RetryCount)))
+	}
+	return l.startPhaseSpan(ctx, run, "agenticrun.verify", extra...)
+}
+
+func (l *ProductionAuditLogger) StartEscalationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	return l.startPhaseSpan(ctx, run, "agenticrun.escalate")
+}
+
+// EmitApprovalSpan creates a short-lived agenticrun.human_approval trace.
+// Idempotent: only emits once per UID — retries do not re-emit.
+func (l *ProductionAuditLogger) EmitApprovalSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval, selectedOptionTitle string) {
+	if _, already := l.emittedApproval.LoadOrStore(run.UID, true); already {
 		return
 	}
+	_, span := l.startPhaseSpan(ctx, run, "agenticrun.human_approval")
 
-	payload := map[string]interface{}{
-		"analysisResult": serialized,
+	eventAttrs := []attribute.KeyValue{
+		attribute.String("agenticrun.name", run.Name),
 	}
+	if approval != nil {
+		for i := len(approval.Spec.Stages) - 1; i >= 0; i-- {
+			if approval.Spec.Stages[i].Decision != "" {
+				eventAttrs = append(eventAttrs, attribute.String("approval.decision", string(approval.Spec.Stages[i].Decision)))
+				break
+			}
+		}
+		for _, stage := range approval.Spec.Stages {
+			if stage.Type == agenticv1alpha1.ApprovalStageExecution && stage.Execution.Option != nil {
+				eventAttrs = append(eventAttrs, attribute.Int("selected_option", int(*stage.Execution.Option)))
+				break
+			}
+		}
+		if approval.Spec.Approver.UID != "" {
+			eventAttrs = append(eventAttrs,
+				attribute.String("approver.uid", approval.Spec.Approver.UID),
+				attribute.String("approver.username", approval.Spec.Approver.Username),
+			)
+		}
+		eventAttrs = append(eventAttrs, attribute.String("agenticrun.cr", serializeCRJSON(approval)))
+	}
+	if selectedOptionTitle != "" {
+		eventAttrs = append(eventAttrs, attribute.String("selected_option.title", selectedOptionTitle))
+	}
+	span.AddEvent("agenticrun.approval.completed", trace.WithAttributes(eventAttrs...))
+	span.End()
+}
 
-	l.emitStructuredLog("audit.analysis.completed", traceID.String(), payload)
-	analysisAttrs := []attribute.KeyValue{
+// EmitTerminalSpan creates a short-lived agenticrun.terminal trace.
+// Idempotent: only emits once per UID — subsequent reconciles are no-ops.
+func (l *ProductionAuditLogger) EmitTerminalSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase, reason string) {
+	if _, already := l.emittedTerminal.LoadOrStore(run.UID, true); already {
+		return
+	}
+	_, span := l.startPhaseSpan(ctx, run, "agenticrun.terminal",
+		attribute.String("phase", phase),
+		attribute.String("reason", reason),
+	)
+	span.AddEvent("agenticrun.terminal", trace.WithAttributes(
+		attribute.String("agenticrun.name", run.Name),
+		attribute.String("phase", phase),
+		attribute.String("reason", reason),
+	))
+	span.End()
+}
+
+func (l *ProductionAuditLogger) EmitAgenticRunReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun) {
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
+		return
+	}
+	span.AddEvent("agenticrun.received", trace.WithAttributes(
+		attribute.String("agenticrun.name", run.Name),
+		attribute.String("agenticrun.namespace", run.Namespace),
+		attribute.String("agenticrun.uid", strings.ReplaceAll(string(run.UID), "-", "")),
+		attribute.String("agenticrun.request", run.Spec.Request),
+		attribute.String("agenticrun.cr", serializeCRJSON(run)),
+	))
+}
+
+func (l *ProductionAuditLogger) EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult) {
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
+		return
+	}
+	attrs := []attribute.KeyValue{
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("result.name", result.Name),
 		attribute.String("result.uid", string(result.UID)),
@@ -280,72 +274,21 @@ func (l *ProductionAuditLogger) EmitAnalysisCompleted(ctx context.Context, run *
 			break
 		}
 		prefix := fmt.Sprintf("option.%d.", i)
-		analysisAttrs = append(analysisAttrs,
-			attribute.String(prefix+"title", truncateAttr(opt.Title, 200)),
+		attrs = append(attrs,
+			attribute.String(prefix+"title", opt.Title),
 			attribute.String(prefix+"risk", string(opt.RemediationPlan.Risk)),
 		)
 	}
-	l.addSpanEvent(ctx, "audit.analysis.completed", analysisAttrs...)
+	attrs = append(attrs, attribute.String("agenticrun.cr", serializeCRJSON(result)))
+	span.AddEvent("agenticrun.analysis.completed", trace.WithAttributes(attrs...))
 }
 
-// EmitApprovalReceived logs when an approval decision is made.
-func (l *ProductionAuditLogger) EmitApprovalReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval) {
-	traceID := traceIDFromAgenticRun(run)
-
-	// Extract execution approval if present
-	var selectedOption *int32
-	for _, stage := range approval.Spec.Stages {
-		if stage.Type == agenticv1alpha1.ApprovalStageExecution && stage.Execution != nil && stage.Execution.Option != nil {
-			selectedOption = stage.Execution.Option
-			break
-		}
-	}
-
-	payload := map[string]interface{}{
-		"approvalStages": approval.Spec.Stages,
-	}
-	if selectedOption != nil {
-		payload["selectedOption"] = *selectedOption
-	}
-	if approval.Spec.Approver.UID != "" {
-		payload["approver"] = map[string]interface{}{
-			"uid":        approval.Spec.Approver.UID,
-			"username":   approval.Spec.Approver.Username,
-			"approvedAt": approval.Spec.Approver.ApprovedAt,
-		}
-	}
-
-	l.emitStructuredLog("audit.approval.received", traceID.String(), payload)
-	attrs := []attribute.KeyValue{
-		attribute.String("agenticrun.name", run.Name),
-	}
-	if selectedOption != nil {
-		attrs = append(attrs, attribute.Int("selected_option", int(*selectedOption)))
-	}
-	if approval.Spec.Approver.UID != "" {
-		attrs = append(attrs,
-			attribute.String("approver.uid", approval.Spec.Approver.UID),
-			attribute.String("approver.username", approval.Spec.Approver.Username),
-		)
-	}
-	l.addSpanEvent(ctx, "audit.approval.received", attrs...)
-}
-
-// EmitExecutionCompleted logs when execution completes.
 func (l *ProductionAuditLogger) EmitExecutionCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.ExecutionResult) {
-	traceID := traceIDFromAgenticRun(run)
-	serialized, err := serializeCR(result)
-	if err != nil {
-		l.logger.Error("Failed to serialize ExecutionResult for audit", zap.Error(err))
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
 		return
 	}
-
-	payload := map[string]interface{}{
-		"executionResult": serialized,
-	}
-
-	l.emitStructuredLog("audit.execution.completed", traceID.String(), payload)
-	execAttrs := []attribute.KeyValue{
+	attrs := []attribute.KeyValue{
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("result.name", result.Name),
 		attribute.String("result.uid", string(result.UID)),
@@ -356,355 +299,124 @@ func (l *ProductionAuditLogger) EmitExecutionCompleted(ctx context.Context, run 
 		if i >= 5 {
 			break
 		}
-		execAttrs = append(execAttrs,
+		attrs = append(attrs,
 			attribute.String(fmt.Sprintf("action.%d.type", i), action.Type),
-			attribute.String(fmt.Sprintf("action.%d.description", i), truncateAttr(action.Description, 200)),
+			attribute.String(fmt.Sprintf("action.%d.description", i), action.Description),
 		)
 	}
-	l.addSpanEvent(ctx, "audit.execution.completed", execAttrs...)
+	attrs = append(attrs, attribute.String("agenticrun.cr", serializeCRJSON(result)))
+	span.AddEvent("agenticrun.execution.completed", trace.WithAttributes(attrs...))
 }
 
-// EmitVerificationCompleted logs when verification completes.
 func (l *ProductionAuditLogger) EmitVerificationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult) {
-	traceID := traceIDFromAgenticRun(run)
-	serialized, err := serializeCR(result)
-	if err != nil {
-		l.logger.Error("Failed to serialize VerificationResult for audit", zap.Error(err))
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
 		return
 	}
-
-	payload := map[string]interface{}{
-		"verificationResult": serialized,
-	}
-
-	l.emitStructuredLog("audit.verification.completed", traceID.String(), payload)
-	verifyAttrs := []attribute.KeyValue{
+	attrs := []attribute.KeyValue{
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("result.name", result.Name),
 		attribute.String("result.uid", string(result.UID)),
-		attribute.String("summary", truncateAttr(result.Status.Summary, 500)),
+		attribute.String("summary", result.Status.Summary),
 		attribute.Int("checks.count", len(result.Status.Checks)),
 	}
 	for i, check := range result.Status.Checks {
 		if i >= 5 {
 			break
 		}
-		verifyAttrs = append(verifyAttrs,
+		attrs = append(attrs,
 			attribute.String(fmt.Sprintf("check.%d.name", i), check.Name),
 			attribute.String(fmt.Sprintf("check.%d.result", i), string(check.Result)),
 		)
 	}
-	l.addSpanEvent(ctx, "audit.verification.completed", verifyAttrs...)
+	attrs = append(attrs, attribute.String("agenticrun.cr", serializeCRJSON(result)))
+	span.AddEvent("agenticrun.verification.completed", trace.WithAttributes(attrs...))
 }
 
-// EmitVerificationRetry logs when verification triggers a retry.
 func (l *ProductionAuditLogger) EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int) {
-	traceID := traceIDFromAgenticRun(run)
-	serialized, err := serializeCR(result)
-	if err != nil {
-		l.logger.Error("Failed to serialize VerificationResult for audit retry", zap.Error(err))
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
 		return
 	}
-
-	payload := map[string]interface{}{
-		"verificationResult": serialized,
-		"retryCount":         retryCount,
-	}
-
-	l.emitStructuredLog("audit.verification.retry", traceID.String(), payload)
-	l.addSpanEvent(ctx, "audit.verification.retry",
+	span.AddEvent("agenticrun.verification.retry", trace.WithAttributes(
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("result.name", result.Name),
-		attribute.String("summary", truncateAttr(result.Status.Summary, 500)),
+		attribute.String("summary", result.Status.Summary),
 		attribute.Int("retry_count", retryCount),
 		attribute.Int("checks.count", len(result.Status.Checks)),
-	)
+		attribute.String("agenticrun.cr", serializeCRJSON(result)),
+	))
 }
 
-// EmitEscalationCompleted logs when escalation completes.
 func (l *ProductionAuditLogger) EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult) {
-	traceID := traceIDFromAgenticRun(run)
-	serialized, err := serializeCR(result)
-	if err != nil {
-		l.logger.Error("Failed to serialize EscalationResult for audit", zap.Error(err))
+	span := trace.SpanFromContext(ctx)
+	if span == nil || !span.IsRecording() {
 		return
 	}
-
-	payload := map[string]interface{}{
-		"escalationResult": serialized,
-	}
-
-	l.emitStructuredLog("audit.escalation.completed", traceID.String(), payload)
-	l.addSpanEvent(ctx, "audit.escalation.completed",
+	span.AddEvent("agenticrun.escalation.completed", trace.WithAttributes(
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("result.name", result.Name),
 		attribute.String("result.uid", string(result.UID)),
-		attribute.String("summary", truncateAttr(result.Status.Summary, 500)),
-	)
+		attribute.String("summary", result.Status.Summary),
+		attribute.String("agenticrun.cr", serializeCRJSON(result)),
+	))
 }
 
-// EmitAgenticRunTerminal logs when a run reaches a terminal state.
-// Creates a short-lived child span so the terminal event is visible in Jaeger.
-// Must be called BEFORE EndLifecycleSpan (which deletes the map entry).
-// Skips emit if no lifecycle context exists (run was already terminal before restart).
-func (l *ProductionAuditLogger) EmitAgenticRunTerminal(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase, reason string) {
-	if _, ok := l.lifecycleSpans.Load(run.UID); !ok {
-		return
-	}
-
-	traceID := traceIDFromAgenticRun(run)
-	payload := map[string]interface{}{
-		"phase":  phase,
-		"reason": reason,
-	}
-	l.emitStructuredLog("audit.agenticrun.terminal", traceID.String(), payload)
-
-	parentCtx := l.lifecycleContext(run)
-	_, span := l.tracer.Start(parentCtx, "agenticrun.terminal",
-		trace.WithAttributes(
-			attribute.String("agenticrun.name", run.Name),
-			attribute.String("agenticrun.namespace", run.Namespace),
-			attribute.String("phase", phase),
-			attribute.String("reason", reason),
-		),
-	)
-	span.End()
-}
-
-// InjectTraceContext injects W3C traceparent header for downstream propagation.
-func (l *ProductionAuditLogger) InjectTraceContext(ctx context.Context, run *agenticv1alpha1.AgenticRun, headers http.Header) {
-	// Prefer the active span from ctx (set by StartAnalysisSpan, StartExecutionSpan, etc.)
-	// so the sandbox call is linked to the correct parent phase span.
+func (l *ProductionAuditLogger) InjectTraceContext(ctx context.Context, _ *agenticv1alpha1.AgenticRun, headers http.Header) {
 	sc := trace.SpanContextFromContext(ctx)
 	if !sc.IsValid() {
-		traceID := traceIDFromAgenticRun(run)
-		sc = trace.NewSpanContext(trace.SpanContextConfig{
-			TraceID:    traceID,
-			SpanID:     lifecycleSpanID(traceID),
-			TraceFlags: trace.FlagsSampled,
-		})
-		ctx = trace.ContextWithSpanContext(context.Background(), sc)
+		return
 	}
-
 	propagator := propagation.TraceContext{}
 	propagator.Inject(ctx, propagation.HeaderCarrier(headers))
 }
 
-// lifecycleContext returns the lifecycle span's context for nesting child spans.
-// Falls back to a run root context if no lifecycle span is active (e.g. operator
-// restart before EnsureLifecycleSpan is called).
-func (l *ProductionAuditLogger) lifecycleContext(run *agenticv1alpha1.AgenticRun) context.Context {
-	if entry, ok := l.lifecycleSpans.Load(run.UID); ok {
-		if se, ok := entry.(*spanEntry); ok {
-			return se.ctx
-		}
-	}
-	return agenticRunRootContext(traceIDFromAgenticRun(run))
+func (l *ProductionAuditLogger) Cleanup(run *agenticv1alpha1.AgenticRun) {
+	l.priorPhase.Delete(run.UID)
+	l.emittedApproval.Delete(run.UID)
 }
 
-// EnsureLifecycleSpan creates a short-lived root agenticrun.lifecycle span using the
-// continuation pattern. The span is ended immediately so the batch exporter can
-// flush it to collectors without waiting for the run to reach a terminal state.
-// The span's context is stored so that subsequent child spans (analyze, execute, etc.)
-// are parented under it — OTEL child-parent relationships are ID-based, so children
-// can outlive their parent span.
-//
-// Idempotent — safe to call on every reconciliation. On operator restart, reconstructs
-// the span from the AgenticRun UID (§5).
-func (l *ProductionAuditLogger) EnsureLifecycleSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) context.Context {
-	if entry, ok := l.lifecycleSpans.Load(run.UID); ok {
-		if se, ok := entry.(*spanEntry); ok {
-			return se.ctx
-		}
-	}
-	traceID := traceIDFromAgenticRun(run)
-	rootCtx := agenticRunRootContext(traceID)
-	rootCtx = ContextWithAgenticRunSpanID(rootCtx, lifecycleSpanID(traceID))
-	spanCtx, span := l.tracer.Start(rootCtx, "agenticrun.lifecycle",
-		trace.WithAttributes(
-			attribute.String("agenticrun.name", run.Name),
-			attribute.String("agenticrun.namespace", run.Namespace),
-			attribute.String("agenticrun.uid", string(run.UID)),
-		),
-	)
-	span.End()
-	entry := &spanEntry{ctx: spanCtx, span: span}
-	if existing, loaded := l.lifecycleSpans.LoadOrStore(run.UID, entry); loaded {
-		if se, ok := existing.(*spanEntry); ok {
-			return se.ctx
-		}
-	}
-	return spanCtx
-}
-
-// RecoverLifecycleContext reconstructs the lifecycle trace context after an operator
-// restart. It stores a run-root context in the lifecycle map so child spans
-// (analyze, execute, etc.) share the same trace ID, but does NOT create or export
-// a span — the original lifecycle span was already exported before the restart.
-func (l *ProductionAuditLogger) RecoverLifecycleContext(_ context.Context, run *agenticv1alpha1.AgenticRun) context.Context {
-	if entry, ok := l.lifecycleSpans.Load(run.UID); ok {
-		if se, ok := entry.(*spanEntry); ok {
-			return se.ctx
-		}
-	}
-	traceID := traceIDFromAgenticRun(run)
-	sc := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID:    traceID,
-		SpanID:     lifecycleSpanID(traceID),
-		TraceFlags: trace.FlagsSampled,
-		Remote:     true,
-	})
-	ctx := trace.ContextWithRemoteSpanContext(context.Background(), sc)
-	entry := &spanEntry{ctx: ctx}
-	if existing, loaded := l.lifecycleSpans.LoadOrStore(run.UID, entry); loaded {
-		if se, ok := existing.(*spanEntry); ok {
-			return se.ctx
-		}
-	}
-	return ctx
-}
-
-func (l *ProductionAuditLogger) EndLifecycleSpan(run *agenticv1alpha1.AgenticRun) bool {
-	_, existed := l.lifecycleSpans.LoadAndDelete(run.UID)
-	return existed
-}
-
-// StartApprovalWait creates a agenticrun.human_approval child span under the lifecycle root.
-// Duration = human decision time (§7).
-func (l *ProductionAuditLogger) StartApprovalWait(ctx context.Context, run *agenticv1alpha1.AgenticRun) {
-	if _, ok := l.approvalSpans.Load(run.UID); ok {
-		return
-	}
-	parentCtx := l.lifecycleContext(run)
-	opts := []trace.SpanStartOption{
-		trace.WithAttributes(
-			attribute.String("agenticrun.name", run.Name),
-			attribute.String("agenticrun.namespace", run.Namespace),
-		),
-	}
-	// After operator restart, backdate span start to when analysis completed
-	// so the span covers the full human decision time (§7).
-	analyzedCond := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
-	if analyzedCond != nil && analyzedCond.Status == metav1.ConditionTrue && !analyzedCond.LastTransitionTime.IsZero() {
-		opts = append(opts, trace.WithTimestamp(analyzedCond.LastTransitionTime.Time))
-	}
-	spanCtx, span := l.tracer.Start(parentCtx, "agenticrun.human_approval", opts...)
-	l.approvalSpans.LoadOrStore(run.UID, &spanEntry{ctx: spanCtx, span: span})
-}
-
-// EndApprovalWait ends the human_approval span, recording approver identity.
-func (l *ProductionAuditLogger) EndApprovalWait(run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval) {
-	if entry, ok := l.approvalSpans.LoadAndDelete(run.UID); ok {
-		if se, ok := entry.(*spanEntry); ok {
-			if approval != nil {
-				if approval.Spec.Approver.UID != "" {
-					se.span.SetAttributes(
-						attribute.String("approver.uid", approval.Spec.Approver.UID),
-						attribute.String("approver.username", approval.Spec.Approver.Username),
-						attribute.String("approver.approvedAt", approval.Spec.Approver.ApprovedAt),
-					)
-				}
-				for i := len(approval.Spec.Stages) - 1; i >= 0; i-- {
-					if approval.Spec.Stages[i].Decision != "" {
-						se.span.SetAttributes(attribute.String("approval.decision", string(approval.Spec.Stages[i].Decision)))
-						break
-					}
-				}
-			}
-			se.span.End()
-		}
+func (l *ProductionAuditLogger) CleanupDeleted(key types.NamespacedName) {
+	if uid, ok := l.knownUIDs.LoadAndDelete(key.String()); ok {
+		l.emittedTerminal.Delete(uid)
+		l.priorPhase.Delete(uid)
+		l.emittedApproval.Delete(uid)
 	}
 }
 
-// StartAnalysisSpan creates a agenticrun.analyze child span under the lifecycle root.
-func (l *ProductionAuditLogger) StartAnalysisSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	parentCtx := l.lifecycleContext(run)
-	return l.tracer.Start(parentCtx, "agenticrun.analyze",
-		trace.WithAttributes(
-			attribute.String("agenticrun.name", run.Name),
-			attribute.String("agenticrun.namespace", run.Namespace),
-		),
-	)
-}
+// --- NoOp implementations ---
 
-// StartExecutionSpan creates a agenticrun.execute child span under the lifecycle root.
-// Includes retry_index attribute when retrying (§8).
-func (l *ProductionAuditLogger) StartExecutionSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	parentCtx := l.lifecycleContext(run)
-	attrs := []attribute.KeyValue{
-		attribute.String("agenticrun.name", run.Name),
-		attribute.String("agenticrun.namespace", run.Namespace),
-	}
-	if run.Status.Steps.Execution.RetryCount != nil && *run.Status.Steps.Execution.RetryCount > 0 {
-		attrs = append(attrs, attribute.Int("retry_index", int(*run.Status.Steps.Execution.RetryCount)))
-	}
-	return l.tracer.Start(parentCtx, "agenticrun.execute", trace.WithAttributes(attrs...))
-}
+var noopTracer = noop.NewTracerProvider().Tracer("noop")
 
-// StartVerificationSpan creates a agenticrun.verify child span under the lifecycle root.
-// Includes retry_index attribute when retrying (§8).
-func (l *ProductionAuditLogger) StartVerificationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	parentCtx := l.lifecycleContext(run)
-	attrs := []attribute.KeyValue{
-		attribute.String("agenticrun.name", run.Name),
-		attribute.String("agenticrun.namespace", run.Namespace),
-	}
-	if run.Status.Steps.Execution.RetryCount != nil && *run.Status.Steps.Execution.RetryCount > 0 {
-		attrs = append(attrs, attribute.Int("retry_index", int(*run.Status.Steps.Execution.RetryCount)))
-	}
-	return l.tracer.Start(parentCtx, "agenticrun.verify", trace.WithAttributes(attrs...))
+func (l *NoOpAuditLogger) StartAnalysisSpan(ctx context.Context, _ *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	return noopTracer.Start(ctx, "agenticrun.analyze")
 }
-
-// StartEscalationSpan creates a agenticrun.escalate child span under the lifecycle root.
-func (l *ProductionAuditLogger) StartEscalationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	parentCtx := l.lifecycleContext(run)
-	return l.tracer.Start(parentCtx, "agenticrun.escalate",
-		trace.WithAttributes(
-			attribute.String("agenticrun.name", run.Name),
-			attribute.String("agenticrun.namespace", run.Namespace),
-		),
-	)
+func (l *NoOpAuditLogger) StartExecutionSpan(ctx context.Context, _ *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	return noopTracer.Start(ctx, "agenticrun.execute")
 }
-
-// NoOp implementations (all methods do nothing)
-func (l *NoOpAuditLogger) EmitAgenticRunReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun) {
+func (l *NoOpAuditLogger) StartVerificationSpan(ctx context.Context, _ *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	return noopTracer.Start(ctx, "agenticrun.verify")
 }
-func (l *NoOpAuditLogger) EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult) {
+func (l *NoOpAuditLogger) StartEscalationSpan(ctx context.Context, _ *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
+	return noopTracer.Start(ctx, "agenticrun.escalate")
 }
-func (l *NoOpAuditLogger) EmitApprovalReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval) {
+func (l *NoOpAuditLogger) EmitApprovalSpan(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.AgenticRunApproval, _ string) {
 }
-func (l *NoOpAuditLogger) EmitExecutionCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.ExecutionResult) {
+func (l *NoOpAuditLogger) EmitTerminalSpan(_ context.Context, _ *agenticv1alpha1.AgenticRun, _, _ string) {
 }
-func (l *NoOpAuditLogger) EmitVerificationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult) {
+func (l *NoOpAuditLogger) EmitAgenticRunReceived(_ context.Context, _ *agenticv1alpha1.AgenticRun) {
 }
-func (l *NoOpAuditLogger) EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int) {
+func (l *NoOpAuditLogger) EmitAnalysisCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.AnalysisResult) {
 }
-func (l *NoOpAuditLogger) EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult) {
+func (l *NoOpAuditLogger) EmitExecutionCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.ExecutionResult) {
 }
-func (l *NoOpAuditLogger) EmitAgenticRunTerminal(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase, reason string) {
+func (l *NoOpAuditLogger) EmitVerificationCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.VerificationResult) {
 }
-func (l *NoOpAuditLogger) InjectTraceContext(ctx context.Context, run *agenticv1alpha1.AgenticRun, headers http.Header) {
+func (l *NoOpAuditLogger) EmitVerificationRetry(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.VerificationResult, _ int) {
 }
-func (l *NoOpAuditLogger) EnsureLifecycleSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) context.Context {
-	return ctx
+func (l *NoOpAuditLogger) EmitEscalationCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.EscalationResult) {
 }
-func (l *NoOpAuditLogger) RecoverLifecycleContext(ctx context.Context, run *agenticv1alpha1.AgenticRun) context.Context {
-	return ctx
+func (l *NoOpAuditLogger) InjectTraceContext(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ http.Header) {
 }
-func (l *NoOpAuditLogger) EndLifecycleSpan(run *agenticv1alpha1.AgenticRun) bool { return false }
-func (l *NoOpAuditLogger) StartApprovalWait(ctx context.Context, run *agenticv1alpha1.AgenticRun) {
-}
-func (l *NoOpAuditLogger) EndApprovalWait(run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval) {
-}
-func (l *NoOpAuditLogger) StartAnalysisSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	return ctx, nil
-}
-func (l *NoOpAuditLogger) StartExecutionSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	return ctx, nil
-}
-func (l *NoOpAuditLogger) StartVerificationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	return ctx, nil
-}
-func (l *NoOpAuditLogger) StartEscalationSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun) (context.Context, trace.Span) {
-	return ctx, nil
-}
+func (l *NoOpAuditLogger) Cleanup(_ *agenticv1alpha1.AgenticRun) {}
+func (l *NoOpAuditLogger) CleanupDeleted(_ types.NamespacedName) {}

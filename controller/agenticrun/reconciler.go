@@ -53,14 +53,16 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	var run agenticv1alpha1.AgenticRun
 	if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
+		if client.IgnoreNotFound(err) == nil && r.Audit != nil {
+			r.Audit.CleanupDeleted(req.NamespacedName)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
 	// --- Deletion ---
 	if !run.DeletionTimestamp.IsZero() {
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(&run, nil)
-			r.Audit.EndLifecycleSpan(&run)
+			r.Audit.Cleanup(&run)
 		}
 		if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
 			// Sandbox release is fatal — if it fails, retry with backoff. This prevents
@@ -93,9 +95,8 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				}
 			}
 			if r.Audit != nil {
-				r.Audit.EndApprovalWait(&run, nil)
-				r.Audit.EmitAgenticRunTerminal(ctx, &run, string(phase), terminalReason(&run))
-				r.Audit.EndLifecycleSpan(&run)
+				r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
+				r.Audit.Cleanup(&run)
 			}
 			return ctrl.Result{}, nil
 		}
@@ -110,9 +111,8 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 		}
 		if r.Audit != nil {
-			r.Audit.EndApprovalWait(&run, nil)
-			r.Audit.EmitAgenticRunTerminal(ctx, &run, string(phase), terminalReason(&run))
-			r.Audit.EndLifecycleSpan(&run)
+			r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
+			r.Audit.Cleanup(&run)
 		}
 		return ctrl.Result{}, nil
 
@@ -140,20 +140,6 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
 				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
-			if r.Audit != nil {
-				r.Audit.EmitAgenticRunReceived(ctx, &run)
-				r.Audit.EnsureLifecycleSpan(ctx, &run)
-			}
-		}
-	}
-
-	// Recover lifecycle trace context for in-progress runs after operator restart (§5).
-	// Uses RecoverLifecycleContext (not EnsureLifecycleSpan) to avoid exporting a duplicate span.
-	// Also restarts the approval wait span if the run is waiting for execution approval.
-	if r.Audit != nil && (!isTerminal(phase) || (phase == agenticv1alpha1.AgenticRunPhaseNoActionRequired && needsRevision(&run))) {
-		r.Audit.RecoverLifecycleContext(ctx, &run)
-		if phase == agenticv1alpha1.AgenticRunPhaseProposed {
-			r.Audit.StartApprovalWait(ctx, &run)
 		}
 	}
 

@@ -21,12 +21,8 @@ import (
 )
 
 func TestAuditConfig_LoggingEnabled_DefaultTrue(t *testing.T) {
-	// When: AuditConfig is nil
 	var config *AuditConfig
-	// Then: LoggingEnabled returns true (default)
-	if config.LoggingEnabled() {
-		// Expected path - config is nil so method needs nil check
-	} else {
+	if !config.LoggingEnabled() {
 		t.Error("Expected LoggingEnabled to default to true when config is nil")
 	}
 }

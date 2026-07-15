@@ -403,15 +403,15 @@ cat <<DONE
   # Watch execution progress:
   oc get agenticruns -n ${NAMESPACE} -w
 
-  ── Enable audit logging / OTEL tracing ────────────────────
+  ── Enable audit tracing ───────────────────────────────────
   # Deploy Jaeger first (if you don't have a collector):
   bash <(curl -sL ${GITHUB_RAW}/hack/deploy-jaeger.sh)
 
-  # Then enable audit logging + OTEL:
+  # Then enable audit tracing + OTEL export:
   OTEL_ENDPOINT=jaeger-otlp-grpc.observability.svc:4317 \\
     bash <(curl -sL ${GITHUB_RAW}/hack/quickstart/setup-audit.sh)
 
-  # Audit logging only (no OTEL):
+  # Audit tracing only (stdout JSON, no remote collector):
   bash <(curl -sL ${GITHUB_RAW}/hack/quickstart/setup-audit.sh)
 
   ── To uninstall ───────────────────────────────────────────

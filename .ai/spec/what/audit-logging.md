@@ -27,7 +27,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 5. Each phase trace's root span MUST include an OTel Span Link back to the prior phase's root span. This gives trace UIs a "click to see previous phase" affordance. The first phase trace (analysis) has no prior link.
 
-6. On operator restart, the operator MUST be able to resume producing traces for an in-progress AgenticRun. Since each phase gets a fresh trace ID, the operator does not need to reconstruct a prior trace ID. It reads `agenticrun.uid` from the CR's `metadata.uid` for the correlation attribute and creates the next phase trace normally. Span Links to prior phases require persisting the prior phase's span context (trace ID + span ID) on the AgenticRun's status or annotations.
+6. On operator restart, the operator MUST be able to resume producing traces for an in-progress AgenticRun. Since each phase gets a fresh trace ID, the operator does not need to reconstruct a prior trace ID. It reads `agenticrun.uid` from the CR's `metadata.uid` for the correlation attribute and creates the next phase trace normally. [DEFERRED: needs Jira] Span Links to prior phases require persisting the prior phase's span context (trace ID + span ID) on the AgenticRun's status or annotations; currently the in-memory `priorPhase` map is lost on restart, breaking span link continuity but not `agenticrun.uid` correlation.
 
 ### Retries
 

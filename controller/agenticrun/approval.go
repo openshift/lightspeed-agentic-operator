@@ -127,6 +127,18 @@ func isStageApproved(approval *agenticv1alpha1.AgenticRunApproval, policy *agent
 	return false
 }
 
+func isAutoApprovedByPolicy(policy *agenticv1alpha1.ApprovalPolicy, stage agenticv1alpha1.SandboxStep) bool {
+	if policy == nil {
+		return false
+	}
+	for _, ps := range policy.Spec.Stages {
+		if ps.Name == stage && ps.Approval == agenticv1alpha1.ApprovalModeAutomatic {
+			return true
+		}
+	}
+	return false
+}
+
 func isStageDenied(approval *agenticv1alpha1.AgenticRunApproval, stage agenticv1alpha1.SandboxStep) bool {
 	if approval == nil {
 		return false
