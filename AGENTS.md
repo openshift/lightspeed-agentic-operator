@@ -17,7 +17,8 @@ All specifications live in `.ai/spec/`. Start with `.ai/spec/README.md` for proj
 |------|------|
 | `api/v1alpha1/` | CRD types, `DerivePhase`, constants |
 | `controller/agenticrun/` | AgenticRun reconciler, approval, sandbox wiring |
-| `controller/console/` | Agentic console plugin deployment |
+| `controller/agenticolsconfig/` | AgenticOLSConfig reconciler |
+| `controller/sandbox/` | Sandbox pod management |
 | `cli/` | `oc-agentic` plugin |
 | `config/crd/bases/` | Generated CRD YAML (regen: **`README.md`** → **`make manifests`**) |
 | `config/rbac/` | SA, bindings, generated `role.yaml` |
@@ -44,14 +45,13 @@ Pending → Analyzing → Proposed → Executing → Verifying → Completed
 ## Commands
 
 ```bash
+make build         # Build the operator binary (bin/manager)
 make test          # Unit tests (always use make, not go test directly)
 make test-e2e      # E2E tests (requires cluster + running operator)
-make lint          # golangci-lint
-make manifests     # Regenerate CRD manifests
-make generate      # Regenerate deepcopy
-make api-lint      # Lint CRD API types
-make build         # Build the operator binary
-make build-cli     # Build the oc-agentic CLI plugin
+make manifests     # Regenerate CRD YAML and RBAC ClusterRole
+make api-lint      # Kube API linter on api/ types (golangci-lint)
+make fmt            # go fmt
+make vet            # go vet
 ```
 
 ## Code conventions
