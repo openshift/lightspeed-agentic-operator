@@ -21,10 +21,11 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 15. **Agent — `spec.model`**: Required provider-specific model identifier string; validation restricts charset.
 16. **Agent — `spec.timeouts`**: Optional per-step and chat timeouts in seconds with min/max bounds per field.
 17. **Agent — `spec.maxTurns`**: Optional bound on tool-use turns per invocation.
-18. **Agent — `status.conditions`**: [PLANNED] Observed readiness; `Ready` condition is defined on the API but no controller currently reconciles Agent status. When implemented, it SHOULD document whether referenced provider resources are accessible.
-19. **LLMProvider — discriminator**: `spec.type` MUST match exactly one embedded config: `anthropic`, `googleCloudVertex`, `openAI`, `azureOpenAI`, or `awsBedrock`; CEL enforces mutual exclusion.
-20. **LLMProvider — secrets**: Each provider’s `credentialsSecret` references a `Secret` **by name** in the operator namespace (documented on fields as the deployment namespace for the operator, e.g. OpenShift Lightspeed namespace); required secret **keys** are defined per provider type on the API field comments (e.g. API key env file key names).
-21. **LLMProvider — endpoints**: Optional URL overrides per provider; validation enforces HTTP/HTTPS URL shape. Azure requires `endpoint`; optional separate URL override field exists where defined.
+18. **Agent — `spec.reasoningConfig`**: Optional freeform map (`map[string]interface{}`, JSON key `reasoningConfig`). When present, the operator MUST serialize it as `LIGHTSPEED_REASONING_CONFIG` JSON env var on the sandbox pod (see `sandbox-execution.md` rule 16a). When absent, the env var MUST be omitted and the sandbox uses SDK defaults. Contents are provider- and model-specific (e.g., Claude `thinking`/`effort`, Gemini `thinking_budget`/`thinking_level`, OpenAI `reasoning.effort`/`verbosity`); the operator passes the map as-is without validation — the sandbox and upstream SDK/API validate at invocation time. This field is aligned with the classic OLS operator's `ModelParametersSpec.ReasoningConfig` ([OLS-3452]).
+19. **Agent — `status.conditions`**: [PLANNED] Observed readiness; `Ready` condition is defined on the API but no controller currently reconciles Agent status. When implemented, it SHOULD document whether referenced provider resources are accessible.
+20. **LLMProvider — discriminator**: `spec.type` MUST match exactly one embedded config: `anthropic`, `googleCloudVertex`, `openAI`, `azureOpenAI`, or `awsBedrock`; CEL enforces mutual exclusion.
+21. **LLMProvider — secrets**: Each provider’s `credentialsSecret` references a `Secret` **by name** in the operator namespace (documented on fields as the deployment namespace for the operator, e.g. OpenShift Lightspeed namespace); required secret **keys** are defined per provider type on the API field comments (e.g. API key env file key names).
+22. **LLMProvider — endpoints**: Optional URL overrides per provider; validation enforces HTTP/HTTPS URL shape. Azure requires `endpoint`; optional separate URL override field exists where defined.
 22. **ApprovalPolicy — singleton name**: CRD validation requires `metadata.name` equals `cluster`.
 23. **ApprovalPolicy — `spec.stages`**: Optional list keyed by `name` (`SandboxStep`). Each entry sets `approval` to `Automatic` or `Manual`. Stages not listed default to **Manual** per API comments.
 24. **ApprovalPolicy — `spec.maxAttempts`**: Upper bound for execution attempts (initial + retries) when verification fails; default behavior when unset is defined in controller (see `approval.md`).
@@ -60,7 +61,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `status.conditions`, `status.steps.analysis|execution|verification|escalation.*`
 
 ### Agent
-- `metadata.name`, `spec.llmProvider.name`, `spec.model`, `spec.timeouts.*`, `spec.maxTurns`, `status.conditions`
+- `metadata.name`, `spec.llmProvider.name`, `spec.model`, `spec.reasoningConfig`, `spec.timeouts.*`, `spec.maxTurns`, `status.conditions`
 
 ### LLMProvider
 - `metadata.name`, `spec.type`, `spec.anthropic.*`, `spec.googleCloudVertex.*`, `spec.openAI.*`, `spec.azureOpenAI.*`, `spec.awsBedrock.*`

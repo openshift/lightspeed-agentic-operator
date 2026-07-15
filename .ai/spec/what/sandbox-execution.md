@@ -31,6 +31,7 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
     | `LIGHTSPEED_PROVIDER_PROJECT` | When provider=`vertex` | `googleCloudVertex.projectID` (passed as-is) |
     | `LIGHTSPEED_PROVIDER_REGION` | When provider=`vertex` or `bedrock` | `googleCloudVertex.region` or `awsBedrock.region` (passed as-is) |
     | `LIGHTSPEED_PROVIDER_API_VERSION` | When provider=`azure` | `azureOpenAI.apiVersion` (passed as-is) |
+    | `LIGHTSPEED_REASONING_CONFIG` | When `Agent.spec.reasoningConfig` is set | `Agent.spec.reasoningConfig` serialized as JSON string |
 
     Provider type mapping from CRD `spec.type`:
 
@@ -78,7 +79,7 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 - `spec.tools`, per-step `spec.*.tools` (`SkillsSource`, `MCPServerConfig`, `SecretRequirement`)
 - `spec.targetNamespaces` and RBAC materialization targets
 - `spec.analysisOutput` (analysis schema behavior)
-- `Agent.spec.model` → `LIGHTSPEED_MODEL`, `LLMProvider.spec.type` → `LIGHTSPEED_PROVIDER`, `LLMProvider.spec.*.credentialsSecret` (envFrom + volume mount), optional `LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, `LIGHTSPEED_PROVIDER_REGION`, `LIGHTSPEED_PROVIDER_API_VERSION`, `LIGHTSPEED_MODEL_PROVIDER` (see rule 16a)
+- `Agent.spec.model` → `LIGHTSPEED_MODEL`, `LLMProvider.spec.type` → `LIGHTSPEED_PROVIDER`, `LLMProvider.spec.*.credentialsSecret` (envFrom + volume mount), optional `LIGHTSPEED_PROVIDER_URL`, `LIGHTSPEED_PROVIDER_PROJECT`, `LIGHTSPEED_PROVIDER_REGION`, `LIGHTSPEED_PROVIDER_API_VERSION`, `LIGHTSPEED_MODEL_PROVIDER` (see rule 16a), `Agent.spec.reasoningConfig` → `LIGHTSPEED_REASONING_CONFIG`
 - `AgenticRun` annotation `agentic.openshift.io/rbac-namespaces` (RBAC scope for cleanup)
 - `AgenticRun` finalizer string `agentic.openshift.io/execution-rbac-cleanup`
 
