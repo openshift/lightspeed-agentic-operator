@@ -21,6 +21,9 @@ spec:
   llmProvider:
     name: openai
   model: "gpt-5.4"
+  reasoningConfig:
+    effort: "high"
+    summary: "auto"
   timeouts:
     analysisSeconds: 120
     executionSeconds: 120

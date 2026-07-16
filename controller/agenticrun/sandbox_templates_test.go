@@ -77,7 +77,7 @@ func emptyTemplate() *unstructured.Unstructured {
 
 func mustHash(t *testing.T, llm *agenticv1alpha1.LLMProvider, model string, skills []agenticv1alpha1.SkillsSource, requiredSecrets []agenticv1alpha1.SecretRequirement, phase string) string {
 	t.Helper()
-	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, phase, "", "", nil)
+	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, "", phase, "", "", nil)
 	if err != nil {
 		t.Fatalf("computeTemplateHash: %v", err)
 	}
@@ -627,11 +627,11 @@ func TestComputeTemplateHash_DifferentBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "2000", "", nil)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "2000", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,11 +645,11 @@ func TestComputeTemplateHash_SameBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "", nil)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -663,20 +663,101 @@ func TestComputeTemplateHash_DifferentAuditConfig(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	audit := &agenticv1alpha1.AuditConfig{
 		OTEL: agenticv1alpha1.AuditOTELConfig{Endpoint: "jaeger:4317"},
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "analysis", "1000", "", audit)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", audit)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if h1 == h2 {
 		t.Error("different audit config should produce different hashes")
+	}
+}
+
+func TestComputeTemplateHash_DifferentReasoningConfig(t *testing.T) {
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
+
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled"}`, "analysis", "1000", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if h1 == h2 {
+		t.Error("empty vs non-empty reasoning config should produce different hashes")
+	}
+
+	h3, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled","effort":"high"}`, "analysis", "1000", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h2 == h3 {
+		t.Error("two different non-empty reasoning configs should produce different hashes")
+	}
+
+	h4, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled"}`, "analysis", "1000", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h2 != h4 {
+		t.Error("identical reasoning configs should produce the same hash")
+	}
+}
+
+func TestReasoningConfigEnvVar_SetOnTemplate(t *testing.T) {
+	tmpl := emptyTemplate()
+	reasoningJSON := `{"thinking":"enabled","effort":"high"}`
+
+	if err := setEnvVar(tmpl, "LIGHTSPEED_REASONING_CONFIG", reasoningJSON); err != nil {
+		t.Fatalf("setEnvVar: %v", err)
+	}
+
+	envs := getEnvVars(tmpl)
+	e, ok := findEnv(envs, "LIGHTSPEED_REASONING_CONFIG")
+	if !ok {
+		t.Fatal("LIGHTSPEED_REASONING_CONFIG not found on template")
+	}
+	if e["value"] != reasoningJSON {
+		t.Errorf("value = %v, want %s", e["value"], reasoningJSON)
+	}
+}
+
+func TestReasoningConfigEnvVar_RemovedWhenAbsent(t *testing.T) {
+	tmpl := emptyTemplate()
+
+	if err := setEnvVar(tmpl, "LIGHTSPEED_REASONING_CONFIG", `{"old":"value"}`); err != nil {
+		t.Fatalf("setEnvVar: %v", err)
+	}
+
+	removeEnvVar(tmpl, "LIGHTSPEED_REASONING_CONFIG")
+
+	envs := getEnvVars(tmpl)
+	if _, ok := findEnv(envs, "LIGHTSPEED_REASONING_CONFIG"); ok {
+		t.Error("LIGHTSPEED_REASONING_CONFIG should have been removed")
+	}
+}
+
+func TestReasoningConfigEnvVar_BaseTemplatePollutionCleaned(t *testing.T) {
+	tmpl := emptyTemplate()
+	if err := setEnvVar(tmpl, "LIGHTSPEED_REASONING_CONFIG", `{"leaked":"from_base"}`); err != nil {
+		t.Fatalf("setEnvVar (simulate base pollution): %v", err)
+	}
+
+	removeEnvVar(tmpl, "LIGHTSPEED_REASONING_CONFIG")
+
+	envs := getEnvVars(tmpl)
+	if _, ok := findEnv(envs, "LIGHTSPEED_REASONING_CONFIG"); ok {
+		t.Error("LIGHTSPEED_REASONING_CONFIG leaked from base template should be removed when agent has no reasoningConfig")
 	}
 }
 

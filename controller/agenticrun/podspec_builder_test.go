@@ -1,9 +1,11 @@
 package agenticrun
 
 import (
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
@@ -567,5 +569,63 @@ func TestPodSpecBuilder_RequiredSecrets_FileMount(t *testing.T) {
 	}
 	if !foundMount {
 		t.Error("missing /etc/kubeconfig mount")
+	}
+}
+
+func TestPodSpecBuilder_ReasoningConfig_Present(t *testing.T) {
+	builder := PodSpecBuilder{Image: "quay.io/lightspeed/agent:latest"}
+	agent := &agenticv1alpha1.Agent{
+		Spec: agenticv1alpha1.AgentSpec{
+			Model: "claude-opus-4-6",
+			ReasoningConfig: map[string]apiextensionsv1.JSON{
+				"thinking": {Raw: []byte(`"enabled"`)},
+				"effort":   {Raw: []byte(`"high"`)},
+			},
+		},
+	}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	container := podSpec.Containers[0]
+	envMap := envToMap(container.Env)
+	raw, ok := envMap["LIGHTSPEED_REASONING_CONFIG"]
+	if !ok {
+		t.Fatal("LIGHTSPEED_REASONING_CONFIG env var not set")
+	}
+
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		t.Fatalf("LIGHTSPEED_REASONING_CONFIG is not valid JSON: %v", err)
+	}
+	if string(parsed["thinking"]) != `"enabled"` {
+		t.Errorf("thinking = %s, want \"enabled\"", parsed["thinking"])
+	}
+	if string(parsed["effort"]) != `"high"` {
+		t.Errorf("effort = %s, want \"high\"", parsed["effort"])
+	}
+}
+
+func TestPodSpecBuilder_ReasoningConfig_Absent(t *testing.T) {
+	builder := PodSpecBuilder{Image: "quay.io/lightspeed/agent:latest"}
+	agent := &agenticv1alpha1.Agent{
+		Spec: agenticv1alpha1.AgentSpec{
+			Model: "claude-opus-4-6",
+		},
+	}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	podSpec, err := builder.Build(agent, llm, nil, "analysis", defaultSandboxSA)
+	if err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	container := podSpec.Containers[0]
+	envMap := envToMap(container.Env)
+	if _, ok := envMap["LIGHTSPEED_REASONING_CONFIG"]; ok {
+		t.Error("LIGHTSPEED_REASONING_CONFIG should not be set when reasoningConfig is absent")
 	}
 }

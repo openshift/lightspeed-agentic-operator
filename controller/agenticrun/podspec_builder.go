@@ -76,6 +76,17 @@ func (b *PodSpecBuilder) Build(
 	)
 	b.addProviderSpecificEnv(&container, llm)
 
+	if len(agent.Spec.ReasoningConfig) > 0 {
+		rcJSON, err := json.Marshal(agent.Spec.ReasoningConfig)
+		if err != nil {
+			return nil, fmt.Errorf("marshal reasoningConfig: %w", err)
+		}
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "LIGHTSPEED_REASONING_CONFIG",
+			Value: string(rcJSON),
+		})
+	}
+
 	secretName := credentialsSecretName(llm)
 	container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
 		SecretRef: &corev1.SecretEnvSource{

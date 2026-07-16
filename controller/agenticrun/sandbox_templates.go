@@ -92,6 +92,7 @@ type templateHashInput struct {
 	Skills              []agenticv1alpha1.SkillsSource      `json:"skills"`
 	MCPServers          []agenticv1alpha1.MCPServerConfig   `json:"mcpServers,omitempty"`
 	RequiredSecrets     []agenticv1alpha1.SecretRequirement `json:"requiredSecrets,omitempty"`
+	ReasoningConfig     string                              `json:"reasoningConfig,omitempty"`
 	Step                string                              `json:"step"`
 	BaseResourceVersion string                              `json:"baseRV"`
 	ServiceAccount      string                              `json:"serviceAccount"`
@@ -105,6 +106,7 @@ func computeTemplateHash(
 	skills []agenticv1alpha1.SkillsSource,
 	mcpServers []agenticv1alpha1.MCPServerConfig,
 	requiredSecrets []agenticv1alpha1.SecretRequirement,
+	reasoningConfigJSON string,
 	step string,
 	baseResourceVersion string,
 	serviceAccount string,
@@ -116,6 +118,7 @@ func computeTemplateHash(
 		Skills:              skills,
 		MCPServers:          mcpServers,
 		RequiredSecrets:     requiredSecrets,
+		ReasoningConfig:     reasoningConfigJSON,
 		Step:                step,
 		BaseResourceVersion: baseResourceVersion,
 		ServiceAccount:      serviceAccount,
@@ -173,11 +176,20 @@ func EnsureAgentTemplate(
 		requiredSecrets = tools.RequiredSecrets
 	}
 
+	var reasoningConfigJSON string
+	if len(agent.Spec.ReasoningConfig) > 0 {
+		rcData, err := json.Marshal(agent.Spec.ReasoningConfig)
+		if err != nil {
+			return "", fmt.Errorf("marshal reasoningConfig: %w", err)
+		}
+		reasoningConfigJSON = string(rcData)
+	}
+
 	audit, err := readAuditConfig(ctx, c)
 	if err != nil {
 		return "", fmt.Errorf("read audit config: %w", err)
 	}
-	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, step, base.GetResourceVersion(), serviceAccount, audit)
+	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, reasoningConfigJSON, step, base.GetResourceVersion(), serviceAccount, audit)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", ErrComputeTemplateHash, err)
 	}
@@ -229,6 +241,14 @@ func EnsureAgentTemplate(
 
 	if err := patchLLMCredentials(derived, llm, agent.Spec.Model); err != nil {
 		return "", fmt.Errorf("%s: %w", ErrPatchLLMCredentials, err)
+	}
+
+	if reasoningConfigJSON != "" {
+		if err := setEnvVar(derived, "LIGHTSPEED_REASONING_CONFIG", reasoningConfigJSON); err != nil {
+			return "", fmt.Errorf("set LIGHTSPEED_REASONING_CONFIG: %w", err)
+		}
+	} else {
+		removeEnvVar(derived, "LIGHTSPEED_REASONING_CONFIG")
 	}
 
 	if err := patchAuditEnvVars(derived, audit); err != nil {
@@ -536,6 +556,26 @@ func setEnvVar(tmpl *unstructured.Unstructured, name, value string) error {
 		"name":  name,
 		"value": value,
 	})
+}
+
+func removeEnvVar(tmpl *unstructured.Unstructured, name string) {
+	container, containers, err := firstContainer(tmpl)
+	if err != nil {
+		return
+	}
+	envList, _, _ := unstructured.NestedSlice(container, "env")
+	filtered := make([]any, 0, len(envList))
+	for _, e := range envList {
+		env, ok := e.(map[string]any)
+		if !ok || env["name"] != name {
+			filtered = append(filtered, e)
+		}
+	}
+	if len(filtered) == len(envList) {
+		return
+	}
+	_ = unstructured.SetNestedSlice(container, filtered, "env")
+	_ = writeContainers(tmpl, container, containers)
 }
 
 func addEnvVarFromSecret(tmpl *unstructured.Unstructured, envName, secretName, key string) error {
