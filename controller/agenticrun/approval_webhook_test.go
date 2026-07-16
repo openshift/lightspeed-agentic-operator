@@ -34,7 +34,7 @@ func TestApprovalWebhook_InjectsApproverOnUpdate(t *testing.T) {
 		},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageExecution, Execution: agenticv1alpha1.ExecutionApproval{Option: int32Ptr(1)}},
+				{Type: agenticv1alpha1.ApprovalStageExecution, Execution: &agenticv1alpha1.ExecutionApproval{Option: int32Ptr(1)}},
 			},
 		},
 	}
@@ -104,7 +104,7 @@ func TestApprovalWebhook_OverwritesClientSubmittedApprover(t *testing.T) {
 				ApprovedAt: "2020-01-01T00:00:00Z",
 			},
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -154,7 +154,7 @@ func TestApprovalWebhook_CreatePassesThrough(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-run", Namespace: "test-ns"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -182,7 +182,7 @@ func TestApprovalWebhook_MissingOwnerRef(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "orphan", Namespace: "test-ns"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -220,7 +220,7 @@ func TestApprovalWebhook_AddsApproverWhenNoExistingApprover(t *testing.T) {
 		},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}

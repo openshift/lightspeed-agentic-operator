@@ -96,13 +96,14 @@ spec:
                     analysis:
                       description: |-
                         analysis contains approval parameters for the analysis step.
-                        Required when type is Analysis.
-                      minProperties: 1
+                        Required when type is Analysis. Use a non-nil empty object ({}) when
+                        approving without an agent override so the field is present for CEL.
+                      minProperties: 0
                       properties:
                         agent:
-                          default: default
-                          description: agent is the Agent CR for this step. Defaults
-                            to "default".
+                          description: |-
+                            agent is an optional override of AgenticRun.spec.analysis.agent.
+                            When omitted, the run's configured analysis agent is used.
                           maxLength: 253
                           minLength: 1
                           type: string
@@ -125,12 +126,12 @@ spec:
                       description: |-
                         escalation contains approval parameters for the escalation step.
                         Required when type is Escalation.
-                      minProperties: 1
+                      minProperties: 0
                       properties:
                         agent:
-                          default: default
-                          description: agent is the Agent CR for this step. Defaults
-                            to "default".
+                          description: |-
+                            agent is an optional override of the escalation agent.
+                            When omitted, the analysis agent is used (controller resolution rules).
                           maxLength: 253
                           minLength: 1
                           type: string
@@ -143,12 +144,12 @@ spec:
                       description: |-
                         execution contains approval parameters for the execution step.
                         Required when type is Execution.
-                      minProperties: 1
+                      minProperties: 0
                       properties:
                         agent:
-                          default: default
-                          description: agent is the Agent CR for this step. Defaults
-                            to "default".
+                          description: |-
+                            agent is an optional override of AgenticRun.spec.execution.agent.
+                            When omitted, the run's configured execution agent is used.
                           maxLength: 253
                           minLength: 1
                           type: string
@@ -186,12 +187,12 @@ spec:
                       description: |-
                         verification contains approval parameters for the verification step.
                         Required when type is Verification.
-                      minProperties: 1
+                      minProperties: 0
                       properties:
                         agent:
-                          default: default
-                          description: agent is the Agent CR for this step. Defaults
-                            to "default".
+                          description: |-
+                            agent is an optional override of AgenticRun.spec.verification.agent.
+                            When omitted, the run's configured verification agent is used.
                           maxLength: 253
                           minLength: 1
                           type: string

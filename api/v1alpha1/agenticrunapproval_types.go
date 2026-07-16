@@ -66,12 +66,14 @@ const (
 )
 
 // AnalysisApproval contains approval parameters for the analysis step.
+// Empty objects ({}) are valid: presence of the arm satisfies CEL; omitted
+// agent means no override of AgenticRun.spec.analysis.agent.
 //
-// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MinProperties=0
 type AnalysisApproval struct {
-	// agent is the Agent CR for this step. Defaults to "default".
+	// agent is an optional override of AgenticRun.spec.analysis.agent.
+	// When omitted, the run's configured analysis agent is used.
 	// +optional
-	// +default="default"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="must be a valid DNS subdomain: lowercase alphanumeric characters, hyphens, and dots"
@@ -79,12 +81,14 @@ type AnalysisApproval struct {
 }
 
 // ExecutionApproval contains approval parameters for the execution step.
+// Empty objects ({}) are valid: presence of the arm satisfies CEL; omitted
+// agent means no override of AgenticRun.spec.execution.agent.
 //
-// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MinProperties=0
 type ExecutionApproval struct {
-	// agent is the Agent CR for this step. Defaults to "default".
+	// agent is an optional override of AgenticRun.spec.execution.agent.
+	// When omitted, the run's configured execution agent is used.
 	// +optional
-	// +default="default"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="must be a valid DNS subdomain: lowercase alphanumeric characters, hyphens, and dots"
@@ -106,12 +110,14 @@ type ExecutionApproval struct {
 }
 
 // VerificationApproval contains approval parameters for the verification step.
+// Empty objects ({}) are valid: presence of the arm satisfies CEL; omitted
+// agent means no override of AgenticRun.spec.verification.agent.
 //
-// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MinProperties=0
 type VerificationApproval struct {
-	// agent is the Agent CR for this step. Defaults to "default".
+	// agent is an optional override of AgenticRun.spec.verification.agent.
+	// When omitted, the run's configured verification agent is used.
 	// +optional
-	// +default="default"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="must be a valid DNS subdomain: lowercase alphanumeric characters, hyphens, and dots"
@@ -119,12 +125,14 @@ type VerificationApproval struct {
 }
 
 // EscalationApproval contains approval parameters for the escalation step.
+// Empty objects ({}) are valid: presence of the arm satisfies CEL; omitted
+// agent means no override (controller uses the analysis agent).
 //
-// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MinProperties=0
 type EscalationApproval struct {
-	// agent is the Agent CR for this step. Defaults to "default".
+	// agent is an optional override of the escalation agent.
+	// When omitted, the analysis agent is used (controller resolution rules).
 	// +optional
-	// +default="default"
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="must be a valid DNS subdomain: lowercase alphanumeric characters, hyphens, and dots"
@@ -152,24 +160,25 @@ type ApprovalStage struct {
 	Decision ApprovalDecision `json:"decision,omitempty"`
 
 	// analysis contains approval parameters for the analysis step.
-	// Required when type is Analysis.
+	// Required when type is Analysis. Use a non-nil empty object ({}) when
+	// approving without an agent override so the field is present for CEL.
 	// +optional
-	Analysis AnalysisApproval `json:"analysis,omitzero"`
+	Analysis *AnalysisApproval `json:"analysis,omitempty"` //nolint:kubeapilinter // empty {} is intentional; CEL requires presence, not properties
 
 	// execution contains approval parameters for the execution step.
 	// Required when type is Execution.
 	// +optional
-	Execution ExecutionApproval `json:"execution,omitzero"`
+	Execution *ExecutionApproval `json:"execution,omitempty"` //nolint:kubeapilinter // empty {} is intentional; CEL requires presence, not properties
 
 	// verification contains approval parameters for the verification step.
 	// Required when type is Verification.
 	// +optional
-	Verification VerificationApproval `json:"verification,omitzero"`
+	Verification *VerificationApproval `json:"verification,omitempty"` //nolint:kubeapilinter // empty {} is intentional; CEL requires presence, not properties
 
 	// escalation contains approval parameters for the escalation step.
 	// Required when type is Escalation.
 	// +optional
-	Escalation EscalationApproval `json:"escalation,omitzero"`
+	Escalation *EscalationApproval `json:"escalation,omitempty"` //nolint:kubeapilinter // empty {} is intentional; CEL requires presence, not properties
 }
 
 // AgenticRunApprovalSpec defines the desired state of AgenticRunApproval.

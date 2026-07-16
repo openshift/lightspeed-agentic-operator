@@ -420,11 +420,11 @@ func denyStage(t *testing.T, c client.Client, name string, stageType agenticv1al
 		}
 		switch stageType {
 		case agenticv1alpha1.ApprovalStageExecution:
-			stage.Execution = agenticv1alpha1.ExecutionApproval{Agent: "e2e-agent"}
+			stage.Execution = &agenticv1alpha1.ExecutionApproval{Agent: "e2e-agent"}
 		case agenticv1alpha1.ApprovalStageVerification:
-			stage.Verification = agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"}
+			stage.Verification = &agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"}
 		case agenticv1alpha1.ApprovalStageEscalation:
-			stage.Escalation = agenticv1alpha1.EscalationApproval{Agent: "e2e-agent"}
+			stage.Escalation = &agenticv1alpha1.EscalationApproval{Agent: "e2e-agent"}
 		}
 		approval.Spec.Stages = append(approval.Spec.Stages, stage)
 	}
@@ -448,7 +448,7 @@ func approveExecution(t *testing.T, c client.Client, name string, optionIdx int3
 	found := false
 	for i, s := range approval.Spec.Stages {
 		if s.Type == agenticv1alpha1.ApprovalStageExecution {
-			approval.Spec.Stages[i].Execution = agenticv1alpha1.ExecutionApproval{
+			approval.Spec.Stages[i].Execution = &agenticv1alpha1.ExecutionApproval{
 				Agent:  "e2e-agent",
 				Option: ptrInt32(optionIdx),
 			}
@@ -459,7 +459,7 @@ func approveExecution(t *testing.T, c client.Client, name string, optionIdx int3
 	if !found {
 		approval.Spec.Stages = append(approval.Spec.Stages, agenticv1alpha1.ApprovalStage{
 			Type:      agenticv1alpha1.ApprovalStageExecution,
-			Execution: agenticv1alpha1.ExecutionApproval{Agent: "e2e-agent", Option: ptrInt32(optionIdx)},
+			Execution: &agenticv1alpha1.ExecutionApproval{Agent: "e2e-agent", Option: ptrInt32(optionIdx)},
 		})
 	}
 	if err := c.Patch(ctx, &approval, client.MergeFrom(base)); err != nil {
@@ -482,7 +482,7 @@ func approveVerification(t *testing.T, c client.Client, name string) {
 	found := false
 	for i, s := range approval.Spec.Stages {
 		if s.Type == agenticv1alpha1.ApprovalStageVerification {
-			approval.Spec.Stages[i].Verification = agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"}
+			approval.Spec.Stages[i].Verification = &agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"}
 			found = true
 			break
 		}
@@ -490,7 +490,7 @@ func approveVerification(t *testing.T, c client.Client, name string) {
 	if !found {
 		approval.Spec.Stages = append(approval.Spec.Stages, agenticv1alpha1.ApprovalStage{
 			Type:         agenticv1alpha1.ApprovalStageVerification,
-			Verification: agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"},
+			Verification: &agenticv1alpha1.VerificationApproval{Agent: "e2e-agent"},
 		})
 	}
 	if err := c.Patch(ctx, &approval, client.MergeFrom(base)); err != nil {

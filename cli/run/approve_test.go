@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -50,8 +51,48 @@ func TestApprove_AnalysisStage(t *testing.T) {
 	if updated.Spec.Stages[0].Type != agenticv1alpha1.ApprovalStageAnalysis {
 		t.Errorf("expected Analysis stage, got %s", updated.Spec.Stages[0].Type)
 	}
+	if updated.Spec.Stages[0].Analysis == nil {
+		t.Fatal("expected non-nil analysis arm (CEL requires has(self.analysis))")
+	}
+	if updated.Spec.Stages[0].Analysis.Agent != "" {
+		t.Errorf("expected empty agent (no override), got %q", updated.Spec.Stages[0].Analysis.Agent)
+	}
 	if updated.Spec.Stages[0].Decision == agenticv1alpha1.ApprovalDecisionDenied {
 		t.Error("expected stage to not be denied")
+	}
+}
+
+func TestApprove_AnalysisStage_MarshalsEmptyAnalysisObject(t *testing.T) {
+	streams, _, _ := fakeStreams()
+	p := testAgenticRunWithStatus("fix-crash", "default", agenticv1alpha1.AgenticRunPhasePending)
+	approval := &agenticv1alpha1.AgenticRunApproval{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(p, approval).WithStatusSubresource(p).Build()
+
+	o := &ApproveOptions{
+		client:    fc,
+		name:      "fix-crash",
+		namespace: "default",
+		stage:     "analysis",
+		IOStreams: streams,
+	}
+	if err := o.Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var updated agenticv1alpha1.AgenticRunApproval
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	b, err := json.Marshal(updated.Spec.Stages[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `"analysis":{}`) {
+		t.Errorf("expected marshaled stage to include analysis:{}, got %s", got)
 	}
 }
 
@@ -177,7 +218,7 @@ func TestApprove_AlreadyApproved(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -208,7 +249,7 @@ func TestApprove_AlreadyDenied(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Decision: agenticv1alpha1.ApprovalDecisionDenied, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Decision: agenticv1alpha1.ApprovalDecisionDenied, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -350,7 +391,7 @@ func TestApprove_AllNoPending(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}

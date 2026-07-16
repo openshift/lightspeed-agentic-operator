@@ -63,7 +63,7 @@ func TestDeny_NextPendingStage(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -94,7 +94,7 @@ func TestDeny_AlreadyDenied(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Decision: agenticv1alpha1.ApprovalDecisionDenied, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Decision: agenticv1alpha1.ApprovalDecisionDenied, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -125,7 +125,7 @@ func TestDeny_AlreadyApprovedCannotDeny(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}
@@ -157,7 +157,7 @@ func TestDeny_NoPendingStages(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: agenticv1alpha1.AnalysisApproval{}},
+				{Type: agenticv1alpha1.ApprovalStageAnalysis, Analysis: &agenticv1alpha1.AnalysisApproval{}},
 			},
 		},
 	}

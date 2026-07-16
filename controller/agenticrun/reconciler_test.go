@@ -199,7 +199,7 @@ func approveAgenticRunWithOption(t *testing.T, fc client.WithWatch, name string,
 	hasExecution := false
 	for i, s := range approval.Spec.Stages {
 		if s.Type == agenticv1alpha1.ApprovalStageExecution {
-			approval.Spec.Stages[i].Execution = agenticv1alpha1.ExecutionApproval{Option: &optionIndex}
+			approval.Spec.Stages[i].Execution = &agenticv1alpha1.ExecutionApproval{Option: &optionIndex}
 			hasExecution = true
 			break
 		}
@@ -207,7 +207,7 @@ func approveAgenticRunWithOption(t *testing.T, fc client.WithWatch, name string,
 	if !hasExecution {
 		approval.Spec.Stages = append(approval.Spec.Stages, agenticv1alpha1.ApprovalStage{
 			Type:      agenticv1alpha1.ApprovalStageExecution,
-			Execution: agenticv1alpha1.ExecutionApproval{Option: &optionIndex},
+			Execution: &agenticv1alpha1.ExecutionApproval{Option: &optionIndex},
 		})
 	}
 	if err := fc.Patch(context.Background(), &approval, client.MergeFrom(base)); err != nil {
