@@ -93,8 +93,11 @@ func TestEnsureAgenticRunApproval_AnalysisOnly_SkipsAbsentStages(t *testing.T) {
 	for _, s := range approval.Spec.Stages {
 		switch s.Type {
 		case agenticv1alpha1.ApprovalStageAnalysis:
-			if s.Analysis.Agent != "smart" {
-				t.Errorf("expected Analysis agent %q, got %q", "smart", s.Analysis.Agent)
+			if s.Analysis == nil {
+				t.Fatal("expected non-nil Analysis arm")
+			}
+			if s.Analysis.Agent != "" {
+				t.Errorf("auto-seeded Analysis should omit agent override, got %q", s.Analysis.Agent)
 			}
 		case agenticv1alpha1.ApprovalStageVerification:
 			t.Error("Verification stage should be skipped for analysis-only run")
@@ -120,6 +123,23 @@ func TestEnsureAgenticRunApproval_NoPolicy(t *testing.T) {
 	}
 }
 
+func TestGetStageOverrideAgent_OmittedMeansNoOverride(t *testing.T) {
+	approval := &agenticv1alpha1.AgenticRunApproval{
+		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
+			Stages: []agenticv1alpha1.ApprovalStage{
+				agenticv1alpha1.NewApprovalStage(agenticv1alpha1.ApprovalStageAnalysis, "", "", nil, 0),
+				agenticv1alpha1.NewApprovalStage(agenticv1alpha1.ApprovalStageExecution, "", "fast", nil, 0),
+			},
+		},
+	}
+	if got := getStageOverrideAgent(approval, agenticv1alpha1.SandboxStepAnalysis); got != "" {
+		t.Errorf("empty analysis.agent should be no override, got %q", got)
+	}
+	if got := getStageOverrideAgent(approval, agenticv1alpha1.SandboxStepExecution); got != "fast" {
+		t.Errorf("execution agent override = %q, want fast", got)
+	}
+}
+
 func TestGetStageOption_FromApproval(t *testing.T) {
 	option := int32(2)
 	approval := &agenticv1alpha1.AgenticRunApproval{
@@ -127,7 +147,7 @@ func TestGetStageOption_FromApproval(t *testing.T) {
 			Stages: []agenticv1alpha1.ApprovalStage{
 				{
 					Type:      agenticv1alpha1.ApprovalStageExecution,
-					Execution: agenticv1alpha1.ExecutionApproval{Option: &option},
+					Execution: &agenticv1alpha1.ExecutionApproval{Option: &option},
 				},
 			},
 		},
@@ -145,7 +165,7 @@ func TestGetStageOption_ApprovalTakesPrecedence(t *testing.T) {
 			Stages: []agenticv1alpha1.ApprovalStage{
 				{
 					Type:      agenticv1alpha1.ApprovalStageExecution,
-					Execution: agenticv1alpha1.ExecutionApproval{Option: &approvalOpt},
+					Execution: &agenticv1alpha1.ExecutionApproval{Option: &approvalOpt},
 				},
 			},
 		},

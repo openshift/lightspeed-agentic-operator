@@ -133,7 +133,7 @@ func TestTrimNonSelectedOptions_SingleOptionNoop(t *testing.T) {
 	approval := &agenticv1alpha1.AgenticRunApproval{
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageExecution, Execution: agenticv1alpha1.ExecutionApproval{Option: ptr32(0)}},
+				{Type: agenticv1alpha1.ApprovalStageExecution, Execution: &agenticv1alpha1.ExecutionApproval{Option: ptr32(0)}},
 			},
 		},
 	}
@@ -182,7 +182,7 @@ func TestTrimThenSelectedOption_EndToEnd(t *testing.T) {
 			approval := &agenticv1alpha1.AgenticRunApproval{
 				Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 					Stages: []agenticv1alpha1.ApprovalStage{
-						{Type: agenticv1alpha1.ApprovalStageExecution, Execution: agenticv1alpha1.ExecutionApproval{Option: &tt.selectIdx}},
+						{Type: agenticv1alpha1.ApprovalStageExecution, Execution: &agenticv1alpha1.ExecutionApproval{Option: &tt.selectIdx}},
 					},
 				},
 			}
@@ -211,7 +211,7 @@ func TestMaxAttempts(t *testing.T) {
 				Stages: []agenticv1alpha1.ApprovalStage{
 					{
 						Type:      agenticv1alpha1.ApprovalStageExecution,
-						Execution: agenticv1alpha1.ExecutionApproval{MaxAttempts: maxAttempts},
+						Execution: &agenticv1alpha1.ExecutionApproval{MaxAttempts: maxAttempts},
 					},
 				},
 			},
@@ -269,7 +269,7 @@ func TestTrimNonSelectedOptions_OutOfRange(t *testing.T) {
 	approval := &agenticv1alpha1.AgenticRunApproval{
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{
 			Stages: []agenticv1alpha1.ApprovalStage{
-				{Type: agenticv1alpha1.ApprovalStageExecution, Execution: agenticv1alpha1.ExecutionApproval{Option: ptr32(5)}},
+				{Type: agenticv1alpha1.ApprovalStageExecution, Execution: &agenticv1alpha1.ExecutionApproval{Option: ptr32(5)}},
 			},
 		},
 	}

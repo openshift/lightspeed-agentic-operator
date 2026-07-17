@@ -295,7 +295,7 @@ func (l *ProductionAuditLogger) EmitApprovalReceived(ctx context.Context, run *a
 	// Extract execution approval if present
 	var selectedOption *int32
 	for _, stage := range approval.Spec.Stages {
-		if stage.Type == agenticv1alpha1.ApprovalStageExecution && stage.Execution.Option != nil {
+		if stage.Type == agenticv1alpha1.ApprovalStageExecution && stage.Execution != nil && stage.Execution.Option != nil {
 			selectedOption = stage.Execution.Option
 			break
 		}

@@ -112,13 +112,13 @@ func approveStage(t *testing.T, fc client.WithWatch, name string, stageType agen
 	stage := agenticv1alpha1.ApprovalStage{Type: stageType}
 	switch stageType {
 	case agenticv1alpha1.ApprovalStageAnalysis:
-		stage.Analysis = agenticv1alpha1.AnalysisApproval{Agent: o.agent}
+		stage.Analysis = &agenticv1alpha1.AnalysisApproval{Agent: o.agent}
 	case agenticv1alpha1.ApprovalStageExecution:
-		stage.Execution = agenticv1alpha1.ExecutionApproval{Option: o.option, Agent: o.agent}
+		stage.Execution = &agenticv1alpha1.ExecutionApproval{Option: o.option, Agent: o.agent}
 	case agenticv1alpha1.ApprovalStageVerification:
-		stage.Verification = agenticv1alpha1.VerificationApproval{Agent: o.agent}
+		stage.Verification = &agenticv1alpha1.VerificationApproval{Agent: o.agent}
 	case agenticv1alpha1.ApprovalStageEscalation:
-		stage.Escalation = agenticv1alpha1.EscalationApproval{Agent: o.agent}
+		stage.Escalation = &agenticv1alpha1.EscalationApproval{Agent: o.agent}
 	}
 	base := approval.DeepCopy()
 	approval.Spec.Stages = append(approval.Spec.Stages, stage)
@@ -156,13 +156,13 @@ func denyStage(t *testing.T, fc client.WithWatch, name string, stageType agentic
 	stage := agenticv1alpha1.ApprovalStage{Type: stageType, Decision: agenticv1alpha1.ApprovalDecisionDenied}
 	switch stageType {
 	case agenticv1alpha1.ApprovalStageAnalysis:
-		stage.Analysis = agenticv1alpha1.AnalysisApproval{}
+		stage.Analysis = &agenticv1alpha1.AnalysisApproval{}
 	case agenticv1alpha1.ApprovalStageExecution:
-		stage.Execution = agenticv1alpha1.ExecutionApproval{}
+		stage.Execution = &agenticv1alpha1.ExecutionApproval{}
 	case agenticv1alpha1.ApprovalStageVerification:
-		stage.Verification = agenticv1alpha1.VerificationApproval{}
+		stage.Verification = &agenticv1alpha1.VerificationApproval{}
 	case agenticv1alpha1.ApprovalStageEscalation:
-		stage.Escalation = agenticv1alpha1.EscalationApproval{}
+		stage.Escalation = &agenticv1alpha1.EscalationApproval{}
 	}
 	approval.Spec.Stages = append(approval.Spec.Stages, stage)
 	if err := fc.Patch(context.Background(), &approval, client.MergeFrom(base)); err != nil {

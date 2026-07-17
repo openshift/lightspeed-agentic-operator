@@ -134,16 +134,11 @@ func (o *ApproveOptions) Run(ctx context.Context) error {
 			}
 		}
 
-		entry := agenticv1alpha1.ApprovalStage{Type: stageType}
-		switch stageType {
-		case agenticv1alpha1.ApprovalStageAnalysis:
-			entry.Analysis = agenticv1alpha1.AnalysisApproval{Agent: o.agent}
-		case agenticv1alpha1.ApprovalStageExecution:
-			entry.Execution = agenticv1alpha1.ExecutionApproval{Agent: o.agent, Option: &o.option}
-		case agenticv1alpha1.ApprovalStageVerification:
-			entry.Verification = agenticv1alpha1.VerificationApproval{Agent: o.agent}
+		var option *int32
+		if stageType == agenticv1alpha1.ApprovalStageExecution {
+			option = &o.option
 		}
-		entries = append(entries, entry)
+		entries = append(entries, agenticv1alpha1.NewApprovalStage(stageType, "", o.agent, option, 0))
 	}
 
 	patch := client.MergeFrom(approval.DeepCopy())

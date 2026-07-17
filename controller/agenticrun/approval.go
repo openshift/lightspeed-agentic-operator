@@ -60,26 +60,25 @@ func ensureAgenticRunApproval(
 			if ps.Approval != agenticv1alpha1.ApprovalModeAutomatic {
 				continue
 			}
-			stage := agenticv1alpha1.ApprovalStage{
-				Type: agenticv1alpha1.ApprovalStageType(ps.Name),
-			}
 			switch ps.Name {
 			case agenticv1alpha1.SandboxStepAnalysis:
-				stage.Analysis = agenticv1alpha1.AnalysisApproval{Agent: stepAgentName(run.Spec.Analysis)}
+				autoStages = append(autoStages, agenticv1alpha1.NewApprovalStage(
+					agenticv1alpha1.ApprovalStageAnalysis, "", "", nil, 0))
 			case agenticv1alpha1.SandboxStepExecution:
 				if run.Spec.Execution.IsZero() {
 					continue
 				}
-				stage.Execution = agenticv1alpha1.ExecutionApproval{Agent: stepAgentName(run.Spec.Execution)}
+				autoStages = append(autoStages, agenticv1alpha1.NewApprovalStage(
+					agenticv1alpha1.ApprovalStageExecution, "", "", nil, 0))
 			case agenticv1alpha1.SandboxStepVerification:
 				if run.Spec.Verification.IsZero() {
 					continue
 				}
-				stage.Verification = agenticv1alpha1.VerificationApproval{Agent: stepAgentName(run.Spec.Verification)}
+				autoStages = append(autoStages, agenticv1alpha1.NewApprovalStage(
+					agenticv1alpha1.ApprovalStageVerification, "", "", nil, 0))
 			case agenticv1alpha1.SandboxStepEscalation:
 				continue
 			}
-			autoStages = append(autoStages, stage)
 		}
 	}
 
@@ -150,13 +149,21 @@ func getStageOverrideAgent(approval *agenticv1alpha1.AgenticRunApproval, stage a
 		}
 		switch stage {
 		case agenticv1alpha1.SandboxStepAnalysis:
-			return s.Analysis.Agent
+			if s.Analysis != nil {
+				return s.Analysis.Agent
+			}
 		case agenticv1alpha1.SandboxStepExecution:
-			return s.Execution.Agent
+			if s.Execution != nil {
+				return s.Execution.Agent
+			}
 		case agenticv1alpha1.SandboxStepVerification:
-			return s.Verification.Agent
+			if s.Verification != nil {
+				return s.Verification.Agent
+			}
 		case agenticv1alpha1.SandboxStepEscalation:
-			return s.Escalation.Agent
+			if s.Escalation != nil {
+				return s.Escalation.Agent
+			}
 		}
 	}
 	return ""
@@ -165,7 +172,7 @@ func getStageOverrideAgent(approval *agenticv1alpha1.AgenticRunApproval, stage a
 func getStageOption(approval *agenticv1alpha1.AgenticRunApproval, _ *agenticv1alpha1.ApprovalPolicy) *int32 {
 	if approval != nil {
 		for _, s := range approval.Spec.Stages {
-			if s.Type == agenticv1alpha1.ApprovalStageExecution && s.Execution.Option != nil {
+			if s.Type == agenticv1alpha1.ApprovalStageExecution && s.Execution != nil && s.Execution.Option != nil {
 				return s.Execution.Option
 			}
 		}

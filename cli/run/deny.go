@@ -92,15 +92,7 @@ func (o *DenyOptions) Run(ctx context.Context) error {
 		}
 	}
 
-	entry := agenticv1alpha1.ApprovalStage{Type: stageType, Decision: agenticv1alpha1.ApprovalDecisionDenied}
-	switch stageType {
-	case agenticv1alpha1.ApprovalStageAnalysis:
-		entry.Analysis = agenticv1alpha1.AnalysisApproval{Agent: "default"}
-	case agenticv1alpha1.ApprovalStageExecution:
-		entry.Execution = agenticv1alpha1.ExecutionApproval{Agent: "default"}
-	case agenticv1alpha1.ApprovalStageVerification:
-		entry.Verification = agenticv1alpha1.VerificationApproval{Agent: "default"}
-	}
+	entry := agenticv1alpha1.NewApprovalStage(stageType, agenticv1alpha1.ApprovalDecisionDenied, "", nil, 0)
 
 	patch := client.MergeFrom(approval.DeepCopy())
 	approval.Spec.Stages = append(approval.Spec.Stages, entry)

@@ -562,7 +562,7 @@ func TestEmitApprovalReceived_Structure(t *testing.T) {
 				{
 					Type:     agenticv1alpha1.ApprovalStageExecution,
 					Decision: agenticv1alpha1.ApprovalDecisionApproved,
-					Execution: agenticv1alpha1.ExecutionApproval{
+					Execution: &agenticv1alpha1.ExecutionApproval{
 						Option: &selectedOption,
 					},
 				},
@@ -701,7 +701,7 @@ func TestAuditEventNames_AllEightMatchSpec(t *testing.T) {
 				{
 					Type:     agenticv1alpha1.ApprovalStageExecution,
 					Decision: agenticv1alpha1.ApprovalDecisionApproved,
-					Execution: agenticv1alpha1.ExecutionApproval{
+					Execution: &agenticv1alpha1.ExecutionApproval{
 						Option: &selectedOption,
 					},
 				},
@@ -959,7 +959,7 @@ func TestFullLifecycleAuditTrail(t *testing.T) {
 				{
 					Type:     agenticv1alpha1.ApprovalStageExecution,
 					Decision: agenticv1alpha1.ApprovalDecisionApproved,
-					Execution: agenticv1alpha1.ExecutionApproval{
+					Execution: &agenticv1alpha1.ExecutionApproval{
 						Option: &selectedOption,
 					},
 				},
