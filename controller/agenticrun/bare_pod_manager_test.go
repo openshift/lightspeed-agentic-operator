@@ -23,6 +23,12 @@ func newBarePodClient() *fake.ClientBuilder {
 	return fake.NewClientBuilder().WithScheme(s)
 }
 
+func barePodRun(name string) *agenticv1alpha1.AgenticRun {
+	return &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(name + "-uid")},
+	}
+}
+
 func TestBarePodManager_Claim_Creates(t *testing.T) {
 	fc := newBarePodClient().Build()
 	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}
@@ -34,7 +40,7 @@ func TestBarePodManager_Claim_Creates(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	name, err := m.Claim(context.Background(), barePodRun("my-run"), "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -68,7 +74,7 @@ func TestBarePodManager_Claim_UsesPerAgenticRunSA(t *testing.T) {
 		"ls-exec-default-my-run",
 	)
 
-	name, err := m.Claim(context.Background(), "my-run", "execution", "")
+	name, err := m.Claim(context.Background(), barePodRun("my-run"), "execution", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -94,7 +100,7 @@ func TestBarePodManager_Claim_TruncatesLongAgenticRunNameInLabel(t *testing.T) {
 	)
 
 	longName := strings.Repeat("a", 80)
-	name, err := m.Claim(context.Background(), longName, "analysis", "")
+	name, err := m.Claim(context.Background(), barePodRun(longName), "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -123,7 +129,7 @@ func TestBarePodManager_Claim_AlreadyExists(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	name, err := m.Claim(context.Background(), barePodRun("my-run"), "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim should succeed for existing pod: %v", err)
 	}
@@ -171,7 +177,7 @@ func TestBarePodManager_Claim_AuditEnabled_DefaultsTrue(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	name, err := m.Claim(context.Background(), barePodRun("my-run"), "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -200,7 +206,7 @@ func TestBarePodManager_Claim_AuditAlwaysEnabled(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	name, err := m.Claim(context.Background(), barePodRun("my-run"), "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -212,6 +218,40 @@ func TestBarePodManager_Claim_AuditAlwaysEnabled(t *testing.T) {
 	env := envToMap(pod.Spec.Containers[0].Env)
 	if env["LIGHTSPEED_AUDIT_ENABLED"] != "true" {
 		t.Errorf("LIGHTSPEED_AUDIT_ENABLED = %q, want true (audit is always on)", env["LIGHTSPEED_AUDIT_ENABLED"])
+	}
+	if env["OTEL_EXPORTER_OTLP_ENDPOINT"] != "jaeger:4317" {
+		t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want jaeger:4317", env["OTEL_EXPORTER_OTLP_ENDPOINT"])
+	}
+}
+
+func TestBarePodManager_Claim_AuditDisabled(t *testing.T) {
+	config := &agenticv1alpha1.AgenticOLSConfig{}
+	config.Name = "cluster"
+	config.Spec.Audit = agenticv1alpha1.AuditConfig{
+		Logging: agenticv1alpha1.AuditLoggingDisabled,
+	}
+	fc := newBarePodClient().WithObjects(config).Build()
+	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}
+	m := NewBarePodManager(fc, builder, "test-ns")
+	m.SetStep(
+		&agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}},
+		testLLMProvider(agenticv1alpha1.LLMProviderAnthropic),
+		nil,
+		defaultSandboxSA,
+	)
+
+	name, err := m.Claim(context.Background(), barePodRun("my-run"), "analysis", "")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	var pod corev1.Pod
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
+		t.Fatalf("pod not created: %v", err)
+	}
+	env := envToMap(pod.Spec.Containers[0].Env)
+	if _, ok := env["LIGHTSPEED_AUDIT_ENABLED"]; ok {
+		t.Error("LIGHTSPEED_AUDIT_ENABLED should not be set when audit logging is disabled")
 	}
 }
 
@@ -262,9 +302,8 @@ func TestBarePodManager_Claim_SetsOwnerReference(t *testing.T) {
 	run := &agenticv1alpha1.AgenticRun{}
 	run.Name = "my-run"
 	run.UID = "test-uid-1234"
-	m.SetOwner(run)
 
-	name, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	name, err := m.Claim(context.Background(), run, "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -291,7 +330,7 @@ func TestBarePodManager_Claim_SetsOwnerReference(t *testing.T) {
 	}
 }
 
-func TestBarePodManager_Claim_NoOwnerReferenceWithoutSetOwner(t *testing.T) {
+func TestBarePodManager_Claim_OwnerReferenceMatchesPassedRun(t *testing.T) {
 	fc := newBarePodClient().Build()
 	builder := &PodSpecBuilder{Image: "quay.io/test/sandbox:latest"}
 	m := NewBarePodManager(fc, builder, "test-ns")
@@ -302,7 +341,11 @@ func TestBarePodManager_Claim_NoOwnerReferenceWithoutSetOwner(t *testing.T) {
 		defaultSandboxSA,
 	)
 
-	name, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	run := &agenticv1alpha1.AgenticRun{}
+	run.Name = "other-run"
+	run.UID = "other-uid-5678"
+
+	name, err := m.Claim(context.Background(), run, "analysis", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -311,8 +354,14 @@ func TestBarePodManager_Claim_NoOwnerReferenceWithoutSetOwner(t *testing.T) {
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, &pod); err != nil {
 		t.Fatalf("pod not created: %v", err)
 	}
-	if len(pod.OwnerReferences) != 0 {
-		t.Errorf("expected no ownerReferences without SetOwner, got %d", len(pod.OwnerReferences))
+	if len(pod.OwnerReferences) != 1 {
+		t.Fatalf("expected 1 ownerReference, got %d", len(pod.OwnerReferences))
+	}
+	if pod.OwnerReferences[0].Name != "other-run" {
+		t.Errorf("ownerReference name = %q, want other-run", pod.OwnerReferences[0].Name)
+	}
+	if pod.OwnerReferences[0].UID != "other-uid-5678" {
+		t.Errorf("ownerReference UID = %q, want other-uid-5678", pod.OwnerReferences[0].UID)
 	}
 }
 

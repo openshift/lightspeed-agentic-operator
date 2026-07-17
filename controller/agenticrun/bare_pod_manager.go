@@ -35,7 +35,6 @@ type BarePodManager struct {
 	Namespace       string
 	DeletionTimeout time.Duration
 
-	run            *agenticv1alpha1.AgenticRun
 	agent          *agenticv1alpha1.Agent
 	llm            *agenticv1alpha1.LLMProvider
 	tools          *agenticv1alpha1.ToolsSpec
@@ -60,16 +59,11 @@ func (m *BarePodManager) SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alp
 	m.serviceAccount = serviceAccount
 }
 
-// SetOwner stores the AgenticRun so that pods created by Claim carry an
-// ownerReference back to the run, enabling garbage collection.
-func (m *BarePodManager) SetOwner(run *agenticv1alpha1.AgenticRun) {
-	m.run = run
-}
-
 // Claim creates a bare Pod for the given run step. The templateName
 // parameter is ignored (bare pods use PodSpecBuilder instead of templates).
 // Returns the pod name. Idempotent: returns the name if the pod already exists.
-func (m *BarePodManager) Claim(ctx context.Context, agenticRunName, step, _ string) (string, error) {
+func (m *BarePodManager) Claim(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, _ string) (string, error) {
+	agenticRunName := run.Name
 	log := logf.FromContext(ctx)
 
 	podName := truncateK8sName(fmt.Sprintf("ls-%s-%s", step, agenticRunName))
@@ -93,16 +87,14 @@ func (m *BarePodManager) Claim(ctx context.Context, agenticRunName, step, _ stri
 		Spec: *podSpec,
 	}
 
-	if m.run != nil {
-		pod.OwnerReferences = []metav1.OwnerReference{{
-			APIVersion:         agenticv1alpha1.GroupVersion.String(),
-			Kind:               "AgenticRun",
-			Name:               m.run.Name,
-			UID:                m.run.UID,
-			Controller:         ptr.To(true),
-			BlockOwnerDeletion: ptr.To(true),
-		}}
-	}
+	pod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion:         agenticv1alpha1.GroupVersion.String(),
+		Kind:               "AgenticRun",
+		Name:               run.Name,
+		UID:                run.UID,
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
+	}}
 
 	if err := m.Client.Create(ctx, pod); err != nil {
 		if !apierrors.IsAlreadyExists(err) {

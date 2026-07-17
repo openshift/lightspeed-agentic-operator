@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -65,6 +66,12 @@ func baseSandboxTemplate(name, namespace string) *unstructured.Unstructured {
 				},
 			},
 		},
+	}
+}
+
+func sandboxRun(name string) *agenticv1alpha1.AgenticRun {
+	return &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(name + "-uid")},
 	}
 }
 
@@ -144,7 +151,7 @@ func TestClaim_Creates(t *testing.T) {
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
 	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	claimName, err := m.Claim(context.Background(), sandboxRun("my-run"), "analysis", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,7 +188,7 @@ func TestClaim_AlreadyExists(t *testing.T) {
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
 	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-run", "analysis", "")
+	claimName, err := m.Claim(context.Background(), sandboxRun("my-run"), "analysis", "")
 	if err != nil {
 		t.Fatalf("unexpected error for already-existing claim: %v", err)
 	}
@@ -197,7 +204,7 @@ func TestClaim_LongName(t *testing.T) {
 	setTestStep(m)
 
 	longAgenticRunName := strings.Repeat("a", 100)
-	claimName, err := m.Claim(context.Background(), longAgenticRunName, "analysis", "")
+	claimName, err := m.Claim(context.Background(), sandboxRun(longAgenticRunName), "analysis", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -212,7 +219,7 @@ func TestClaim_ExecutionPhase(t *testing.T) {
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
 	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-run", "execution", "")
+	claimName, err := m.Claim(context.Background(), sandboxRun("my-run"), "execution", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -245,7 +252,7 @@ func TestClaim_ExecutionUsesPerAgenticRunSA(t *testing.T) {
 		"ls-exec-default-my-run",
 	)
 
-	_, err := m.Claim(context.Background(), "my-run", "execution", "")
+	_, err := m.Claim(context.Background(), sandboxRun("my-run"), "execution", "")
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -278,7 +285,7 @@ func TestClaim_VerificationPhase(t *testing.T) {
 	m := NewSandboxManager(c, "test-ns", "base-tpl")
 	setTestStep(m)
 
-	claimName, err := m.Claim(context.Background(), "my-run", "verification", "")
+	claimName, err := m.Claim(context.Background(), sandboxRun("my-run"), "verification", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
