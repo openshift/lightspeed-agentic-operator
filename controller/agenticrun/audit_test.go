@@ -10,6 +10,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -129,7 +130,7 @@ func TestNoOpAuditLogger_NoPanic(t *testing.T) {
 
 func TestStartPhaseSpan_IndependentTraces(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, s1 := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -150,7 +151,7 @@ func TestStartPhaseSpan_IndependentTraces(t *testing.T) {
 
 func TestStartPhaseSpan_SpanLinks(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, s1 := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -186,7 +187,7 @@ func TestStartPhaseSpan_SpanLinks(t *testing.T) {
 
 func TestStartPhaseSpan_StandardAttributes(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, span := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -218,7 +219,7 @@ func TestStartPhaseSpan_StandardAttributes(t *testing.T) {
 
 func TestStartPhaseSpan_KindInternal(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, span := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -232,7 +233,7 @@ func TestStartPhaseSpan_KindInternal(t *testing.T) {
 
 func TestAllPhaseSpanNames(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	tests := []struct {
@@ -266,7 +267,7 @@ func TestAllPhaseSpanNames(t *testing.T) {
 
 func TestEmitApprovalSpan_ShortLived(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	selectedOption := int32(1)
@@ -331,7 +332,7 @@ func TestEmitApprovalSpan_ShortLived(t *testing.T) {
 
 func TestEmitApprovalSpan_IdempotentOnRetry(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	auditLogger.EmitApprovalSpan(context.Background(), run, nil, "")
@@ -345,7 +346,7 @@ func TestEmitApprovalSpan_IdempotentOnRetry(t *testing.T) {
 
 func TestEmitTerminalSpan_ShortLived(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	auditLogger.EmitTerminalSpan(context.Background(), run, "Completed", "all checks passed")
@@ -372,7 +373,7 @@ func TestEmitTerminalSpan_ShortLived(t *testing.T) {
 
 func TestEmitTerminalSpan_IdempotentOnReReconcile(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	auditLogger.EmitTerminalSpan(context.Background(), run, "Completed", "success")
@@ -386,7 +387,7 @@ func TestEmitTerminalSpan_IdempotentOnReReconcile(t *testing.T) {
 
 func TestEmitAgenticRunReceived_OnPhaseSpan(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	spanCtx, span := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -420,7 +421,7 @@ func TestEmitAgenticRunReceived_OnPhaseSpan(t *testing.T) {
 
 func TestEmitAnalysisCompleted_EventAttributes(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	analysisResult := &agenticv1alpha1.AnalysisResult{
@@ -488,7 +489,7 @@ func TestEmitAnalysisCompleted_EventAttributes(t *testing.T) {
 
 func TestInjectTraceContext_W3CFormat(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	t.Run("no_active_span_no_header", func(t *testing.T) {
@@ -527,7 +528,7 @@ func TestInjectTraceContext_W3CFormat(t *testing.T) {
 
 func TestCleanup_RemovesPriorPhase(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, s1 := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -556,7 +557,7 @@ func TestSpanServiceName(t *testing.T) {
 	otel.SetTracerProvider(tp)
 	defer otel.SetTracerProvider(sdktrace.NewTracerProvider())
 
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, span := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -579,7 +580,7 @@ func TestSpanServiceName(t *testing.T) {
 
 func TestSpanInstrumentationScope(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, span := auditLogger.StartAnalysisSpan(context.Background(), run)
@@ -597,7 +598,7 @@ func TestSpanInstrumentationScope(t *testing.T) {
 
 func TestFullLifecycle_PerPhaseTraces(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	analysisResult := &agenticv1alpha1.AnalysisResult{
@@ -746,7 +747,7 @@ func TestIsTerminal_IncludesFailed(t *testing.T) {
 
 func TestNoApprovalSpan_AutoApproveExecution(t *testing.T) {
 	sr := setupRecorder(t)
-	auditLogger := NewProductionAuditLogger().(*ProductionAuditLogger)
+	auditLogger := NewProductionAuditLogger(zap.NewNop(), NoOpLogEmitter{}).(*ProductionAuditLogger)
 	run := testRun()
 
 	_, s1 := auditLogger.StartAnalysisSpan(context.Background(), run)

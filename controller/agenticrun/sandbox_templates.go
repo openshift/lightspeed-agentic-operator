@@ -97,7 +97,6 @@ type templateHashInput struct {
 	BaseResourceVersion string                              `json:"baseRV"`
 	ServiceAccount      string                              `json:"serviceAccount"`
 	AuditLogging        bool                                `json:"auditLogging"`
-	OTELEndpoint        string                              `json:"otelEndpoint,omitempty"`
 }
 
 func computeTemplateHash(
@@ -110,7 +109,6 @@ func computeTemplateHash(
 	step string,
 	baseResourceVersion string,
 	serviceAccount string,
-	audit *agenticv1alpha1.AuditConfig,
 ) (string, error) {
 	input := templateHashInput{
 		LLM:                 llm.Spec,
@@ -122,8 +120,7 @@ func computeTemplateHash(
 		Step:                step,
 		BaseResourceVersion: baseResourceVersion,
 		ServiceAccount:      serviceAccount,
-		AuditLogging:        audit.LoggingEnabled(),
-		OTELEndpoint:        audit.OTELEndpoint(),
+		AuditLogging:        true,
 	}
 	data, err := json.Marshal(input)
 	if err != nil {
@@ -185,11 +182,7 @@ func EnsureAgentTemplate(
 		reasoningConfigJSON = string(rcData)
 	}
 
-	audit, err := readAuditConfig(ctx, c)
-	if err != nil {
-		return "", fmt.Errorf("read audit config: %w", err)
-	}
-	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, reasoningConfigJSON, step, base.GetResourceVersion(), serviceAccount, audit)
+	hash, err := computeTemplateHash(llm, agent.Spec.Model, skills, mcpServers, requiredSecrets, reasoningConfigJSON, step, base.GetResourceVersion(), serviceAccount)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", ErrComputeTemplateHash, err)
 	}
@@ -251,7 +244,7 @@ func EnsureAgentTemplate(
 		removeEnvVar(derived, "LIGHTSPEED_REASONING_CONFIG")
 	}
 
-	if err := patchAuditEnvVars(derived, audit); err != nil {
+	if err := patchAuditEnvVars(derived); err != nil {
 		return "", fmt.Errorf("patch audit env vars: %w", err)
 	}
 
@@ -788,19 +781,9 @@ type mcpHeaderEnvEntry struct {
 	SecretName string `json:"secretName,omitempty"`
 }
 
-func patchAuditEnvVars(tmpl *unstructured.Unstructured, audit *agenticv1alpha1.AuditConfig) error {
-	if audit.LoggingEnabled() {
-		if err := setEnvVar(tmpl, "LIGHTSPEED_AUDIT_ENABLED", "true"); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_AUDIT_ENABLED: %w", err)
-		}
-		if err := setEnvVar(tmpl, "LIGHTSPEED_CAPTURE_CONTENT", "true"); err != nil {
-			return fmt.Errorf("set LIGHTSPEED_CAPTURE_CONTENT: %w", err)
-		}
-	}
-	if endpoint := audit.OTELEndpoint(); endpoint != "" {
-		if err := setEnvVar(tmpl, "OTEL_EXPORTER_OTLP_ENDPOINT", endpoint); err != nil {
-			return fmt.Errorf("set OTEL_EXPORTER_OTLP_ENDPOINT: %w", err)
-		}
+func patchAuditEnvVars(tmpl *unstructured.Unstructured) error {
+	if err := setEnvVar(tmpl, "LIGHTSPEED_AUDIT_ENABLED", "true"); err != nil {
+		return fmt.Errorf("set LIGHTSPEED_AUDIT_ENABLED: %w", err)
 	}
 	return nil
 }

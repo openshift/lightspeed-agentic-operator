@@ -275,6 +275,19 @@ spec:
 EOF
 info "Webhook Service created"
 
+# Create telemetry ConfigMap (operator blocks at startup until this exists).
+# Empty data disables export (IsValid=false). In production, lightspeed-operator
+# populates collector-endpoint / admin-endpoint / ca.crt.
+oc apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lightspeed-otel-collector-client
+  namespace: ${NAMESPACE}
+data: {}
+EOF
+info "Telemetry ConfigMap created (standalone mode)"
+
 # --- Step 6: Wait for operator ------------------------------------------------
 
 step "6/7" "Waiting for operator to become ready..."

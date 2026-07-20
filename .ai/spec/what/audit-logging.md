@@ -63,8 +63,8 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 ### Structured Log Format — OTel JSON via Stdout Exporter
 
 12. The operator MUST configure two exporters on its TracerProvider:
-    - **Stdout exporter** — serializes spans as OTLP JSON to stdout. Always active when audit is enabled. This is the compliance record. The stdout exporter MUST NOT truncate span attributes or event attributes.
-    - **OTLP exporter** — sends spans to a trace backend via OTLP. Active only when `spec.audit.otel.endpoint` is configured. Uses a no-op exporter when the endpoint is absent.
+    - **Stdout exporter** — serializes spans as OTLP JSON to stdout. Always active (audit is unconditionally enabled). This is the compliance record. The stdout exporter MUST NOT truncate span attributes or event attributes.
+    - **OTLP exporter** — sends spans to the in-cluster Collector via OTLP gRPC. Configured from the `lightspeed-otel-collector-client` ConfigMap (managed by lightspeed-operator). Uses a no-op exporter when the ConfigMap is not yet available.
 
 13. The single-emission rule MUST be followed: each audit-significant datum is recorded exactly once, as an OTel span or span event. The stdout and OTLP exporters are two destinations for the same emission, not two separate emission paths. Application-level loggers (Go `logr`) MUST emit only developer-debugging messages and MUST NOT re-emit data that appears in spans or span events.
 
@@ -105,7 +105,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 25. When audit is enabled, the stdout exporter always emits OTLP JSON to stdout. This is what any log aggregator (Loki, Splunk, Fluentd, etc.) reads from container logs.
 
-26. `spec.audit.otel.endpoint` controls the OTLP exporter. When set, the operator configures an OTLP exporter pointed at that endpoint. When empty or absent, a no-op OTLP exporter is used. The OTLP exporter is additive — it provides distributed tracing visualization (Jaeger/Tempo) alongside the stdout compliance record.
+26. The OTLP exporter endpoint is sourced from the `lightspeed-otel-collector-client` ConfigMap (field `collector-endpoint`). The operator blocks at startup until this ConfigMap exists (5 min timeout, fatal on expiry). Runtime changes to the ConfigMap reconfigure the exporter without restart. The OTLP exporter is additive — it provides distributed tracing and log persistence alongside the stdout compliance record.
 
 27. The operator MUST pass the OTEL endpoint to the sandbox via environment variable or config mount so the sandbox can configure its own exporters.
 
@@ -115,7 +115,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 29. Each OTLP log record MUST carry: `trace_id` in the log record's trace context (the current phase trace's auto-generated trace ID), `agenticrun.uid` as a log record attribute (for cross-trace correlation), and the span event data as the log record body.
 
-30. The OTLP log endpoint is independent of `spec.audit.otel.endpoint` (tracing). Both can be active simultaneously.
+30. OTLP logs and traces share the same Collector endpoint (from ConfigMap). Both are always active when the Collector is configured.
 
 31. When the OTLP log endpoint is absent, no OTLP log records are emitted. No error, no warning — graceful degradation.
 

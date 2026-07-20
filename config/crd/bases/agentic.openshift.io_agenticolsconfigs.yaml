@@ -31,8 +31,7 @@ spec:
           CR exists, the system behaves as if\nsuspended is false — the CR is not
           required for normal operation.\n\nExample:\n\n\tapiVersion: agentic.openshift.io/v1alpha1\n\tkind:
           AgenticOLSConfig\n\tmetadata:\n\t  name: cluster\n\tspec:\n\t  suspended:
-          false\n\t  audit:\n\t    logging: Enabled\n\t    otel:\n\t      endpoint:
-          \"jaeger-otlp-grpc.observability.svc:4317\"\n\t      tlsMode: Insecure"
+          false"
         properties:
           apiVersion:
             description: |-
@@ -55,45 +54,6 @@ spec:
             description: spec defines the desired system configuration.
             minProperties: 1
             properties:
-              audit:
-                description: |-
-                  audit configures compliance audit tracing.
-                  When absent, defaults to enabled with stdout OTLP JSON export only.
-                minProperties: 1
-                properties:
-                  logging:
-                    default: Enabled
-                    description: |-
-                      logging enables audit tracing.
-                      Default: Enabled (when field is empty or config CR absent).
-                    enum:
-                    - Enabled
-                    - Disabled
-                    type: string
-                  otel:
-                    description: |-
-                      otel configures OpenTelemetry tracing export to a remote collector.
-                      When nil or endpoint empty, only the stdout JSON exporter is active.
-                    minProperties: 1
-                    properties:
-                      endpoint:
-                        description: |-
-                          endpoint is the OTLP gRPC endpoint (e.g., "jaeger-otlp-grpc.observability.svc:4317").
-                          When empty, no OTEL traces are exported (no-op tracer used).
-                        maxLength: 253
-                        minLength: 1
-                        type: string
-                      tlsMode:
-                        default: Secure
-                        description: |-
-                          tlsMode controls TLS for the OTLP connection.
-                          "Secure" (default) requires TLS; "Insecure" disables TLS.
-                        enum:
-                        - Secure
-                        - Insecure
-                        type: string
-                    type: object
-                type: object
               suspended:
                 default: false
                 description: |-

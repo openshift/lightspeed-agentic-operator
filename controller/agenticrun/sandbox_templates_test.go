@@ -77,7 +77,7 @@ func emptyTemplate() *unstructured.Unstructured {
 
 func mustHash(t *testing.T, llm *agenticv1alpha1.LLMProvider, model string, skills []agenticv1alpha1.SkillsSource, requiredSecrets []agenticv1alpha1.SecretRequirement, phase string) string {
 	t.Helper()
-	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, "", phase, "", "", nil)
+	h, err := computeTemplateHash(llm, model, skills, nil, requiredSecrets, "", phase, "", "")
 	if err != nil {
 		t.Fatalf("computeTemplateHash: %v", err)
 	}
@@ -627,11 +627,11 @@ func TestComputeTemplateHash_DifferentBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "2000", "", nil)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "2000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -645,11 +645,11 @@ func TestComputeTemplateHash_SameBaseResourceVersion(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,24 +659,21 @@ func TestComputeTemplateHash_SameBaseResourceVersion(t *testing.T) {
 	}
 }
 
-func TestComputeTemplateHash_DifferentAuditConfig(t *testing.T) {
+func TestComputeTemplateHash_DifferentServiceAccount(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	audit := &agenticv1alpha1.AuditConfig{
-		OTEL: agenticv1alpha1.AuditOTELConfig{Endpoint: "jaeger:4317"},
-	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", audit)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "different-sa")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if h1 == h2 {
-		t.Error("different audit config should produce different hashes")
+		t.Error("different service account should produce different hashes")
 	}
 }
 
@@ -684,11 +681,11 @@ func TestComputeTemplateHash_DifferentReasoningConfig(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 	skills := []agenticv1alpha1.SkillsSource{{Image: "quay.io/test/skills:latest"}}
 
-	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "", nil)
+	h1, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, "", "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled"}`, "analysis", "1000", "", nil)
+	h2, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled"}`, "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +694,7 @@ func TestComputeTemplateHash_DifferentReasoningConfig(t *testing.T) {
 		t.Error("empty vs non-empty reasoning config should produce different hashes")
 	}
 
-	h3, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled","effort":"high"}`, "analysis", "1000", "", nil)
+	h3, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled","effort":"high"}`, "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,7 +702,7 @@ func TestComputeTemplateHash_DifferentReasoningConfig(t *testing.T) {
 		t.Error("two different non-empty reasoning configs should produce different hashes")
 	}
 
-	h4, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled"}`, "analysis", "1000", "", nil)
+	h4, err := computeTemplateHash(llm, "claude-opus-4-6", skills, nil, nil, `{"thinking":"enabled"}`, "analysis", "1000", "")
 	if err != nil {
 		t.Fatal(err)
 	}

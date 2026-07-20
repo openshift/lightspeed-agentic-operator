@@ -1,7 +1,6 @@
 package agenticrun
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"path"
@@ -10,7 +9,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -157,21 +155,8 @@ func (b *PodSpecBuilder) Build(
 	}, nil
 }
 
-func appendAuditEnvVars(ctx context.Context, c client.Client, container *corev1.Container) error {
-	audit, err := readAuditConfig(ctx, c)
-	if err != nil {
-		return fmt.Errorf("read audit config: %w", err)
-	}
-	if audit.LoggingEnabled() {
-		container.Env = append(container.Env,
-			corev1.EnvVar{Name: "LIGHTSPEED_AUDIT_ENABLED", Value: "true"},
-			corev1.EnvVar{Name: "LIGHTSPEED_CAPTURE_CONTENT", Value: "true"},
-		)
-	}
-	if endpoint := audit.OTELEndpoint(); endpoint != "" {
-		container.Env = append(container.Env, corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: endpoint})
-	}
-	return nil
+func appendAuditEnvVars(container *corev1.Container) {
+	container.Env = append(container.Env, corev1.EnvVar{Name: "LIGHTSPEED_AUDIT_ENABLED", Value: "true"})
 }
 
 func (b *PodSpecBuilder) addProviderSpecificEnv(container *corev1.Container, llm *agenticv1alpha1.LLMProvider) {

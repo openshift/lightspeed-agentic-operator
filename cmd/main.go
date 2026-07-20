@@ -2,27 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
-	"fmt"
 	"os"
+	"syscall"
 	"time"
 
 	// Import auth plugins (Azure, GCP, OIDC, etc.) for local and hosted kubeconfigs.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
+	uberzap "go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -32,6 +26,8 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	agenticcontroller "github.com/openshift/lightspeed-agentic-operator/controller"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticrun"
+	"github.com/openshift/lightspeed-agentic-operator/pkg/configwatch"
+	"github.com/openshift/lightspeed-agentic-operator/pkg/telemetry"
 )
 
 var scheme = runtime.NewScheme()
@@ -41,37 +37,7 @@ func init() {
 	utilruntime.Must(agenticv1alpha1.AddToScheme(scheme))
 }
 
-// initTracerProvider initializes the OTEL tracer provider.
-// Always adds a stdout OTLP JSON exporter for compliance records.
-// When endpoint is set, also adds an OTLP gRPC exporter.
-func initTracerProvider(endpoint string, otlpInsecure bool) (*sdktrace.TracerProvider, error) {
-	res := resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName("lightspeed-agentic-operator"),
-		semconv.ServiceVersion("dev"),
-	)
-
-	tpOpts := []sdktrace.TracerProviderOption{
-		sdktrace.WithResource(res),
-		sdktrace.WithSyncer(&otlpJSONStdoutExporter{}),
-	}
-
-	if endpoint != "" {
-		opts := []otlptracegrpc.Option{
-			otlptracegrpc.WithEndpoint(endpoint),
-		}
-		if otlpInsecure {
-			opts = append(opts, otlptracegrpc.WithInsecure())
-		}
-		otlpExp, err := otlptracegrpc.New(context.Background(), opts...)
-		if err != nil {
-			return nil, fmt.Errorf("OTLP exporter: %w", err)
-		}
-		tpOpts = append(tpOpts, sdktrace.WithBatcher(otlpExp))
-	}
-
-	return sdktrace.NewTracerProvider(tpOpts...), nil
-}
+const telemetryStartupTimeout = 5 * time.Minute
 
 func main() {
 	var (
@@ -130,61 +96,48 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Read AgenticOLSConfig for audit configuration
-	log.Info("Reading AgenticOLSConfig for audit settings")
-	agenticCfg := &agenticv1alpha1.AgenticOLSConfig{}
-	if err := mgr.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: "cluster"}, agenticCfg); err != nil {
-		if !errors.IsNotFound(err) {
-			log.Error(err, "unable to fetch AgenticOLSConfig, falling back to audit defaults")
-		} else {
-			log.Info("AgenticOLSConfig not found, using audit defaults (logging enabled, no OTEL)")
-		}
-		agenticCfg = nil
-	}
-
-	// Initialize OTEL tracer provider
-	var auditConfig agenticv1alpha1.AuditConfig
-	if agenticCfg != nil {
-		auditConfig = agenticCfg.Spec.Audit
-	}
-
-	otlpEndpoint := auditConfig.OTELEndpoint()
-	otlpInsecure := auditConfig.OTELInsecure()
-
-	tp, err := initTracerProvider(otlpEndpoint, otlpInsecure)
-	if err != nil {
-		log.Error(err, "unable to initialize OTEL tracer provider")
-		os.Exit(1)
-	}
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	// Shutdown tracer on exit
+	// Initialize telemetry provider from Collector ConfigMap
+	telemetryProvider := telemetry.NewProvider(&agenticrun.AgenticRunIDGenerator{})
+	telemetryProvider.SetSecretSource(mgr.GetAPIReader(), namespace)
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := tp.Shutdown(shutdownCtx); err != nil {
-			log.Error(err, "failed to shutdown OTEL tracer provider")
+		if err := telemetryProvider.Shutdown(shutdownCtx); err != nil {
+			log.Error(err, "failed to shutdown telemetry provider")
 		}
 	}()
 
-	if otlpEndpoint == "" {
-		log.Info("OTEL remote export disabled (stdout JSON only, no endpoint configured)")
-	} else if otlpInsecure {
-		log.Info("OTEL tracing enabled (insecure)", "endpoint", otlpEndpoint)
-	} else {
-		log.Info("OTEL tracing enabled (TLS)", "endpoint", otlpEndpoint)
+	// Block until Collector ConfigMap is available (fatal after timeout)
+	if err := configwatch.WaitFor(
+		context.Background(), mgr.GetAPIReader(), namespace,
+		telemetry.ConfigMapName, telemetryStartupTimeout,
+		telemetryProvider.OnConfigMapChange,
+	); err != nil {
+		log.Error(err, "telemetry configuration failed")
+		os.Exit(1)
 	}
 
-	// Create AuditLogger
-	var auditLogger agenticrun.AuditLogger
-	if auditConfig.LoggingEnabled() {
-		auditLogger = agenticrun.NewProductionAuditLogger()
-		log.Info("Audit tracing enabled")
-	} else {
-		auditLogger = agenticrun.NewNoOpAuditLogger()
-		log.Info("Audit tracing disabled")
+	// Register ConfigMap watcher for runtime reconfiguration
+	cmWatcher := configwatch.New(mgr.GetClient(), namespace,
+		configwatch.Registration{Name: telemetry.ConfigMapName, Handler: telemetryProvider.OnConfigMapChange},
+	)
+	if err := cmWatcher.SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to set up ConfigMap watcher")
+		os.Exit(1)
 	}
+
+	// Create AuditLogger (always enabled — stdout audit is unconditional)
+	zapLogger, err := uberzap.NewProduction()
+	if err != nil {
+		log.Error(err, "unable to create zap logger for audit")
+		os.Exit(1)
+	}
+	defer func() {
+		if syncErr := zapLogger.Sync(); syncErr != nil && !errors.Is(syncErr, syscall.EINVAL) {
+			log.Error(syncErr, "failed to sync zap logger")
+		}
+	}()
+	auditLogger := agenticrun.NewProductionAuditLogger(zapLogger, telemetryProvider)
 
 	if err := agenticcontroller.Setup(mgr, agenticcontroller.Options{
 		Namespace:           namespace,
@@ -192,6 +145,7 @@ func main() {
 		SandboxMode:         sandboxMode,
 		ImagePullPolicy:     imagePullPolicy,
 		Audit:               auditLogger,
+		TempLog:             telemetryProvider,
 	}); err != nil {
 		log.Error(err, "unable to set up agentic controllers")
 		os.Exit(1)
@@ -209,9 +163,12 @@ func main() {
 	log.Info("starting manager", "namespace", namespace)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "problem running manager")
+		// os.Exit skips deferred Shutdown; flush buffered telemetry explicitly.
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = tp.Shutdown(shutdownCtx)
+		if shutErr := telemetryProvider.Shutdown(shutdownCtx); shutErr != nil {
+			log.Error(shutErr, "failed to shutdown telemetry provider")
+		}
+		cancel()
 		os.Exit(1)
 	}
 }

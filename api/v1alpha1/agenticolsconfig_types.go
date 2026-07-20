@@ -29,83 +29,6 @@ const (
 	AgenticOLSConfigConditionSuspended = "Suspended"
 )
 
-// AuditOTELConfig configures OpenTelemetry tracing export.
-//
-// +kubebuilder:validation:MinProperties=1
-type AuditOTELConfig struct {
-	// endpoint is the OTLP gRPC endpoint (e.g., "jaeger-otlp-grpc.observability.svc:4317").
-	// When empty, no OTEL traces are exported (no-op tracer used).
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	// +optional
-	Endpoint string `json:"endpoint,omitempty"`
-
-	// tlsMode controls TLS for the OTLP connection.
-	// "Secure" (default) requires TLS; "Insecure" disables TLS.
-	// +default="Secure"
-	// +optional
-	TLSMode AuditOTELTLSMode `json:"tlsMode,omitempty"`
-}
-
-// AuditOTELTLSMode defines TLS behavior for the OTLP exporter.
-// +kubebuilder:validation:Enum=Secure;Insecure
-type AuditOTELTLSMode string
-
-const (
-	AuditOTELTLSSecure   AuditOTELTLSMode = "Secure"
-	AuditOTELTLSInsecure AuditOTELTLSMode = "Insecure"
-)
-
-// AuditLoggingMode defines whether audit tracing is enabled.
-// +kubebuilder:validation:Enum=Enabled;Disabled
-type AuditLoggingMode string
-
-const (
-	AuditLoggingEnabled  AuditLoggingMode = "Enabled"
-	AuditLoggingDisabled AuditLoggingMode = "Disabled"
-)
-
-// AuditConfig configures compliance audit tracing.
-//
-// +kubebuilder:validation:MinProperties=1
-type AuditConfig struct {
-	// logging enables audit tracing.
-	// Default: Enabled (when field is empty or config CR absent).
-	// +default="Enabled"
-	// +optional
-	Logging AuditLoggingMode `json:"logging,omitempty"`
-
-	// otel configures OpenTelemetry tracing export to a remote collector.
-	// When nil or endpoint empty, only the stdout JSON exporter is active.
-	// +optional
-	OTEL AuditOTELConfig `json:"otel,omitzero"`
-}
-
-// LoggingEnabled returns true when audit tracing should be active.
-// Defaults to true when config is nil or Logging field is empty.
-func (c *AuditConfig) LoggingEnabled() bool {
-	if c == nil || c.Logging == "" {
-		return true
-	}
-	return c.Logging == AuditLoggingEnabled
-}
-
-// OTELEndpoint returns the OTLP endpoint or empty string if not configured.
-func (c *AuditConfig) OTELEndpoint() string {
-	if c == nil {
-		return ""
-	}
-	return c.OTEL.Endpoint
-}
-
-// OTELInsecure returns whether to use insecure (no TLS) connections.
-func (c *AuditConfig) OTELInsecure() bool {
-	if c == nil {
-		return false
-	}
-	return c.OTEL.TLSMode == AuditOTELTLSInsecure
-}
-
 // AgenticOLSConfigSpec defines the desired state of AgenticOLSConfig.
 //
 // +kubebuilder:validation:MinProperties=1
@@ -118,11 +41,6 @@ type AgenticOLSConfigSpec struct {
 	// +optional
 	// +default=false
 	Suspended bool `json:"suspended,omitempty"` //nolint:kubeapilinter // kill switch is genuinely binary; bool is the right type
-
-	// audit configures compliance audit tracing.
-	// When absent, defaults to enabled with stdout OTLP JSON export only.
-	// +optional
-	Audit AuditConfig `json:"audit,omitzero"`
 }
 
 // AgenticOLSConfigStatus defines the observed state of AgenticOLSConfig.
@@ -165,11 +83,6 @@ type AgenticOLSConfigStatus struct {
 //	  name: cluster
 //	spec:
 //	  suspended: false
-//	  audit:
-//	    logging: Enabled
-//	    otel:
-//	      endpoint: "jaeger-otlp-grpc.observability.svc:4317"
-//	      tlsMode: Insecure
 type AgenticOLSConfig struct {
 	metav1.TypeMeta `json:",inline"`
 

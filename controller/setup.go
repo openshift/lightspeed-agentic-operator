@@ -18,7 +18,12 @@ type Options struct {
 	SandboxMode         string
 	ImagePullPolicy     string
 	Audit               agenticrun.AuditLogger
+	TempLog             agenticrun.TempLogCleaner
 }
+
+// RBAC for ConfigMap-driven telemetry (pkg/configwatch + credentials-secret).
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 func Setup(mgr ctrl.Manager, opts Options) error {
 	log := ctrl.Log.WithName("agentic-setup")
@@ -48,6 +53,7 @@ func Setup(mgr ctrl.Manager, opts Options) error {
 		Agent:     agentCaller,
 		Namespace: opts.Namespace,
 		Audit:     opts.Audit,
+		TempLog:   opts.TempLog,
 	}).SetupWithManager(mgr); err != nil {
 		return err
 	}

@@ -17,6 +17,7 @@ RUN go mod download
 # Copy the go source
 COPY cmd/ cmd/
 COPY controller/ controller/
+COPY pkg/ pkg/
 
 # this directory is checked by ecosystem-cert-preflight-checks task in Konflux
 COPY LICENSE /licenses/

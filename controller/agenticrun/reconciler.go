@@ -3,6 +3,8 @@ package agenticrun
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,9 +19,15 @@ import (
 )
 
 const (
-	ErrRemoveFinalizer = "remove finalizer"
-	ErrAddFinalizer    = "add finalizer"
+	ErrRemoveFinalizer             = "remove finalizer"
+	ErrAddFinalizer                = "add finalizer"
+	ErrPatchTemplogCleanupAttempts = "patch templog cleanup attempts"
 )
+
+// TempLogCleaner is the interface for deleting templog records on CR deletion.
+type TempLogCleaner interface {
+	DeleteLogs(ctx context.Context, traceID string) error
+}
 
 // AgenticRunReconciler reconciles AgenticRun objects.
 //
@@ -29,6 +37,7 @@ type AgenticRunReconciler struct {
 	Agent     AgentCaller
 	Namespace string
 	Audit     AuditLogger
+	TempLog   TempLogCleaner
 }
 
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns,verbs=get;list;watch;create;update;patch;delete
@@ -65,9 +74,6 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			r.Audit.Cleanup(&run)
 		}
 		if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
-			// Sandbox release is fatal — if it fails, retry with backoff. This prevents
-			// orphaned sandbox pods/claims. Trade-off: if sandbox API is permanently down,
-			// the AgenticRun stays in Terminating until resolved (or finalizer is manually removed).
 			if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -79,8 +85,27 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if err := r.Patch(ctx, &run, client.MergeFrom(original)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("%s: %w", ErrRemoveFinalizer, err)
 			}
+			// Requeue so templog cleanup Patches a fresh object (avoids conflict
+			// from two sequential Patches in one reconcile).
+			return ctrl.Result{Requeue: true}, nil
+		}
+		if controllerutil.ContainsFinalizer(&run, templogCleanupFinalizer) {
+			return r.handleTemplogCleanup(ctx, &run)
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// --- Finalizers (first sight of any non-deleting run, including terminal) ---
+	if !controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) || !controllerutil.ContainsFinalizer(&run, templogCleanupFinalizer) {
+		original := run.DeepCopy()
+		controllerutil.AddFinalizer(&run, rbacCleanupFinalizer)
+		controllerutil.AddFinalizer(&run, templogCleanupFinalizer)
+		if err := r.Patch(ctx, &run, client.MergeFrom(original)); err != nil {
+			return ctrl.Result{}, fmt.Errorf("%s: %w", ErrAddFinalizer, err)
+		}
+		if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
 	}
 
 	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
@@ -129,20 +154,6 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.handleSuspension(ctx, &run)
 	}
 
-	// --- Finalizer ---
-	if !controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
-		if !isTerminal(phase) {
-			original := run.DeepCopy()
-			controllerutil.AddFinalizer(&run, rbacCleanupFinalizer)
-			if err := r.Patch(ctx, &run, client.MergeFrom(original)); err != nil {
-				return ctrl.Result{}, fmt.Errorf("%s: %w", ErrAddFinalizer, err)
-			}
-			if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
-				return ctrl.Result{}, client.IgnoreNotFound(err)
-			}
-		}
-	}
-
 	// --- Ensure AgenticRunApproval exists ---
 	policy, err := getApprovalPolicy(ctx, r.Client)
 	if err != nil {
@@ -179,13 +190,13 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	switch phase {
 	case agenticv1alpha1.AgenticRunPhasePending, agenticv1alpha1.AgenticRunPhaseAnalyzing:
 		if needsRevision(&run) {
-			return r.handleRevision(ctx, &run, resolved, approval, policy)
+			return r.handleRevision(ctx, &run, resolved)
 		}
 		return r.handleAnalysis(ctx, &run, resolved, approval, policy)
 
 	case agenticv1alpha1.AgenticRunPhaseProposed, agenticv1alpha1.AgenticRunPhaseExecuting:
 		if needsRevision(&run) {
-			return r.handleRevision(ctx, &run, resolved, approval, policy)
+			return r.handleRevision(ctx, &run, resolved)
 		}
 		return r.handleExecution(ctx, &run, resolved, approval, policy)
 
@@ -194,13 +205,13 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	case agenticv1alpha1.AgenticRunPhaseEscalating:
 		if needsRevision(&run) {
-			return r.handleRevision(ctx, &run, resolved, approval, policy)
+			return r.handleRevision(ctx, &run, resolved)
 		}
 		return r.handleEscalation(ctx, &run, resolved, approval, policy)
 
 	case agenticv1alpha1.AgenticRunPhaseNoActionRequired:
 		if needsRevision(&run) {
-			return r.handleRevision(ctx, &run, resolved, approval, policy)
+			return r.handleRevision(ctx, &run, resolved)
 		}
 		return ctrl.Result{}, nil
 
@@ -265,4 +276,49 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("agenticrun").
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent}).
 		Complete(r)
+}
+
+// handleTemplogCleanup deletes audit logs from the Collector's Postgres store
+// for this AgenticRun. Retries up to templogMaxCleanupAttempts, then removes
+// the finalizer regardless to unblock CR deletion.
+func (r *AgenticRunReconciler) handleTemplogCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	attempts := 0
+	if v, ok := run.Annotations[templogCleanupAttemptsAnnotation]; ok {
+		parsed, err := strconv.Atoi(v)
+		if err != nil || parsed < 0 {
+			// Malformed annotation must not skip cleanup — reset to zero and retry delete.
+			log.Info("ignoring invalid templog cleanup attempts annotation", "value", v)
+			attempts = 0
+		} else {
+			attempts = parsed
+		}
+	}
+
+	if r.TempLog != nil && attempts < templogMaxCleanupAttempts {
+		traceID := strings.ReplaceAll(string(run.UID), "-", "")
+		if err := r.TempLog.DeleteLogs(ctx, traceID); err != nil {
+			log.Error(err, "templog cleanup failed, will retry", "attempt", attempts+1, "max", templogMaxCleanupAttempts)
+			original := run.DeepCopy()
+			if run.Annotations == nil {
+				run.Annotations = make(map[string]string)
+			}
+			run.Annotations[templogCleanupAttemptsAnnotation] = fmt.Sprintf("%d", attempts+1)
+			if patchErr := r.Patch(ctx, run, client.MergeFrom(original)); patchErr != nil {
+				return ctrl.Result{}, fmt.Errorf("%s: %w", ErrPatchTemplogCleanupAttempts, patchErr)
+			}
+			return ctrl.Result{RequeueAfter: templogCleanupRequeueAfter}, nil
+		}
+	} else if attempts >= templogMaxCleanupAttempts {
+		log.Info("templog cleanup exhausted retries, removing finalizer with orphaned logs",
+			"traceID", strings.ReplaceAll(string(run.UID), "-", ""))
+	}
+
+	original := run.DeepCopy()
+	controllerutil.RemoveFinalizer(run, templogCleanupFinalizer)
+	if err := r.Patch(ctx, run, client.MergeFrom(original)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrRemoveFinalizer, err)
+	}
+	return ctrl.Result{}, nil
 }

@@ -143,8 +143,6 @@ func (r *AgenticRunReconciler) handleRevision(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
 	resolved *resolvedWorkflow,
-	approval *agenticv1alpha1.AgenticRunApproval,
-	policy *agenticv1alpha1.ApprovalPolicy,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	generation := run.Generation

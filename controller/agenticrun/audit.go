@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,8 +13,10 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+	"go.uber.org/zap"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,7 +28,29 @@ const (
 	tracerVersion = "v1alpha1"
 )
 
-// AuditLogger emits compliance audit data as OTel spans and span events.
+// AgenticRunIDGenerator is an OTEL IDGenerator. With the per-phase trace model
+// it uses the SDK default random IDs (no context override). Kept so the
+// telemetry Provider can supply a stable generator implementation.
+type AgenticRunIDGenerator struct{}
+
+var _ sdktrace.IDGenerator = (*AgenticRunIDGenerator)(nil)
+
+func (*AgenticRunIDGenerator) NewIDs(_ context.Context) (trace.TraceID, trace.SpanID) {
+	var tid trace.TraceID
+	var sid trace.SpanID
+	_, _ = rand.Read(tid[:])
+	_, _ = rand.Read(sid[:])
+	return tid, sid
+}
+
+func (*AgenticRunIDGenerator) NewSpanID(_ context.Context, _ trace.TraceID) trace.SpanID {
+	var sid trace.SpanID
+	_, _ = rand.Read(sid[:])
+	return sid
+}
+
+// AuditLogger emits compliance audit data as OTel spans, span events, and
+// structured logs (stdout + optional OTLP via LogEmitter).
 // Each phase of an AgenticRun gets its own independent trace (fresh trace ID).
 // Phase spans link back to the prior phase's root span via span links.
 type AuditLogger interface {
@@ -58,13 +83,27 @@ type AuditLogger interface {
 	CleanupDeleted(key types.NamespacedName)
 }
 
-// ProductionAuditLogger implements AuditLogger with per-phase OTel traces.
+// LogEmitter is the interface for emitting OTLP log records.
+// Implemented by pkg/telemetry.Provider.
+type LogEmitter interface {
+	EmitLog(ctx context.Context, traceID trace.TraceID, event string, payload interface{})
+}
+
+// NoOpLogEmitter is a no-op LogEmitter for use in tests.
+type NoOpLogEmitter struct{}
+
+func (NoOpLogEmitter) EmitLog(_ context.Context, _ trace.TraceID, _ string, _ interface{}) {}
+
+// ProductionAuditLogger implements AuditLogger with per-phase OTel traces,
+// zap stdout logs, and optional OTLP log emission.
 // Known limitation: priorPhase is in-memory only. On operator restart the span
 // link chain between phases is broken — the first post-restart phase span has
 // no link to the prior phase. The agenticrun.uid correlation attribute (from
 // metadata.uid) still connects all phases across the restart boundary.
 type ProductionAuditLogger struct {
+	logger          *zap.Logger
 	tracer          trace.Tracer
+	logEmitter      LogEmitter
 	priorPhase      sync.Map // map[types.UID]trace.SpanContext
 	emittedTerminal sync.Map // map[types.UID]bool — prevents duplicate terminal spans
 	emittedApproval sync.Map // map[types.UID]bool — prevents duplicate approval spans on retry
@@ -74,10 +113,16 @@ type ProductionAuditLogger struct {
 // NoOpAuditLogger implements AuditLogger with no-op behavior (audit disabled).
 type NoOpAuditLogger struct{}
 
-// NewProductionAuditLogger creates an audit logger that emits OTel spans.
-func NewProductionAuditLogger() AuditLogger {
+// NewProductionAuditLogger creates an audit logger that emits OTel spans,
+// JSON stdout logs, and OTLP log records (when logEmitter is non-nil).
+func NewProductionAuditLogger(logger *zap.Logger, logEmitter LogEmitter) AuditLogger {
+	if logEmitter == nil {
+		logEmitter = NoOpLogEmitter{}
+	}
 	return &ProductionAuditLogger{
-		tracer: otel.Tracer(tracerName, trace.WithInstrumentationVersion(tracerVersion)),
+		logger:     logger,
+		tracer:     otel.Tracer(tracerName, trace.WithInstrumentationVersion(tracerVersion)),
+		logEmitter: logEmitter,
 	}
 }
 
@@ -129,6 +174,23 @@ func serializeCRJSON(obj client.Object) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+// emitStructuredLog writes a JSON audit event to stdout and emits an OTLP log record.
+// Stdout is always emitted. OTLP emission depends on Provider configuration.
+func (l *ProductionAuditLogger) emitStructuredLog(ctx context.Context, event string, payload interface{}) {
+	sc := trace.SpanContextFromContext(ctx)
+	var tid trace.TraceID
+	if sc.IsValid() {
+		tid = sc.TraceID()
+	}
+
+	l.logger.Info(event,
+		zap.String("event", event),
+		zap.String("trace_id", tid.String()),
+		zap.Any("payload", payload),
+	)
+	l.logEmitter.EmitLog(ctx, tid, event, payload)
 }
 
 // runAttrs returns the standard span attributes for an AgenticRun.
@@ -193,11 +255,12 @@ func (l *ProductionAuditLogger) EmitApprovalSpan(ctx context.Context, run *agent
 	if _, already := l.emittedApproval.LoadOrStore(run.UID, true); already {
 		return
 	}
-	_, span := l.startPhaseSpan(ctx, run, "agenticrun.human_approval")
+	spanCtx, span := l.startPhaseSpan(ctx, run, "agenticrun.human_approval")
 
 	eventAttrs := []attribute.KeyValue{
 		attribute.String("agenticrun.name", run.Name),
 	}
+	payload := map[string]interface{}{}
 	if approval != nil {
 		for i := len(approval.Spec.Stages) - 1; i >= 0; i-- {
 			if approval.Spec.Stages[i].Decision != "" {
@@ -208,6 +271,7 @@ func (l *ProductionAuditLogger) EmitApprovalSpan(ctx context.Context, run *agent
 		for _, stage := range approval.Spec.Stages {
 			if stage.Type == agenticv1alpha1.ApprovalStageExecution && stage.Execution.Option != nil {
 				eventAttrs = append(eventAttrs, attribute.Int("selected_option", int(*stage.Execution.Option)))
+				payload["selectedOption"] = *stage.Execution.Option
 				break
 			}
 		}
@@ -216,12 +280,20 @@ func (l *ProductionAuditLogger) EmitApprovalSpan(ctx context.Context, run *agent
 				attribute.String("approver.uid", approval.Spec.Approver.UID),
 				attribute.String("approver.username", approval.Spec.Approver.Username),
 			)
+			payload["approver"] = map[string]interface{}{
+				"uid":        approval.Spec.Approver.UID,
+				"username":   approval.Spec.Approver.Username,
+				"approvedAt": approval.Spec.Approver.ApprovedAt,
+			}
 		}
 		eventAttrs = append(eventAttrs, attribute.String("agenticrun.cr", serializeCRJSON(approval)))
+		payload["approvalStages"] = approval.Spec.Stages
 	}
 	if selectedOptionTitle != "" {
 		eventAttrs = append(eventAttrs, attribute.String("selected_option.title", selectedOptionTitle))
+		payload["selectedOptionTitle"] = selectedOptionTitle
 	}
+	l.emitStructuredLog(spanCtx, "audit.approval.received", payload)
 	span.AddEvent("agenticrun.approval.completed", trace.WithAttributes(eventAttrs...))
 	span.End()
 }
@@ -232,10 +304,14 @@ func (l *ProductionAuditLogger) EmitTerminalSpan(ctx context.Context, run *agent
 	if _, already := l.emittedTerminal.LoadOrStore(run.UID, true); already {
 		return
 	}
-	_, span := l.startPhaseSpan(ctx, run, "agenticrun.terminal",
+	spanCtx, span := l.startPhaseSpan(ctx, run, "agenticrun.terminal",
 		attribute.String("phase", phase),
 		attribute.String("reason", reason),
 	)
+	l.emitStructuredLog(spanCtx, "audit.agenticrun.terminal", map[string]interface{}{
+		"phase":  phase,
+		"reason": reason,
+	})
 	span.AddEvent("agenticrun.terminal", trace.WithAttributes(
 		attribute.String("agenticrun.name", run.Name),
 		attribute.String("phase", phase),
@@ -245,6 +321,13 @@ func (l *ProductionAuditLogger) EmitTerminalSpan(ctx context.Context, run *agent
 }
 
 func (l *ProductionAuditLogger) EmitAgenticRunReceived(ctx context.Context, run *agenticv1alpha1.AgenticRun) {
+	serialized, err := serializeCR(run)
+	if err != nil {
+		l.logger.Error("Failed to serialize AgenticRun for audit", zap.Error(err))
+	} else {
+		l.emitStructuredLog(ctx, "audit.agenticrun.received", map[string]interface{}{"run": serialized})
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -259,6 +342,13 @@ func (l *ProductionAuditLogger) EmitAgenticRunReceived(ctx context.Context, run 
 }
 
 func (l *ProductionAuditLogger) EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult) {
+	serialized, err := serializeCR(result)
+	if err != nil {
+		l.logger.Error("Failed to serialize AnalysisResult for audit", zap.Error(err))
+	} else {
+		l.emitStructuredLog(ctx, "audit.analysis.completed", map[string]interface{}{"analysisResult": serialized})
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -284,6 +374,13 @@ func (l *ProductionAuditLogger) EmitAnalysisCompleted(ctx context.Context, run *
 }
 
 func (l *ProductionAuditLogger) EmitExecutionCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.ExecutionResult) {
+	serialized, err := serializeCR(result)
+	if err != nil {
+		l.logger.Error("Failed to serialize ExecutionResult for audit", zap.Error(err))
+	} else {
+		l.emitStructuredLog(ctx, "audit.execution.completed", map[string]interface{}{"executionResult": serialized})
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -309,6 +406,13 @@ func (l *ProductionAuditLogger) EmitExecutionCompleted(ctx context.Context, run 
 }
 
 func (l *ProductionAuditLogger) EmitVerificationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult) {
+	serialized, err := serializeCR(result)
+	if err != nil {
+		l.logger.Error("Failed to serialize VerificationResult for audit", zap.Error(err))
+	} else {
+		l.emitStructuredLog(ctx, "audit.verification.completed", map[string]interface{}{"verificationResult": serialized})
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -334,6 +438,16 @@ func (l *ProductionAuditLogger) EmitVerificationCompleted(ctx context.Context, r
 }
 
 func (l *ProductionAuditLogger) EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int) {
+	serialized, err := serializeCR(result)
+	if err != nil {
+		l.logger.Error("Failed to serialize VerificationResult for audit retry", zap.Error(err))
+	} else {
+		l.emitStructuredLog(ctx, "audit.verification.retry", map[string]interface{}{
+			"verificationResult": serialized,
+			"retryCount":         retryCount,
+		})
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return
@@ -349,6 +463,13 @@ func (l *ProductionAuditLogger) EmitVerificationRetry(ctx context.Context, run *
 }
 
 func (l *ProductionAuditLogger) EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult) {
+	serialized, err := serializeCR(result)
+	if err != nil {
+		l.logger.Error("Failed to serialize EscalationResult for audit", zap.Error(err))
+	} else {
+		l.emitStructuredLog(ctx, "audit.escalation.completed", map[string]interface{}{"escalationResult": serialized})
+	}
+
 	span := trace.SpanFromContext(ctx)
 	if span == nil || !span.IsRecording() {
 		return

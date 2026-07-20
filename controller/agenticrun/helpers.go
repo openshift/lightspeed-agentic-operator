@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 	"text/template"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -36,7 +37,12 @@ const (
 	ErrGetAnalysisResult         = "get AnalysisResult"
 	ErrTrimAnalysisResultOptions = "trim AnalysisResult options"
 
-	rbacCleanupFinalizer = "agentic.openshift.io/execution-rbac-cleanup"
+	rbacCleanupFinalizer    = "agentic.openshift.io/execution-rbac-cleanup"
+	templogCleanupFinalizer = "agentic.openshift.io/templog-cleanup"
+
+	templogCleanupAttemptsAnnotation = "agentic.openshift.io/templog-cleanup-attempts"
+	templogMaxCleanupAttempts        = 3
+	templogCleanupRequeueAfter       = 30 * time.Second
 
 	reasonInProgress        = "InProgress"
 	reasonComplete          = "Complete"
@@ -71,17 +77,6 @@ func isSuspended(ctx context.Context, c client.Client) (bool, error) {
 		return false, err
 	}
 	return config.Spec.Suspended, nil
-}
-
-func readAuditConfig(ctx context.Context, c client.Client) (*agenticv1alpha1.AuditConfig, error) {
-	var config agenticv1alpha1.AgenticOLSConfig
-	if err := c.Get(ctx, client.ObjectKey{Name: "cluster"}, &config); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &config.Spec.Audit, nil
 }
 
 // failStep marks a step as failed and creates a failure result CR.

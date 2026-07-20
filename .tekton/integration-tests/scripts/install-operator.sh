@@ -72,6 +72,18 @@ subjects:
   namespace: ${OPERATOR_NAMESPACE}
 EOF
 
+# Create empty telemetry ConfigMap (no real Collector in test environment).
+# Presence unblocks startup; empty data disables OTLP export (IsValid=false).
+echo "Creating telemetry ConfigMap (empty for e2e)..."
+oc apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lightspeed-otel-collector-client
+  namespace: ${OPERATOR_NAMESPACE}
+data: {}
+EOF
+
 # Wait for rollout.
 echo "Waiting for operator rollout..."
 oc rollout status deployment/controller-manager -n "${OPERATOR_NAMESPACE}" --timeout=120s

@@ -3,6 +3,7 @@ package agenticrun
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -507,5 +509,215 @@ func TestHandleSuspension(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Templog cleanup finalizer
+// ---------------------------------------------------------------------------
+
+type mockTempLogCleaner struct {
+	err       error
+	callCount int
+}
+
+func (m *mockTempLogCleaner) DeleteLogs(_ context.Context, _ string) error {
+	m.callCount++
+	return m.err
+}
+
+func TestTemplogCleanup_HappyPath(t *testing.T) {
+	now := metav1.Now()
+	run := testAgenticRun()
+	run.UID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	run.DeletionTimestamp = &now
+	run.Finalizers = []string{templogCleanupFinalizer}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
+		WithStatusSubresource(run).Build()
+
+	cleaner := &mockTempLogCleaner{}
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default", TempLog: cleaner}
+
+	reconcileOnce(r, "fix-crash")
+
+	var updated agenticv1alpha1.AgenticRun
+	_ = fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated)
+
+	if controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
+		t.Error("templog finalizer should be removed after successful cleanup")
+	}
+	if cleaner.callCount != 1 {
+		t.Errorf("DeleteLogs called %d times, want 1", cleaner.callCount)
+	}
+}
+
+func TestTemplogCleanup_RetryOnFailure(t *testing.T) {
+	now := metav1.Now()
+	run := testAgenticRun()
+	run.UID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	run.DeletionTimestamp = &now
+	run.Finalizers = []string{templogCleanupFinalizer}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
+		WithStatusSubresource(run).Build()
+
+	cleaner := &mockTempLogCleaner{err: fmt.Errorf("collector unavailable")}
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default", TempLog: cleaner}
+
+	result, _ := reconcileOnce(r, "fix-crash")
+	if result.RequeueAfter != templogCleanupRequeueAfter {
+		t.Errorf("RequeueAfter = %v, want %v", result.RequeueAfter, templogCleanupRequeueAfter)
+	}
+
+	var updated agenticv1alpha1.AgenticRun
+	_ = fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated)
+
+	if !controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
+		t.Error("finalizer should still be present after failed attempt")
+	}
+	if updated.Annotations[templogCleanupAttemptsAnnotation] != "1" {
+		t.Errorf("attempts annotation = %q, want '1'", updated.Annotations[templogCleanupAttemptsAnnotation])
+	}
+}
+
+func TestTemplogCleanup_ExhaustedRetries(t *testing.T) {
+	now := metav1.Now()
+	run := testAgenticRun()
+	run.UID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	run.DeletionTimestamp = &now
+	run.Finalizers = []string{templogCleanupFinalizer}
+	run.Annotations = map[string]string{
+		templogCleanupAttemptsAnnotation: "3",
+	}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
+		WithStatusSubresource(run).Build()
+
+	cleaner := &mockTempLogCleaner{err: fmt.Errorf("still failing")}
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default", TempLog: cleaner}
+
+	reconcileOnce(r, "fix-crash")
+
+	var updated agenticv1alpha1.AgenticRun
+	_ = fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated)
+
+	if controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
+		t.Error("finalizer should be removed after exhausting retries")
+	}
+	if cleaner.callCount != 0 {
+		t.Errorf("DeleteLogs should not be called when retries exhausted, got %d calls", cleaner.callCount)
+	}
+}
+
+func TestTemplogCleanup_InvalidAttemptsAnnotationResets(t *testing.T) {
+	now := metav1.Now()
+	run := testAgenticRun()
+	run.UID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	run.DeletionTimestamp = &now
+	run.Finalizers = []string{templogCleanupFinalizer}
+	run.Annotations = map[string]string{
+		templogCleanupAttemptsAnnotation: "not-a-number",
+	}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
+		WithStatusSubresource(run).Build()
+
+	cleaner := &mockTempLogCleaner{}
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default", TempLog: cleaner}
+
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cleaner.callCount != 1 {
+		t.Errorf("DeleteLogs called %d times, want 1 (invalid annotation must not skip cleanup)", cleaner.callCount)
+	}
+}
+
+func TestReconcile_AddsFinalizersOnTerminalRun(t *testing.T) {
+	run := testAgenticRun()
+	run.Status.Conditions = []metav1.Condition{{
+		Type:   agenticv1alpha1.AgenticRunConditionVerified,
+		Status: metav1.ConditionTrue,
+		Reason: "Complete",
+	}}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
+		WithStatusSubresource(run).Build()
+
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var updated agenticv1alpha1.AgenticRun
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(&updated, rbacCleanupFinalizer) {
+		t.Error("rbac finalizer should be added on first sight of terminal run")
+	}
+	if !controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
+		t.Error("templog finalizer should be added on first sight of terminal run")
+	}
+}
+
+func TestDeletion_RequeuesAfterRBACFinalizerBeforeTemplog(t *testing.T) {
+	now := metav1.Now()
+	run := testAgenticRun()
+	run.UID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	run.DeletionTimestamp = &now
+	run.Finalizers = []string{rbacCleanupFinalizer, templogCleanupFinalizer}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
+		WithStatusSubresource(run).Build()
+
+	cleaner := &mockTempLogCleaner{}
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default", TempLog: cleaner}
+
+	result, err := reconcileOnce(r, "fix-crash")
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	if !result.Requeue {
+		t.Error("expected requeue after removing rbac finalizer")
+	}
+	if cleaner.callCount != 0 {
+		t.Errorf("DeleteLogs should not run until next reconcile, got %d calls", cleaner.callCount)
+	}
+
+	var updated agenticv1alpha1.AgenticRun
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated); err != nil {
+		t.Fatalf("get after first reconcile: %v", err)
+	}
+	if controllerutil.ContainsFinalizer(&updated, rbacCleanupFinalizer) {
+		t.Error("rbac finalizer should be removed")
+	}
+	if !controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
+		t.Error("templog finalizer should still be present")
+	}
+
+	result, err = reconcileOnce(r, "fix-crash")
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Errorf("expected no requeue after templog cleanup, got %+v", result)
+	}
+	if cleaner.callCount != 1 {
+		t.Errorf("DeleteLogs called %d times, want 1", cleaner.callCount)
+	}
+	err = fc.Get(context.Background(), types.NamespacedName{Name: "fix-crash", Namespace: "default"}, &updated)
+	if client.IgnoreNotFound(err) != nil {
+		t.Fatalf("get after second reconcile: %v", err)
+	}
+	if err == nil && controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
+		t.Error("templog finalizer should be removed after cleanup")
 	}
 }
