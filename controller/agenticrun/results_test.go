@@ -191,6 +191,78 @@ func TestCreateIdempotent_AlreadyExists_OverwritesStaleFailure(t *testing.T) {
 	}
 }
 
+// TestCreateAnalysisResult_EmptyTopLevelDiagnosis reproduces OLS-3654:
+// when the agent returns a top-level diagnosis with empty summary or
+// rootCause, the CRD's MinLength=1 rejects the status patch.
+func TestCreateAnalysisResult_EmptyTopLevelDiagnosis(t *testing.T) {
+	cases := []struct {
+		name      string
+		diagnosis *agenticv1alpha1.DiagnosisResult
+	}{
+		{"both empty", &agenticv1alpha1.DiagnosisResult{Confidence: agenticv1alpha1.ConfidenceLevelLow, RootCause: "", Summary: ""}},
+		{"summary only empty", &agenticv1alpha1.DiagnosisResult{Confidence: agenticv1alpha1.ConfidenceLevelLow, RootCause: "some cause", Summary: ""}},
+		{"rootCause only empty", &agenticv1alpha1.DiagnosisResult{Confidence: agenticv1alpha1.ConfidenceLevelLow, RootCause: "", Summary: "some summary"}},
+		{"confidence empty", &agenticv1alpha1.DiagnosisResult{Confidence: "", RootCause: "some cause", Summary: "some summary"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := testScheme()
+			fc := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(&agenticv1alpha1.AnalysisResult{}).Build()
+
+			run := testAgenticRun()
+			run.UID = "test-uid"
+
+			actionRequired := true
+			result := &AnalysisOutput{
+				Success:        true,
+				ActionRequired: &actionRequired,
+				Diagnosis:      tc.diagnosis,
+				Options: []agenticv1alpha1.RemediationOption{{
+					Title: "Increase connection pool limits",
+					Diagnosis: agenticv1alpha1.DiagnosisResult{
+						Confidence: agenticv1alpha1.ConfidenceLevelHigh,
+						RootCause:  "reporting-service v1.0.2 opens a new PostgreSQL transaction every 10s",
+						Summary:    "PostgresqlTooManyConnections is firing in payments",
+					},
+					RemediationPlan: agenticv1alpha1.RemediationPlan{
+						Description: "Increase max_connections",
+						Actions:     []agenticv1alpha1.ProposedAction{{Command: "kubectl patch", Type: "patch", Description: "Patch configmap"}},
+						Risk:        agenticv1alpha1.RiskLevelLow,
+					},
+				}},
+			}
+
+			r := &AgenticRunReconciler{Client: fc}
+			startTime := metav1.Now()
+			completionTime := metav1.Now()
+			_, snapshot, err := r.createAnalysisResult(
+				context.Background(), run, result,
+				agenticv1alpha1.SandboxInfo{ClaimName: "test-sandbox", Namespace: "openshift-lightspeed"},
+				&startTime, &completionTime, "",
+			)
+			if err != nil {
+				t.Fatalf("createAnalysisResult: %v", err)
+			}
+
+			if snapshot.Status.Diagnosis.Summary != "" || snapshot.Status.Diagnosis.RootCause != "" || snapshot.Status.Diagnosis.Confidence != "" {
+				t.Errorf("expected zero-value diagnosis in status, got confidence=%q summary=%q rootCause=%q",
+					snapshot.Status.Diagnosis.Confidence,
+					snapshot.Status.Diagnosis.Summary,
+					snapshot.Status.Diagnosis.RootCause)
+			}
+
+			if len(snapshot.Status.Options) != 1 {
+				t.Fatalf("expected 1 option, got %d", len(snapshot.Status.Options))
+			}
+			if snapshot.Status.Options[0].Diagnosis.RootCause == "" {
+				t.Error("per-option diagnosis should be preserved")
+			}
+		})
+	}
+}
+
 func TestCreateIdempotent_ExecutionResult(t *testing.T) {
 	scheme := testScheme()
 	fc := fake.NewClientBuilder().WithScheme(scheme).

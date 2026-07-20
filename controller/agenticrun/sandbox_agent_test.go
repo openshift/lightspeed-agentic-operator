@@ -406,6 +406,57 @@ func TestSandboxAgentCaller_ExecutePassesApprovedOption(t *testing.T) {
 	}
 }
 
+// --- OLS-3654: empty top-level diagnosis parsing ---
+
+func TestSandboxAgentCaller_Analyze_EmptyTopLevelDiagnosis(t *testing.T) {
+	cases := []struct {
+		name      string
+		diagnosis string
+	}{
+		{"both empty", `{"confidence": "Low", "rootCause": "", "summary": ""}`},
+		{"summary only empty", `{"confidence": "Low", "rootCause": "some cause", "summary": ""}`},
+		{"rootCause only empty", `{"confidence": "Low", "rootCause": "", "summary": "some summary"}`},
+		{"confidence empty", `{"confidence": "", "rootCause": "some cause", "summary": "some summary"}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
+			httpClient := &mockHTTPClient{
+				response: &agentRunResponse{
+					Response: json.RawMessage(fmt.Sprintf(`{
+						"success": true,
+						"actionRequired": true,
+						"diagnosis": %s,
+						"options": [{
+							"title": "Increase connection pool limits",
+							"diagnosis": {"confidence": "High", "rootCause": "reporting-service opens too many connections", "summary": "PostgresqlTooManyConnections firing"},
+							"remediationPlan": {"description": "Increase limits", "actions": [{"command": "kubectl patch", "type": "patch", "description": "patch configmap"}], "risk": "Low"}
+						}]
+					}`, tc.diagnosis)),
+				},
+			}
+
+			caller := newTestSandboxAgentCaller(sandbox, httpClient)
+			result, err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "Too many connections", defaultSandboxSA)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if result.Diagnosis != nil {
+				t.Errorf("expected nil Diagnosis, got confidence=%q summary=%q rootCause=%q",
+					result.Diagnosis.Confidence, result.Diagnosis.Summary, result.Diagnosis.RootCause)
+			}
+			if len(result.Options) != 1 {
+				t.Fatalf("expected 1 option, got %d", len(result.Options))
+			}
+			if result.Options[0].Diagnosis.RootCause == "" {
+				t.Error("per-option diagnosis should be preserved")
+			}
+		})
+	}
+}
+
 // --- Per-phase query construction tests ---
 
 func TestSandboxAgentCaller_AnalysisQueryFraming(t *testing.T) {

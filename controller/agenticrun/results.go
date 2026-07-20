@@ -112,7 +112,7 @@ func (r *AgenticRunReconciler) createAnalysisResult(
 	if result != nil {
 		cr.Status.Options = result.Options
 		cr.Status.ActionRequired = agenticv1alpha1.ActionRequiredFromBool(result.IsActionRequired())
-		if result.Diagnosis != nil {
+		if result.Diagnosis != nil && result.Diagnosis.Summary != "" && result.Diagnosis.RootCause != "" && result.Diagnosis.Confidence != "" {
 			cr.Status.Diagnosis = *result.Diagnosis
 		}
 	}

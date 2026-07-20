@@ -102,6 +102,11 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.A
 		}
 	}
 
+	if resp.Diagnosis != nil && (resp.Diagnosis.Summary == "" || resp.Diagnosis.RootCause == "" || resp.Diagnosis.Confidence == "") {
+		log.Info("ignoring empty top-level diagnosis (per-option diagnoses used instead)", "run", run.Name)
+		resp.Diagnosis = nil
+	}
+
 	actionRequired := resp.ActionRequired == nil || *resp.ActionRequired
 	if resp.Diagnosis == nil && !actionRequired {
 		log.Error(nil, "analysis response missing diagnosis for no-action-required result", "run", run.Name)
