@@ -12,6 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"k8s.io/utils/ptr"
+
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
@@ -60,7 +62,8 @@ func (m *BarePodManager) SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alp
 // Claim creates a bare Pod for the given run step. The templateName
 // parameter is ignored (bare pods use PodSpecBuilder instead of templates).
 // Returns the pod name. Idempotent: returns the name if the pod already exists.
-func (m *BarePodManager) Claim(ctx context.Context, agenticRunName, step, _ string) (string, error) {
+func (m *BarePodManager) Claim(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, _ string) (string, error) {
+	agenticRunName := run.Name
 	log := logf.FromContext(ctx)
 
 	podName := truncateK8sName(fmt.Sprintf("ls-%s-%s", step, agenticRunName))
@@ -83,6 +86,15 @@ func (m *BarePodManager) Claim(ctx context.Context, agenticRunName, step, _ stri
 		},
 		Spec: *podSpec,
 	}
+
+	pod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion:         agenticv1alpha1.GroupVersion.String(),
+		Kind:               "AgenticRun",
+		Name:               run.Name,
+		UID:                run.UID,
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
+	}}
 
 	if err := m.Client.Create(ctx, pod); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
@@ -136,8 +148,15 @@ func (m *BarePodManager) WaitReady(ctx context.Context, podName string, timeout 
 
 			var pod corev1.Pod
 			if err := m.Client.Get(ctx, key, &pod); err != nil {
-				log.V(1).Info("Waiting for pod", LogKeyName, podName)
+				if apierrors.IsNotFound(err) {
+					return "", fmt.Errorf("pod %q was deleted while waiting for readiness", podName)
+				}
+				log.V(1).Info("Waiting for pod", LogKeyName, podName, "error", err)
 				continue
+			}
+
+			if !pod.DeletionTimestamp.IsZero() {
+				return "", fmt.Errorf("pod %q is terminating, will not become ready", podName)
 			}
 
 			for _, cond := range pod.Status.Conditions {

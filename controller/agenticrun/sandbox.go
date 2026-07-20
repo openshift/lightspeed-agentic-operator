@@ -41,7 +41,7 @@ var (
 // SandboxProvider abstracts sandbox lifecycle for testability.
 type SandboxProvider interface {
 	SetStep(agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, serviceAccount string)
-	Claim(ctx context.Context, agenticRunName, step, templateName string) (claimName string, err error)
+	Claim(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, templateName string) (claimName string, err error)
 	WaitReady(ctx context.Context, claimName string, timeout time.Duration) (endpoint string, err error)
 	Release(ctx context.Context, claimName string) error
 }
@@ -96,7 +96,8 @@ func (m *SandboxManager) buildClaim(claimName, agenticRunName, step, templateNam
 	}
 }
 
-func (m *SandboxManager) Claim(ctx context.Context, agenticRunName, step, _ string) (string, error) {
+func (m *SandboxManager) Claim(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, _ string) (string, error) {
+	agenticRunName := run.Name
 	log := logf.FromContext(ctx)
 
 	templateName, err := EnsureAgentTemplate(ctx, m.Client, m.BaseTemplateName, m.Namespace, step, m.agent, m.llm, m.tools, m.serviceAccount)
