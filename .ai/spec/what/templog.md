@@ -19,22 +19,23 @@ Implementation details for the agentic-operator's role in the templog feature.
 6. When the Collector is configured, the agentic-operator emits audit events as OTLP log records to it. When disabled or unconfigured, OTLP emission is a no-op. Whether records are stored depends on the Collector's pipeline configuration (managed by the lightspeed-operator).
 7. Structured JSON to stdout always emits unconditionally. Stdout emission is not configurable — it is always on. This is dual emission: stdout + OTLP (when enabled).
 8. Each OTLP log record carries:
-   - `trace_id` in the log record's trace context (AgenticRun `metadata.uid`, hyphens stripped, 32-char hex)
+   - `agenticrun.uid` as a log record attribute (AgenticRun `metadata.uid`, raw UUID with hyphens — collector normalizes to 32-char hex on INSERT)
+   - `agenticrun.phase` as a log record attribute (the current audit phase: `analysis`, `approval`, `execution`, `verification`, `escalation`, `terminal`)
    - `event` as a log record attribute (the event discriminator, e.g., `audit.agenticrun.received`)
    - The full structured JSON audit event as the log record body
 9. When the Collector is not configured (ConfigMap absent at runtime after initial startup), OTLP log emission is a no-op. Stdout continues unaffected.
 
 ### OTLP Trace Emission
 
-10. The same ConfigMap-configured OTLP connection is used for trace spans (agenticrun.lifecycle root, phase children). Traces and logs share the same endpoint and TLS configuration.
-11. The AgenticRun UID (hyphens stripped) is used as the deterministic trace ID for all spans and log records belonging to a run.
+10. The same ConfigMap-configured OTLP connection is used for trace spans (per-phase root spans). Traces and logs share the same endpoint and TLS configuration.
+11. The `agenticrun.uid` log attribute stores the raw Kubernetes `metadata.uid` (with hyphens). The collector's `postgresexporter` normalizes it (strips hyphens) when writing to the `agentic_run_id` column. The OTel log record's native `TraceID` field carries the per-phase trace ID and is not used for templog column mapping.
 12. Trace context is propagated to sandbox pods via the W3C `traceparent` header on agent HTTP calls.
 
 ### AgenticRun Finalizer
 
 13. The `agentic.openshift.io/templog-cleanup` (and RBAC cleanup) finalizers are added the first time the controller reconciles any non-deleting AgenticRun — including already-terminal runs — so TTL or manual delete always runs Collector log cleanup.
 14. When an AgenticRun CR is deleted and the finalizer is present:
-    a. The operator calls the Collector admin API: `DELETE /api/v1/logs?trace_id=<uid-without-hyphens>` over HTTPS using the CA cert from the ConfigMap.
+    a. The operator calls the Collector admin API: `DELETE /api/v1/logs?agentic_run_id=<uid>` over HTTPS using the CA cert from the ConfigMap. The raw Kubernetes UID (with hyphens) is passed; the collector normalizes internally.
     b. On success, removes the finalizer — CR deletion proceeds.
     c. On failure, increments a retry counter annotation (`agentic.openshift.io/templog-cleanup-attempts`) and requeues after 30 seconds.
     d. After 3 failed attempts, removes the finalizer regardless — CR deletion proceeds. A warning is logged about orphaned log records.

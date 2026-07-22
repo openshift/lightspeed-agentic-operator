@@ -63,3 +63,4 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 | OLS-2957 | Sandbox template management UX and CRD ergonomics may change operator/template coupling |
 | OLS-2940 | Autonomous workflow CRD migrations may rename or reshape `v1alpha1` fields |
 | OLS-3236 | Remove `controller/console/` package and `--agentic-console-image` flag. Console plugin and alerts adapter deployment moves to lightspeed-operator. |
+| OLS-3572 | Inter-operator config handoff: read base PodSpec from `lightspeed-sandbox-config` ConfigMap (produced by lightspeed-operator). Deprecate `--sandbox-mode` flag in favor of ConfigMap-provided mode. Fail hard if ConfigMap missing. |

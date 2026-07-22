@@ -113,7 +113,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 28. When the OTLP log endpoint environment variable is set (wired by the lightspeed-operator when `spec.templog` is enabled), the operator MUST also emit audit span data as OTLP log records to that endpoint. This is in addition to the stdout and OTLP trace exporters.
 
-29. Each OTLP log record MUST carry: `trace_id` in the log record's trace context (the current phase trace's auto-generated trace ID), `agenticrun.uid` as a log record attribute (for cross-trace correlation), and the span event data as the log record body.
+29. Each OTLP log record MUST carry: `agenticrun.uid` as a log record attribute (raw Kubernetes `metadata.uid` with hyphens — collector normalizes to 32-char hex for the `agentic_run_id` column), `agenticrun.phase` as a log record attribute (the current audit phase: `analysis`, `approval`, `execution`, `verification`, `escalation`, `terminal`), and the span event data as the log record body. The OTel log record's native `TraceID` field carries the per-phase trace ID and is not used by the collector for templog column mapping.
 
 30. OTLP logs and traces share the same Collector endpoint (from ConfigMap). Both are always active when the Collector is configured.
 
@@ -123,7 +123,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 32. When a new AgenticRun CR is created and templog is enabled (read from an environment variable set by the lightspeed-operator), the operator MUST add the finalizer `agentic.openshift.io/templog-cleanup` to the AgenticRun.
 
-33. On AgenticRun deletion, if the `agentic.openshift.io/templog-cleanup` finalizer is present, the operator MUST connect to PostgreSQL and execute `DELETE FROM templogs.logs WHERE trace_id = $1`. On success, remove the finalizer. On failure, block deletion and requeue with exponential backoff.
+33. On AgenticRun deletion, if the `agentic.openshift.io/templog-cleanup` finalizer is present, the operator MUST call the Collector admin API: `DELETE /api/v1/logs?agentic_run_id=<uid>` passing the raw Kubernetes UID (with hyphens; collector normalizes internally). On success, remove the finalizer. On failure, block deletion and requeue with exponential backoff.
 
 34. The finalizer does not depend on the Collector being present — it connects directly to PostgreSQL. See `templog.md` for edge cases.
 
