@@ -188,6 +188,12 @@ spec:
                 value: "/credentials/$(steps.get-kubeconfig.results.kubeconfig)"
               - name: NAMESPACE
                 value: "$(params.namespace)"
+              - name: COMMIT
+                value: "$(steps.extract-images.results.commit)"
+              - name: IMG
+                value: "$(steps.extract-images.results.operator-image)"
+              - name: SANDBOX_IMAGE
+                value: "$(steps.extract-images.results.sandbox-image)"
             image: registry.redhat.io/openshift4/ose-cli:latest
             script: |
               set -euo pipefail
@@ -195,12 +201,12 @@ spec:
 
               git clone --depth=1 https://github.com/openshift/lightspeed-agentic-operator.git /workspace/repo
               cd /workspace/repo
-              git fetch --depth=1 origin "$(steps.extract-images.results.commit)"
-              git checkout "$(steps.extract-images.results.commit)"
+              git fetch --depth=1 origin "${COMMIT}"
+              git checkout "${COMMIT}"
 
-              IMG="$(steps.extract-images.results.operator-image)" \
+              IMG="${IMG}" \
               OPERATOR_NAMESPACE="${NAMESPACE}" \
-              SANDBOX_IMAGE="$(steps.extract-images.results.sandbox-image)" \
+              SANDBOX_IMAGE="${SANDBOX_IMAGE}" \
               bash .tekton/integration-tests/scripts/install-operator.sh
           - name: run-product-e2e
             resources:
