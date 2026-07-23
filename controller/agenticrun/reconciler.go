@@ -130,16 +130,18 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		agenticv1alpha1.AgenticRunPhaseDenied,
 		agenticv1alpha1.AgenticRunPhaseEscalated,
 		agenticv1alpha1.AgenticRunPhaseEmergencyStopped:
-		if hasSandboxClaims(&run) {
-			if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
-				log.Error(err, "sandbox cleanup failed at terminal phase")
+		if !needsRevision(&run) {
+			if hasSandboxClaims(&run) {
+				if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
+					log.Error(err, "sandbox cleanup failed at terminal phase")
+				}
 			}
+			if r.Audit != nil {
+				r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
+				r.Audit.Cleanup(&run)
+			}
+			return ctrl.Result{}, nil
 		}
-		if r.Audit != nil {
-			r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
-			r.Audit.Cleanup(&run)
-		}
-		return ctrl.Result{}, nil
 
 	case agenticv1alpha1.AgenticRunPhaseFailed:
 		return r.handleFailed(ctx, &run)
@@ -209,7 +211,11 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		return r.handleEscalation(ctx, &run, resolved, approval, policy)
 
-	case agenticv1alpha1.AgenticRunPhaseNoActionRequired:
+	case agenticv1alpha1.AgenticRunPhaseNoActionRequired,
+		agenticv1alpha1.AgenticRunPhaseCompleted,
+		agenticv1alpha1.AgenticRunPhaseDenied,
+		agenticv1alpha1.AgenticRunPhaseEscalated,
+		agenticv1alpha1.AgenticRunPhaseEmergencyStopped:
 		if needsRevision(&run) {
 			return r.handleRevision(ctx, &run, resolved)
 		}
