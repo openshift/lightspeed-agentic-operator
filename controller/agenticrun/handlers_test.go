@@ -723,16 +723,16 @@ func TestReconcile_RevisionFromCompleted(t *testing.T) {
 	// Submit revision on the completed run
 	reviseAgenticRun(t, fc, "fix-crash", "re-analyse with different focus")
 
-	// Reconcile 2: Completed → revision → Proposed
+	// Reconcile 3: Completed → revision → Proposed
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
-		t.Fatalf("reconcile 2 (revision from Completed): %v", err)
+		t.Fatalf("reconcile 3 (revision from Completed): %v", err)
 	}
 	p, _ = getAgenticRun(r, "fix-crash")
 	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseProposed {
 		t.Fatalf("expected Proposed after revision from Completed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
 	}
-	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration == 0 {
-		t.Fatal("observedGeneration not set after revision from Completed")
+	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration != p.Generation {
+		t.Fatalf("expected observedGeneration to equal current generation %d after revision from Completed", p.Generation)
 	}
 }
 
