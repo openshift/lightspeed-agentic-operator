@@ -26,7 +26,7 @@ require (
 )
 
 require (
-	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-openapi/swag/cmdutils v0.27.3 // indirect
 	github.com/go-openapi/swag/conv v0.27.3 // indirect
 	github.com/go-openapi/swag/fileutils v0.27.3 // indirect
