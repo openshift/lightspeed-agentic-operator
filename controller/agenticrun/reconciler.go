@@ -155,7 +155,9 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 
 	case agenticv1alpha1.AgenticRunPhaseFailed:
-		return r.handleFailed(ctx, &run)
+		if !(run.Spec.Execution.IsZero() && needsRevision(&run)) {
+			return r.handleFailed(ctx, &run)
+		}
 	}
 
 	// --- Suspension guard (non-terminal runs and advisory-only Completed runs needing revision reach here) ---
@@ -228,7 +230,8 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		return ctrl.Result{}, nil
 
-	case agenticv1alpha1.AgenticRunPhaseCompleted:
+	case agenticv1alpha1.AgenticRunPhaseCompleted,
+		agenticv1alpha1.AgenticRunPhaseFailed:
 		if run.Spec.Execution.IsZero() && needsRevision(&run) {
 			return r.handleRevision(ctx, &run, resolved)
 		}
