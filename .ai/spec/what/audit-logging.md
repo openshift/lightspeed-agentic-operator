@@ -99,11 +99,11 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 ### Configuration
 
-23. The operator reads audit config from the `AgenticOLSConfig` CR at `spec.audit`.
+23. [PLANNED -- spec.audit field not yet in AgenticOLSConfig CRD; see crd-api.md] The operator reads audit config from the `AgenticOLSConfig` CR at `spec.audit`.
 
-24. `spec.audit.enabled` controls whether audit emission is active. Defaults to `true` — when the CR is absent or the field is not set, audit is enabled. Set to `false` to disable all audit emission (both stdout and OTLP exporters).
+24. [PLANNED -- spec.audit field not yet in AgenticOLSConfig CRD; see crd-api.md] `spec.audit.enabled` controls whether audit emission is active. Defaults to `true` — when the CR is absent or the field is not set, audit is enabled. Set to `false` to disable all audit emission (both stdout and OTLP exporters).
 
-25. When audit is enabled, the stdout exporter always emits OTLP JSON to stdout. This is what any log aggregator (Loki, Splunk, Fluentd, etc.) reads from container logs.
+25. When audit is enabled (`spec.audit.enabled` is `true` or absent), the stdout exporter always emits OTLP JSON to stdout. When `spec.audit.enabled` is `false`, the stdout exporter produces no output. This is what any log aggregator (Loki, Splunk, Fluentd, etc.) reads from container logs.
 
 26. The OTLP exporter endpoint is sourced from the `lightspeed-otel-collector-client` ConfigMap (field `collector-endpoint`). The operator blocks at startup until this ConfigMap exists (5 min timeout, fatal on expiry). Runtime changes to the ConfigMap reconfigure the exporter without restart. The OTLP exporter is additive — it provides distributed tracing and log persistence alongside the stdout compliance record.
 
@@ -125,7 +125,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 33. On AgenticRun deletion, if the `agentic.openshift.io/templog-cleanup` finalizer is present, the operator MUST call the Collector admin API: `DELETE /api/v1/logs?agentic_run_id=<uid>` passing the raw Kubernetes UID (with hyphens; collector normalizes internally). On success, remove the finalizer. On failure, block deletion and requeue with exponential backoff.
 
-34. The finalizer does not depend on the Collector being present — it connects directly to PostgreSQL. See `templog.md` for edge cases.
+34. The finalizer calls the Collector admin API (`DELETE /api/v1/logs?agentic_run_id=<uid>`) to delete all temporary log entries for the run. The finalizer depends on the Collector admin API being reachable. Retry on failure with a 30-second interval, up to 3 attempts total, before blocking the run's deletion. See `templog.md` for edge cases.
 
 ## Cross-References
 

@@ -87,4 +87,4 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 - [PLANNED: future] Additional config fields (e.g., system-wide defaults, feature gates) can be added to the `AgenticOLSConfig` spec as needed.
 - [PLANNED: OLS-3267] Admission-time run blocking via `ValidatingAdmissionPolicy` with `paramRef` to reject `AgenticRun` creation at the API server when suspended. See spike OLS-3166 for design. VAP/binding lifecycle mechanism deferred to OLS-3302.
 - [PLANNED: OLS-3267] Sandbox pod isolation on suspension — isolate running sandbox pods without deleting them for post-incident forensics. Blocked on durable sandbox pod log mechanism (separate RFE).
-- [PLANNED: OLS-3295] Rename `AgenticRun` references to `AgenticRun` in kill switch logic, CLI commands, and console display.
+- [DONE: OLS-3295] Renamed `Proposal` references to `AgenticRun` in kill switch logic, CLI commands, and console display.
