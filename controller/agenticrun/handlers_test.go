@@ -682,6 +682,110 @@ func TestReconcile_RevisionWithFeedback(t *testing.T) {
 	}
 }
 
+func TestReconcile_RevisionFromCompleted(t *testing.T) {
+	scheme := testScheme()
+	// Advisory-only run (no Execution/Verification) reaches Completed in one reconcile
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request:          "Investigate issue",
+			Tools:            testTools(),
+			TargetNamespaces: []string{"production"},
+			Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "default"},
+		},
+	}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
+
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
+
+	// Reconcile 1: Pending → Proposed (analysis complete)
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+	p, _ := getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseProposed {
+		t.Fatalf("expected Proposed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+
+	// Approve and reconcile 2: Proposed → Completed (advisory-only, no execution)
+	approveAgenticRun(t, fc, "fix-crash")
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+	p, _ = getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseCompleted {
+		t.Fatalf("expected Completed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+
+	// Submit revision on the completed run
+	reviseAgenticRun(t, fc, "fix-crash", "re-analyse with different focus")
+
+	// Reconcile 3: Completed → revision → Proposed
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 3 (revision from Completed): %v", err)
+	}
+	p, _ = getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseProposed {
+		t.Fatalf("expected Proposed after revision from Completed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration != p.Generation {
+		t.Fatalf("expected observedGeneration to equal current generation %d after revision from Completed", p.Generation)
+	}
+}
+
+func TestReconcile_RevisionFromFailed(t *testing.T) {
+	agent := newTestAgentCaller()
+	scheme := testScheme()
+
+	// Advisory-only run
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request:          "Investigate issue",
+			Tools:            testTools(),
+			TargetNamespaces: []string{"production"},
+			Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "default"},
+		},
+	}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
+
+	r := &AgenticRunReconciler{Client: fc, Agent: agent, Namespace: "default"}
+
+	// Make analysis fail
+	agent.analyzeErr = fmt.Errorf("LLM timeout")
+
+	// Reconcile 1: Pending → Failed
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+	p, _ := getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed {
+		t.Fatalf("expected Failed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+
+	// Fix the agent and submit revision
+	agent.analyzeErr = nil
+	reviseAgenticRun(t, fc, "fix-crash", "retry after timeout")
+
+	// Reconcile 2: Failed → revision → Proposed
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 2 (revision from Failed): %v", err)
+	}
+	p, _ = getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseProposed {
+		t.Fatalf("expected Proposed after revision from Failed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration != p.Generation {
+		t.Fatalf("expected observedGeneration to equal current generation %d after revision from Failed", p.Generation)
+	}
+}
+
 func TestReconcile_ExecutionRBACCreatedOnApproval(t *testing.T) {
 	agent := newTestAgentCaller()
 	agent.analyzeResult = &AnalysisOutput{
