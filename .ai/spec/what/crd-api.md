@@ -26,32 +26,32 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 20. **LLMProvider — discriminator**: `spec.type` MUST match exactly one embedded config: `anthropic`, `googleCloudVertex`, `openAI`, `azureOpenAI`, or `awsBedrock`; CEL enforces mutual exclusion.
 21. **LLMProvider — secrets**: Each provider’s `credentialsSecret` references a `Secret` **by name** in the operator namespace (documented on fields as the deployment namespace for the operator, e.g. OpenShift Lightspeed namespace); required secret **keys** are defined per provider type on the API field comments (e.g. API key env file key names).
 22. **LLMProvider — endpoints**: Optional URL overrides per provider; validation enforces HTTP/HTTPS URL shape. Azure requires `endpoint`; optional separate URL override field exists where defined.
-22. **ApprovalPolicy — singleton name**: CRD validation requires `metadata.name` equals `cluster`.
-23. **ApprovalPolicy — `spec.stages`**: Optional list keyed by `name` (`SandboxStep`). Each entry sets `approval` to `Automatic` or `Manual`. Stages not listed default to **Manual** per API comments.
-24. **ApprovalPolicy — `spec.maxAttempts`**: Upper bound for execution attempts (initial + retries) when verification fails; default behavior when unset is defined in controller (see `approval.md`).
-25. **ApprovalPolicy — `spec.maxConcurrentRuns`**: Caps concurrent reconciles when positive; operator falls back to a default constant when unset.
-26. **AgenticRunApproval — pairing**: For each `AgenticRun`, the controller MUST create (if missing) a same-named `AgenticRunApproval` in the same namespace with controller owner reference to the `AgenticRun`.
-27. **AgenticRunApproval — `spec.stages`**: Append-only map list keyed by `type` (`ApprovalStageType`). Each stage carries a discriminated union: exactly one of `analysis`, `execution`, `verification`, `escalation` MUST be present matching `type`. Optional `decision` may be `Approved` (default when omitted) or `Denied`; `Denied` is terminal per API rules.
-28. **AgenticRunApproval — immutability CEL**: Stages cannot be removed; decisions cannot change once set; execution `maxAttempts` cannot decrease once set.
-29. **Execution approval fields**: `spec.stages[].execution.option` selects 0-based analysis option index; `maxAttempts` caps attempts but MUST NOT exceed policy `maxAttempts`; `agent` overrides the `AgenticRun` step’s agent when set.
-30. **AnalysisResult**: `spec.agenticRunName` immutable; `status.options` holds `RemediationOption` entries; `status.sandbox` and `status.failureReason` optional; conditions use shared result condition types. [PLANNED: OLS-3268] `status.actionRequired` (bool) indicates whether remediation is needed; `status.diagnosis` (top-level `DiagnosisResult`: summary, confidence, rootCause) captures the agent's explanation when no action is required. When `actionRequired` is false, `status.options` may be empty (`minItems: 0`).
-31. **ExecutionResult**: Adds `spec.retryIndex` (bound to allowed retry range per field validation); `status.actionsTaken`, `status.verification` (inline), optional `failureReason`, `sandbox`.
-32. **VerificationResult**: `spec.retryIndex` parallels execution for the same attempt cluster; `status.checks`, `status.summary`, optional `failureReason`, `sandbox`.
-33. **EscalationResult**: `status.summary`, `status.content`, optional `failureReason`, `sandbox`; no `retryIndex`.
-34. **RemediationOption**: Cohesion rules require `diagnosis` and `remediationPlan` to be paired when present; `components` holds schemaless JSON for adapter data shaped by `spec.analysisOutput.schema`. Each action in `remediationPlan.actions` includes `command` (required, 1-4096 chars, exact bash command using kubectl/oc), `type` (required, 1-256 chars, phase category: pre-check, mutation, wait, post-check), and `description` (required, 1-4096 chars). All three fields are required on `ProposedAction`. [OLS-3441]
-35. **RBACResult / RBACRule**: Analysis MAY request namespace-scoped and cluster-scoped rules with verb/apigroup/resource metadata and mandatory `justification`; `namespace` on rules MUST align with run targeting rules (validated at runtime by policy engine per field comments).
-36. **ToolsSpec**: MAY include `skills` (unique images), `mcpServers` (unique names), and `requiredSecrets` (unique names). `SkillsSource.image` MUST be a valid pullspec; optional `paths` restrict mounted subtrees.
-36a. [PLANNED: OLS-3594] **ToolsSpec — `disableDefaultMCP`**: Deferred with default ocp-mcp auto-injection. Not part of the current API. If auto-injection is later adopted, an opt-out field may be added; details land with that implementation.
-37. **SecretRequirement**: Names a namespace-local `Secret`; `mountAs` discriminates `EnvVar` vs `FilePath` with required nested config per type.
-38. **MCPHeaderValueSource**: Discriminated by `type`; `Secret` requires nested `secret` name reference.
-39. **Result CR ownership**: Result CRs MUST declare controller `ownerReferences` to their `AgenticRun` for GC; naming follows operator conventions (see `sandbox-execution.md` for when they are created).
-40. **Label conventions**: Operator uses labels for run name, step, component, and managed template markers (exact keys are implementation-specific; behavior: selectors for GC/list, not duplicated here).
-41. **CEL immutability (AgenticRun): Enforced transitions include: `request`, `targetNamespaces`, `analysisOutput`, `tools`, `analysis`, `execution`, `verification` immutability after initial set as encoded in API markers.
-42. **AgenticOLSConfig — singleton name**: CRD validation requires `metadata.name` equals `cluster` (same pattern as `ApprovalPolicy`).
-43. **AgenticOLSConfig — `spec.suspended`**: Bool, optional, default `false`. When `true`, halts all agentic operations cluster-wide and terminates in-flight runs with `EmergencyStopped` condition. See `system-config.md` for full semantics.
-44. **AgenticOLSConfig — absence**: When no `AgenticOLSConfig` CR exists, the system MUST behave as if `spec.suspended` is `false`.
-45. **AgenticOLSConfig — status subresource**: `AgenticOLSConfig` MUST have a `/status` subresource with `conditions` array (`metav1.Condition`). Condition type `Suspended` tracks whether the operator has acknowledged and acted on `spec.suspended`. See `system-config.md` rules 5a–5e for full semantics.
-46. **AgenticOLSConfig — status RBAC**: The operator's service account MUST have `get`, `update`, `patch` on `agenticolsconfigs/status` in addition to existing permissions on the main resource.
+23. **ApprovalPolicy — singleton name**: CRD validation requires `metadata.name` equals `cluster`.
+24. **ApprovalPolicy — `spec.stages`**: Optional list keyed by `name` (`SandboxStep`). Each entry sets `approval` to `Automatic` or `Manual`. Stages not listed default to **Manual** per API comments.
+25. **ApprovalPolicy — `spec.maxAttempts`**: Upper bound for execution attempts (initial + retries) when verification fails; default behavior when unset is defined in controller (see `approval.md`).
+26. **ApprovalPolicy — `spec.maxConcurrentRuns`**: Caps concurrent reconciles when positive; operator falls back to a default constant when unset.
+27. **AgenticRunApproval — pairing**: For each `AgenticRun`, the controller MUST create (if missing) a same-named `AgenticRunApproval` in the same namespace with controller owner reference to the `AgenticRun`.
+28. **AgenticRunApproval — `spec.stages`**: Append-only map list keyed by `type` (`ApprovalStageType`). Each stage carries a discriminated union: exactly one of `analysis`, `execution`, `verification`, `escalation` MUST be present matching `type`. Optional `decision` may be `Approved` (default when omitted) or `Denied`; `Denied` is terminal per API rules.
+29. **AgenticRunApproval — immutability CEL**: Stages cannot be removed; decisions cannot change once set; execution `maxAttempts` cannot decrease once set.
+30. **Execution approval fields**: `spec.stages[].execution.option` selects 0-based analysis option index; `maxAttempts` caps attempts but MUST NOT exceed policy `maxAttempts`; `agent` overrides the `AgenticRun` step’s agent when set.
+31. **AnalysisResult**: `spec.agenticRunName` immutable; `status.options` holds `RemediationOption` entries; `status.sandbox` and `status.failureReason` optional; conditions use shared result condition types. [PLANNED: OLS-3268] `status.actionRequired` (bool) indicates whether remediation is needed; `status.diagnosis` (top-level `DiagnosisResult`: summary, confidence, rootCause) captures the agent’s explanation when no action is required. When `actionRequired` is false, `status.options` may be empty (`minItems: 0`).
+32. **ExecutionResult**: Adds `spec.retryIndex` (bound to allowed retry range per field validation); `status.actionsTaken`, `status.verification` (inline), optional `failureReason`, `sandbox`.
+33. **VerificationResult**: `spec.retryIndex` parallels execution for the same attempt cluster; `status.checks`, `status.summary`, optional `failureReason`, `sandbox`.
+34. **EscalationResult**: `status.summary`, `status.content`, optional `failureReason`, `sandbox`; no `retryIndex`.
+35. **RemediationOption**: Cohesion rules require `diagnosis` and `remediationPlan` to be paired when present; `components` holds schemaless JSON for adapter data shaped by `spec.analysisOutput.schema`. Each action in `remediationPlan.actions` includes `command` (required, 1-4096 chars, exact bash command using kubectl/oc), `type` (required, 1-256 chars, phase category: pre-check, mutation, wait, post-check), and `description` (required, 1-4096 chars). All three fields are required on `ProposedAction`. [OLS-3441]
+36. **RBACResult / RBACRule**: Analysis MAY request namespace-scoped and cluster-scoped rules with verb/apigroup/resource metadata and mandatory `justification`; `namespace` on rules MUST align with run targeting rules (validated at runtime by policy engine per field comments).
+37. **ToolsSpec**: MAY include `skills` (unique images), `mcpServers` (unique names), and `requiredSecrets` (unique names). `SkillsSource.image` MUST be a valid pullspec; optional `paths` restrict mounted subtrees.
+37a. [PLANNED: OLS-3594] **ToolsSpec — `disableDefaultMCP`**: Deferred with default ocp-mcp auto-injection. Not part of the current API. If auto-injection is later adopted, an opt-out field may be added; details land with that implementation.
+38. **SecretRequirement**: Names a namespace-local `Secret`; `mountAs` discriminates `EnvVar` vs `FilePath` with required nested config per type.
+39. **MCPHeaderValueSource**: Discriminated by `type`; `Secret` requires nested `secret` name reference.
+40. **Result CR ownership**: Result CRs MUST declare controller `ownerReferences` to their `AgenticRun` for GC; naming follows operator conventions (see `sandbox-execution.md` for when they are created).
+41. **Label conventions**: Operator uses labels for run name, step, component, and managed template markers (exact keys are implementation-specific; behavior: selectors for GC/list, not duplicated here).
+42. **CEL immutability (AgenticRun): Enforced transitions include: `request`, `targetNamespaces`, `analysisOutput`, `tools`, `analysis`, `execution`, `verification` immutability after initial set as encoded in API markers.
+43. **AgenticOLSConfig — singleton name**: CRD validation requires `metadata.name` equals `cluster` (same pattern as `ApprovalPolicy`).
+44. **AgenticOLSConfig — `spec.suspended`**: Bool, optional, default `false`. When `true`, halts all agentic operations cluster-wide and terminates in-flight runs with `EmergencyStopped` condition. See `system-config.md` for full semantics.
+45. **AgenticOLSConfig — absence**: When no `AgenticOLSConfig` CR exists, the system MUST behave as if `spec.suspended` is `false`.
+46. **AgenticOLSConfig — status subresource**: `AgenticOLSConfig` MUST have a `/status` subresource with `conditions` array (`metav1.Condition`). Condition type `Suspended` tracks whether the operator has acknowledged and acted on `spec.suspended`. See `system-config.md` rules 5a–5e for full semantics.
+47. **AgenticOLSConfig — status RBAC**: The operator’s service account MUST have `get`, `update`, `patch` on `agenticolsconfigs/status` in addition to existing permissions on the main resource.
 
 ## Configuration Surface (by path)
 
@@ -82,7 +82,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `metadata.name`, `metadata.namespace`, `spec.*`, `status.*`
 
 ### Shared / embedded types
-- `ToolsSpec`: `skills[]`, `mcpServers[]`, `requiredSecrets[]` (`disableDefaultMCP` deferred — see rule 36a / OLS-3594)
+- `ToolsSpec`: `skills[]`, `mcpServers[]`, `requiredSecrets[]` (`disableDefaultMCP` deferred — see rule 37a / OLS-3594)
 - `SkillsSource`: `image`, `paths[]`
 - `SecretRequirement`: `name`, `description`, `mountAs.*`
 - `StepResultRef`: `name`, `outcome`
