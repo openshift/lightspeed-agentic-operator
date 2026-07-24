@@ -240,7 +240,7 @@ spec:
             image: registry.redhat.io/openshift4/ose-cli:latest
             script: |
               set -euo pipefail
-              dnf -y install git make golang
+              dnf -y install git make golang jq
               cd /workspace/repo
               mkdir -p "${ARTIFACT_DIR}"
               make product-e2e 2>&1 | tee "${ARTIFACT_DIR}/product-e2e-output.log"
