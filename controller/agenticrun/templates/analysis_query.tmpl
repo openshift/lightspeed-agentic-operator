@@ -18,34 +18,50 @@ For each option you propose:
    Bad:  Update the deployment image to the latest version
 {{- if .HasExecution}}
 
-- **Derive RBAC from your script** — walk through EVERY command and determine the exact API calls it makes. Use these rules:
+- **Derive RBAC from your script** by following this algorithm exactly. Do NOT guess permissions — derive them mechanically from the commands.
 
-   **Command → API mapping** (use ONLY the verbs each command needs):
-   - `kubectl get <res> <name>` → verb `get`, resourceNames: [name]
-   - `kubectl get <res>` or `kubectl get <res> -l <selector>` → verb `list`, NO resourceNames
-   - `kubectl describe <res> <name>` → verb `get`, resourceNames: [name]
-   - `kubectl patch <res> <name>` → verb `patch`, resourceNames: [name]
-   - `kubectl delete <res> <name>` → verb `delete`, resourceNames: [name]
-   - `kubectl scale <res> <name>` → verbs `get`, `update` on subresource `<res>/scale`, resourceNames: [name]
-   - `kubectl rollout status <res>/<name>` → `get` + `watch` on `<res>`, plus `list` + `watch` on replicasets
-   - `kubectl rollout undo <res>/<name>` → `patch` on `<res>`, plus `get` + `list` on replicasets (replicaset names are auto-generated — never restrict by resourceNames)
-   - `kubectl rollout restart <res>/<name>` → `patch` on `<res>`, resourceNames: [name]
-   - `kubectl logs deploy/<name>` → `get` on the deployment + `list` pods (no resourceNames) + `get` pods/log
-   - `kubectl logs <pod>` → `get` pods/log, resourceNames: [pod]
-   - `kubectl exec <pod> -- <cmd>` → `get` pods + `create` pods/exec, resourceNames: [pod]
-   - `kubectl apply/create -f` → `create` (or `patch` for apply) on the resource type being applied
-   - `kubectl label/annotate <res> <name>` → `patch`, resourceNames: [name]
+   **Step 1: For each command, emit API operations.**
+   Walk through every command in actions, rollbackPlan, and verification. Canonicalize resource names to the plural API form (e.g. `deploy` → `deployments`, `svc` → `services`, `rs` → `replicasets`). Map each to API operations using this table:
 
-   **K8s RBAC constraints** (violating these causes silent permission failures):
-   - `list` and `watch` verbs CANNOT be restricted by `resourceNames` — Kubernetes ignores resourceNames for these verbs unless the request uses a `metadata.name` field selector, which kubectl does not do. Always emit `list`/`watch` without resourceNames. If you also need `get` (with resourceNames) on the same resource, emit TWO separate RBAC rules.
-   - `create` CANNOT be restricted by `resourceNames` for standard resources — only for subresources like `pods/exec`. Only use `resourceNames` with `get`, `patch`, `update`, `delete`, and `create` on subresources.
-   - Replicasets accessed by `rollout` commands have auto-generated names — never use resourceNames for replicasets.
+   | Command pattern | Verb | Resource | resourceNames |
+   |---|---|---|---|
+   | `get <res> <name>` | `get` | `<res>` | `[name]` |
+   | `get <res>` (no name, or with `-l`) | `list` | `<res>` | NONE |
+   | `describe <res> <name>` | `get` | `<res>` | `[name]` |
+   | `set image <res>/<name>` | `get`, `patch` | `<res>` | `[name]` |
+   | `patch <res> <name>` | `patch` | `<res>` | `[name]` |
+   | `delete <res> <name>` | `delete` | `<res>` | `[name]` |
+   | `label/annotate <res> <name>` | `get`, `patch` | `<res>` | `[name]` |
+   | `scale <res> <name>` | `get`, `update` | `<res>/scale` | `[name]` |
+   | `rollout status <res>/<name>` | `get`, `watch` | `<res>` | NONE |
+   |  | `list`, `watch` | `replicasets` (deployments only) | NONE |
+   | `rollout undo <res>/<name>` | `get`, `patch` | `<res>` | `[name]` |
+   |  | `get`, `list` | `replicasets` | NONE |
+   | `rollout restart <res>/<name>` | `get`, `patch` | `<res>` | `[name]` |
+   | `logs deploy/<name>` | `get` | `<res>` (the deployment) | `[name]` |
+   |  | `list` | `pods` | NONE |
+   |  | `get` | `pods/log` | NONE |
+   | `logs <pod>` | `get` | `pods/log` | `[pod]` |
+   | `exec <pod> -- ...` | `get` | `pods` | `[pod]` |
+   |  | `create` | `pods/exec` | `[pod]` |
 
-   **Scope rule**: only include RBAC for API calls YOUR commands make. Do not add permissions for internal Kubernetes side-effects (e.g., patching a Deployment does not require separate replicaset permissions unless your script explicitly runs a rollout command that watches replicasets).
+   **Step 2: Group by (apiGroup, resource, namespace) and merge.**
+   Collect all operations for the same resource. Union the verbs. For resourceNames: if ANY operation on that resource has NONE, the merged group has NONE.
 
-   **Cross-check** before finalizing:
-   - Every RBAC rule must trace back to a specific command — include a justification naming the command(s).
-   - Every command must have all its API calls covered. Walk through each one using the mapping above.
+   **Step 3: Split rules that mix restrictable and unrestrictable verbs.**
+   This step is CRITICAL — skipping it causes silent RBAC failures at execution time.
+   - Verbs `list` and `watch` NEVER get resourceNames (Kubernetes ignores resourceNames for these verbs).
+   - Verbs `get`, `patch`, `update`, `delete`, and `create` on subresources (e.g. `pods/exec`) CAN have resourceNames.
+   - If a group has BOTH kinds and has resourceNames, you MUST emit TWO separate RBAC rules:
+     - Rule 1: verbs `get`/`patch`/`update`/`delete`/`create` (whichever apply) WITH resourceNames
+     - Rule 2: verbs `list`/`watch` (whichever apply) WITHOUT resourceNames
+   - If a group has only `list`/`watch`: one rule, no resourceNames.
+   - If a group has only restrictable verbs: one rule, with resourceNames if known.
+
+   **Step 4: Cross-check.**
+   - Every RBAC rule must trace to a command — set justification to the command(s) that need it.
+   - Every command must have its permissions covered.
+   - No rule should exist that no command needs.
 {{- end}}
 {{- if .HasVerification}}
 
