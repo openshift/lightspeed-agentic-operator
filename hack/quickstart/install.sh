@@ -470,7 +470,7 @@ EOF
 
 # --- Step 1: Prerequisites ---------------------------------------------------
 
-step "1/9" "Checking prerequisites..."
+step "1/10" "Checking prerequisites..."
 
 command -v oc >/dev/null 2>&1 || fail "oc CLI not found. Install it first."
 info "oc CLI found"
@@ -494,7 +494,7 @@ info "cluster-admin privileges confirmed"
 
 # --- Step 2: Namespace --------------------------------------------------------
 
-step "2/9" "Ensuring namespace ${NAMESPACE}..."
+step "2/10" "Ensuring namespace ${NAMESPACE}..."
 
 if oc create namespace "${NAMESPACE}" 2>/dev/null; then
   info "Namespace created"
@@ -504,9 +504,58 @@ else
   fail "Failed to create namespace ${NAMESPACE}"
 fi
 
-# --- Step 3: Lightspeed Operator ----------------------------------------------
+# --- Step 3: Otel collector image mirror --------------------------------------
+# The OLS bundle CSV references registry.redhat.io/openshift-lightspeed/otelcol-lightspeed-rhel9
+# which may not be published yet. Create an ImageDigestMirrorSet so the cluster
+# pulls the same digest from the Konflux quay.io repo instead.
 
-step "3/9" "Lightspeed Operator..."
+OTEL_MIRROR_SOURCE="${OTEL_MIRROR_SOURCE:-registry.redhat.io/openshift-lightspeed/otelcol-lightspeed-rhel9}"
+OTEL_MIRROR_TARGET="${OTEL_MIRROR_TARGET:-quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-otel-collector}"
+IDMS_NAME="ols-otel-collector-mirror"
+MCP_WAIT_TIMEOUT="${MCP_WAIT_TIMEOUT:-600}"
+
+step "3/10" "Configuring otel-collector image mirror..."
+
+if [ "${SKIP_OTEL_MIRROR:-}" = "1" ]; then
+  info "Skipped (SKIP_OTEL_MIRROR=1)"
+elif oc get imagedigestmirrorset "${IDMS_NAME}" >/dev/null 2>&1; then
+  info "ImageDigestMirrorSet ${IDMS_NAME} already exists — skipping"
+else
+  oc apply -f - <<EOF
+apiVersion: config.openshift.io/v1
+kind: ImageDigestMirrorSet
+metadata:
+  name: ${IDMS_NAME}
+spec:
+  imageDigestMirrors:
+  - source: ${OTEL_MIRROR_SOURCE}
+    mirrors:
+    - ${OTEL_MIRROR_TARGET}
+EOF
+  info "ImageDigestMirrorSet ${IDMS_NAME} created"
+  echo "  Waiting for MachineConfigPool to finish updating (up to ${MCP_WAIT_TIMEOUT}s)..."
+  echo "  (nodes may reboot — this is expected)"
+  local_elapsed=0
+  while (( local_elapsed < MCP_WAIT_TIMEOUT )); do
+    mcp_updating="$(oc get mcp -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Updating")].status}{" "}{end}' 2>/dev/null || true)"
+    if [[ "${mcp_updating}" != *"True"* ]]; then
+      info "MachineConfigPool updated"
+      break
+    fi
+    sleep 15
+    local_elapsed=$((local_elapsed + 15))
+    if (( local_elapsed % 60 == 0 )); then
+      echo "  … MCP still updating (${local_elapsed}s/${MCP_WAIT_TIMEOUT}s)"
+    fi
+  done
+  if (( local_elapsed >= MCP_WAIT_TIMEOUT )); then
+    warn "MCP did not finish within ${MCP_WAIT_TIMEOUT}s — continuing (otel-collector may fail to pull until MCP settles)"
+  fi
+fi
+
+# --- Step 4: Lightspeed Operator ----------------------------------------------
+
+step "4/10" "Lightspeed Operator..."
 
 CONFIGURE_OLSCONFIG=0
 
@@ -574,7 +623,7 @@ fi
 
 # --- Step 4: Agentic Operator CRDs --------------------------------------------
 
-step "4/9" "Installing Agentic Operator CRDs..."
+step "5/10" "Installing Agentic Operator CRDs..."
 
 for crd in "${CRD_FILES[@]}"; do
   if [ -n "${REPO_ROOT}" ]; then
@@ -591,7 +640,7 @@ fi
 
 # --- Step 5: Agentic operator deployment --------------------------------------
 
-step "5/9" "Deploying agentic operator to ${NAMESPACE} (sandbox-mode=${SANDBOX_MODE})..."
+step "6/10" "Deploying agentic operator to ${NAMESPACE} (sandbox-mode=${SANDBOX_MODE})..."
 
 oc apply -f - <<EOF
 apiVersion: v1
@@ -726,7 +775,7 @@ info "Agent read RBAC applied (cluster-reader + cluster-monitoring-view)"
 
 # --- Step 6: ApprovalPolicy ---------------------------------------------------
 
-step "6/9" "Creating ApprovalPolicy..."
+step "7/10" "Creating ApprovalPolicy..."
 
 oc apply -f - <<'EOF'
 apiVersion: agentic.openshift.io/v1alpha1
@@ -748,7 +797,7 @@ info "ApprovalPolicy created"
 
 # --- Step 7: Webhook Service --------------------------------------------------
 
-step "7/9" "Creating webhook Service..."
+step "8/10" "Creating webhook Service..."
 
 oc apply -f - <<EOF
 apiVersion: v1
@@ -770,7 +819,7 @@ info "Webhook Service created"
 
 # --- Step 8: Wait for operator ------------------------------------------------
 
-step "8/9" "Waiting for agentic operator to become ready..."
+step "9/10" "Waiting for agentic operator to become ready..."
 
 AGENTIC_ROLLOUT_TIMEOUT="${AGENTIC_ROLLOUT_TIMEOUT:-300s}"
 if ! oc rollout status deployment/lightspeed-agentic-operator \
@@ -785,7 +834,7 @@ info "Agentic operator is running"
 
 # --- Step 9: Webhook Configuration (after operator is ready) ------------------
 
-step "9/9" "Registering fail-closed MutatingWebhookConfiguration..."
+step "10/10" "Registering fail-closed MutatingWebhookConfiguration..."
 
 oc apply -f - <<EOF
 apiVersion: admissionregistration.k8s.io/v1
