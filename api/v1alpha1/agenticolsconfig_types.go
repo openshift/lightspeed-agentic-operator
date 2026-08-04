@@ -29,6 +29,26 @@ const (
 	AgenticOLSConfigConditionSuspended = "Suspended"
 )
 
+// LifecycleConfig controls automatic cleanup of terminal AgenticRun resources.
+//
+// +kubebuilder:validation:MinProperties=1
+type LifecycleConfig struct {
+	// terminalTTL is the default time-to-live in seconds for terminal
+	// AgenticRun resources (Completed, Failed, Denied, Escalated,
+	// EmergencyStopped, NoActionRequired). After a run reaches a terminal
+	// state and this many seconds elapse, the operator deletes the
+	// AgenticRun CR. Kubernetes garbage collection cascades deletion to
+	// owned resources via owner references.
+	//
+	// Per-run overrides via AgenticRun.spec.ttlAfterTerminal take
+	// precedence over this cluster-wide default.
+	//
+	// When omitted (nil), no automatic deletion occurs.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TerminalTTL *int32 `json:"terminalTTL,omitempty"`
+}
+
 // AgenticOLSConfigSpec defines the desired state of AgenticOLSConfig.
 //
 // +kubebuilder:validation:MinProperties=1
@@ -41,6 +61,11 @@ type AgenticOLSConfigSpec struct {
 	// +optional
 	// +default=false
 	Suspended bool `json:"suspended,omitempty"` //nolint:kubeapilinter // kill switch is genuinely binary; bool is the right type
+
+	// lifecycle controls automatic cleanup of terminal AgenticRun resources.
+	// When omitted, no automatic deletion occurs (backwards-compatible).
+	// +optional
+	Lifecycle LifecycleConfig `json:"lifecycle,omitzero"`
 }
 
 // AgenticOLSConfigStatus defines the observed state of AgenticOLSConfig.

@@ -54,6 +54,29 @@ spec:
             description: spec defines the desired system configuration.
             minProperties: 1
             properties:
+              lifecycle:
+                description: |-
+                  lifecycle controls automatic cleanup of terminal AgenticRun resources.
+                  When omitted, no automatic deletion occurs (backwards-compatible).
+                minProperties: 1
+                properties:
+                  terminalTTL:
+                    description: |-
+                      terminalTTL is the default time-to-live in seconds for terminal
+                      AgenticRun resources (Completed, Failed, Denied, Escalated,
+                      EmergencyStopped, NoActionRequired). After a run reaches a terminal
+                      state and this many seconds elapse, the operator deletes the
+                      AgenticRun CR. Kubernetes garbage collection cascades deletion to
+                      owned resources via owner references.
+
+                      Per-run overrides via AgenticRun.spec.ttlAfterTerminal take
+                      precedence over this cluster-wide default.
+
+                      When omitted (nil), no automatic deletion occurs.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
               suspended:
                 default: false
                 description: |-

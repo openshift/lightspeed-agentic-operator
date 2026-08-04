@@ -378,6 +378,23 @@ type AgenticRunSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
+
+	// ttlAfterTerminal is the time-to-live in seconds for this AgenticRun
+	// after it reaches a terminal state (Completed, Failed, Denied,
+	// Escalated, EmergencyStopped, NoActionRequired). When the TTL expires,
+	// the operator deletes the AgenticRun CR and Kubernetes garbage
+	// collection cascades deletion to owned resources.
+	//
+	// Overrides the cluster-wide default from
+	// AgenticOLSConfig.spec.lifecycle.terminalTTL for this run.
+	//
+	// Set to 0 to disable automatic deletion for this run.
+	//
+	// Mutable: adapters or admins may pre-set this before the run reaches
+	// terminal state. The operator will not overwrite a pre-set value.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TTLAfterTerminal *int32 `json:"ttlAfterTerminal,omitempty"`
 }
 
 // AgenticRunStatus defines the observed state of AgenticRun. All fields are
@@ -406,6 +423,14 @@ type AgenticRunStatus struct {
 	// info, and references to result CRs.
 	// +optional
 	Steps StepsStatus `json:"steps,omitzero"`
+
+	// terminalTime is the timestamp when the run first reached a terminal
+	// state (Completed, Failed, Denied, Escalated, EmergencyStopped,
+	// NoActionRequired). Set once by the operator and never updated.
+	// Used together with spec.ttlAfterTerminal to compute when the run
+	// should be garbage-collected.
+	// +optional
+	TerminalTime *metav1.Time `json:"terminalTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true
