@@ -21,6 +21,7 @@ func NewAgenticRunCmd(streams genericclioptions.IOStreams) *cobra.Command {
 	cmd.AddCommand(NewWatchCmd(streams))
 	cmd.AddCommand(NewLogsCmd(streams))
 	cmd.AddCommand(NewDeleteCmd(streams))
+	cmd.AddCommand(NewCleanupCmd(streams))
 
 	return cmd
 }
