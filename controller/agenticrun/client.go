@@ -79,10 +79,10 @@ type AgentHTTPClient struct {
 	endpoint   string
 }
 
-func NewAgentHTTPClient(endpoint string) AgentHTTPClientInterface {
+func NewAgentHTTPClient(endpoint string, timeout time.Duration) AgentHTTPClientInterface {
 	return &AgentHTTPClient{
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute,
+			Timeout: timeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // internal cluster traffic
 			},

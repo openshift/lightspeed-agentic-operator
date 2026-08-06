@@ -61,7 +61,7 @@ func newTestSandboxAgentCaller(sandbox *mockSandboxProvider, httpClient *mockHTT
 	return &SandboxAgentCaller{
 		Sandbox:       sandbox,
 		K8sClient:     fc,
-		ClientFactory: func(_ string) AgentHTTPClientInterface { return httpClient },
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
 		Namespace:     "test-ns",
 		Timeout:       5 * time.Minute,
 	}
@@ -76,7 +76,7 @@ func newTestSandboxAgentCallerWithAgenticRun(sandbox *mockSandboxProvider, httpC
 	return &SandboxAgentCaller{
 		Sandbox:       sandbox,
 		K8sClient:     fc,
-		ClientFactory: func(_ string) AgentHTTPClientInterface { return httpClient },
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
 		Namespace:     "test-ns",
 		Timeout:       5 * time.Minute,
 	}
@@ -539,6 +539,12 @@ func TestSandboxAgentCaller_VerificationQueryFraming(t *testing.T) {
 	}
 	if strings.Contains(httpClient.lastQuery, "Pod crashing with OOMKilled") {
 		t.Error("verification query should NOT contain the original request")
+	}
+	if !strings.Contains(httpClient.lastQuery, "Convergence-dependent checks") {
+		t.Error("verification query should contain convergence retry guidance")
+	}
+	if !strings.Contains(httpClient.lastQuery, "wait and retry before reporting failure") {
+		t.Error("verification query should instruct agent to retry convergence checks")
 	}
 }
 

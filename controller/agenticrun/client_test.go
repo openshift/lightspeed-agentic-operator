@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -35,7 +36,7 @@ func TestAgentHTTPClient_RunSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 5*time.Minute)
 	resp, err := client.Run(context.Background(), "You are an SRE agent", "check health", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -52,7 +53,7 @@ func TestAgentHTTPClient_RunHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 5*time.Minute)
 	_, err := client.Run(context.Background(), "", "test", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
@@ -60,7 +61,7 @@ func TestAgentHTTPClient_RunHTTPError(t *testing.T) {
 }
 
 func TestAgentHTTPClient_RunConnectionError(t *testing.T) {
-	client := NewAgentHTTPClient("http://127.0.0.1:1")
+	client := NewAgentHTTPClient("http://127.0.0.1:1", 5*time.Minute)
 	_, err := client.Run(context.Background(), "", "test", nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for connection failure")
@@ -100,7 +101,7 @@ func TestAgentHTTPClient_RunWithExecutionResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 5*time.Minute)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 		ExecutionResult: &agentExecutionResult{
@@ -135,7 +136,7 @@ func TestAgentHTTPClient_RunWithoutExecutionResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 5*time.Minute)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 	}
@@ -169,7 +170,7 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 5*time.Minute)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 		PreviousAttempts: []agentPreviousAttempt{{Attempt: 1, FailureReason: "timeout"}},
