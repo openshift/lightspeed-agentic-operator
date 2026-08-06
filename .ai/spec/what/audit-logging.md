@@ -29,14 +29,10 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 6. On operator restart, the operator MUST be able to resume producing traces for an in-progress AgenticRun. Since each phase gets a fresh trace ID, the operator does not need to reconstruct a prior trace ID. It reads `agenticrun.uid` from the CR's `metadata.uid` for the correlation attribute and creates the next phase trace normally. [DEFERRED: needs Jira] Span Links to prior phases require persisting the prior phase's span context (trace ID + span ID) on the AgenticRun's status or annotations; currently the in-memory `priorPhase` map is lost on restart, breaking span link continuity but not `agenticrun.uid` correlation.
 
-### Retries
-
-7. On retry (verification failure leading to re-execute), the operator MUST create new traces for the retry execution and verification phases. The `retry_index` MUST be a span attribute on each retry trace's root span.
-
 ### CR Serialization as Span Events
 
 8. The operator MUST emit the following span events attached to the corresponding phase root spans. Each span event records a CR serialization using a split model:
-   - **Key fields as span event attributes** (queryable): `result.name`, `result.uid`, `options.count`, `actions_taken.count`, `checks.count`, `retry_count`, `phase`, `reason`.
+   - **Key fields as span event attributes** (queryable): `result.name`, `result.uid`, `options.count`, `actions_taken.count`, `checks.count`, `phase`, `reason`.
    - **Full CR serialization as a span event attribute** (viewable, full fidelity): complete `.spec` + `.status` + select metadata as a single attribute value.
 
    | Span Event Name | Parent Span | When | Key Attributes |
@@ -45,8 +41,7 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
    | `agenticrun.analysis.completed` | `agenticrun.analyze` | AnalysisResult CR created | `result.name`, `result.uid`, `options.count` + full AnalysisResult CR serialization |
    | `agenticrun.approval.completed` | `agenticrun.human_approval` | AgenticRunApproval PATCH observed by webhook | `approver.uid`, `approver.username`, selected option, full text of selected option |
    | `agenticrun.execution.completed` | `agenticrun.execute` | ExecutionResult CR created | `result.name`, `result.uid`, `actions_taken.count` + full ExecutionResult CR serialization |
-   | `agenticrun.verification.completed` | `agenticrun.verify` | VerificationResult CR created, checks passed | `result.name`, `result.uid`, `checks.count` + full VerificationResult CR serialization |
-   | `agenticrun.verification.retry` | `agenticrun.verify` | Verification failed, retrying execution+verification | `result.name`, `retry_count`, `checks.count` + full VerificationResult CR serialization |
+   | `agenticrun.verification.completed` | `agenticrun.verify` | VerificationResult CR created | `result.name`, `result.uid`, `checks.count` + full VerificationResult CR serialization |
    | `agenticrun.escalation.completed` | `agenticrun.escalate` | EscalationResult CR created | Full EscalationResult CR serialization |
    | `agenticrun.terminal` | `agenticrun.terminal` | AgenticRun reaches terminal phase | `phase`, `reason` |
 

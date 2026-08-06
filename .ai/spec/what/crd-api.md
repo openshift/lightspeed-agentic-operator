@@ -14,7 +14,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 8. **AgenticRun — `spec.analysisOutput`**: Immutable after set. `mode` defaults to full analysis schema when empty/default. `mode=Minimal` REQUIRES `schema` to be set, forbids `spec.execution` and `spec.verification`, and restricts option shape accordingly.
 9. **AgenticRun — `spec.tools`**: Default `ToolsSpec` for all steps; immutable once set. Per-step `tools` on `spec.analysis` / `spec.execution` / `spec.verification` replaces the default for that step only when non-zero.
 10. **AgenticRun — `spec.analysis|execution|verification`**: Immutable `AgenticRunStep` records after set. Each non-zero step MAY name `agent` (DNS subdomain) defaulting to `default` when empty; MAY carry per-step `tools`.
-11. **AgenticRun — `status`**: Observed-only. `status.conditions` holds map-merge conditions (types include `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`, `EmergencyStopped`). `status.steps` holds per-step sandbox info, retry counter (execution), and result refs.
+11. **AgenticRun — `status`**: Observed-only. `status.conditions` holds map-merge conditions (types include `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`, `EmergencyStopped`). `status.steps` holds per-step sandbox info and result refs.
 12. **Phase display types**: `AgenticRunPhase` and `StepPhase` string enums in the API describe display labels only; they are not stored fields on `AgenticRun` (phase is derived — see `run-lifecycle.md`). `AgenticRunPhase` values include `EmergencyStopped` (terminal, set by kill switch — see `system-config.md`) and `NoActionRequired` [PLANNED: OLS-3268] (terminal, set when analysis determines no remediation is needed). `StepPhase` values include `PendingApproval`, `Running`, `Completed`, `Failed`, `Skipped`.
 13. **Sandbox step enum**: `SandboxStep` values `Analysis`, `Execution`, `Verification`, `Escalation` identify workflow steps for approvals, sandbox labels, and policies.
 14. **Agent — `spec.llmProvider`**: Required reference by name to a cluster `LLMProvider`.
@@ -28,15 +28,15 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 22. **LLMProvider — endpoints**: Optional URL overrides per provider; validation enforces HTTP/HTTPS URL shape. Azure requires `endpoint`; optional separate URL override field exists where defined.
 23. **ApprovalPolicy — singleton name**: CRD validation requires `metadata.name` equals `cluster`.
 24. **ApprovalPolicy — `spec.stages`**: Optional list keyed by `name` (`SandboxStep`). Each entry sets `approval` to `Automatic` or `Manual`. Stages not listed default to **Manual** per API comments.
-25. **ApprovalPolicy — `spec.maxAttempts`**: Upper bound for execution attempts (initial + retries) when verification fails; default behavior when unset is defined in controller (see `approval.md`).
+25. [REMOVED] `ApprovalPolicy.spec.maxAttempts` has been removed. Execution runs exactly once per analysis iteration; verification failure escalates directly.
 26. **ApprovalPolicy — `spec.maxConcurrentRuns`**: Caps concurrent reconciles when positive; operator falls back to a default constant when unset.
 27. **AgenticRunApproval — pairing**: For each `AgenticRun`, the controller MUST create (if missing) a same-named `AgenticRunApproval` in the same namespace with controller owner reference to the `AgenticRun`.
 28. **AgenticRunApproval — `spec.stages`**: Append-only map list keyed by `type` (`ApprovalStageType`). Each stage carries a discriminated union: exactly one of `analysis`, `execution`, `verification`, `escalation` MUST be present matching `type`. Optional `decision` may be `Approved` (default when omitted) or `Denied`; `Denied` is terminal per API rules.
-29. **AgenticRunApproval — immutability CEL**: Stages cannot be removed; decisions cannot change once set; execution `maxAttempts` cannot decrease once set.
-30. **Execution approval fields**: `spec.stages[].execution.option` selects 0-based analysis option index; `maxAttempts` caps attempts but MUST NOT exceed policy `maxAttempts`; `agent` overrides the `AgenticRun` step’s agent when set.
+29. **AgenticRunApproval — immutability CEL**: Stages cannot be removed; decisions cannot change once set.
+30. **Execution approval fields**: `spec.stages[].execution.option` selects 0-based analysis option index; `agent` overrides the `AgenticRun` step’s agent when set.
 31. **AnalysisResult**: `spec.agenticRunName` immutable; `status.options` holds `RemediationOption` entries; `status.sandbox` and `status.failureReason` optional; conditions use shared result condition types. [PLANNED: OLS-3268] `status.actionRequired` (bool) indicates whether remediation is needed; `status.diagnosis` (top-level `DiagnosisResult`: summary, confidence, rootCause) captures the agent’s explanation when no action is required. When `actionRequired` is false, `status.options` may be empty (`minItems: 0`).
-32. **ExecutionResult**: Adds `spec.retryIndex` (bound to allowed retry range per field validation); `status.actionsTaken`, `status.verification` (inline), optional `failureReason`, `sandbox`.
-33. **VerificationResult**: `spec.retryIndex` parallels execution for the same attempt cluster; `status.checks`, `status.summary`, optional `failureReason`, `sandbox`.
+32. **ExecutionResult**: `status.actionsTaken`, `status.verification` (inline), optional `failureReason`, `sandbox`.
+33. **VerificationResult**: `status.checks`, `status.summary`, optional `failureReason`, `sandbox`.
 34. **EscalationResult**: `status.summary`, `status.content`, optional `failureReason`, `sandbox`; no `retryIndex`.
 35. **RemediationOption**: Cohesion rules require `diagnosis` and `remediationPlan` to be paired when present; `components` holds schemaless JSON for adapter data shaped by `spec.analysisOutput.schema`. Each action in `remediationPlan.actions` includes `command` (required, 1-4096 chars, exact bash command using kubectl/oc), `type` (required, 1-256 chars, phase category: pre-check, mutation, wait, post-check), and `description` (required, 1-4096 chars). All three fields are required on `ProposedAction`. [OLS-3441]
 36. **RBACResult / RBACRule**: Analysis MAY request namespace-scoped and cluster-scoped rules with verb/apigroup/resource metadata and mandatory `justification`; `namespace` on rules MUST align with run targeting rules (validated at runtime by policy engine per field comments).
@@ -67,7 +67,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `metadata.name`, `spec.type`, `spec.anthropic.*`, `spec.googleCloudVertex.*`, `spec.openAI.*`, `spec.azureOpenAI.*`, `spec.awsBedrock.*`
 
 ### ApprovalPolicy
-- `metadata.name` (must be `cluster`), `spec.stages[]`, `spec.maxAttempts`, `spec.maxConcurrentRuns`
+- `metadata.name` (must be `cluster`), `spec.stages[]`, `spec.maxConcurrentRuns`
 
 ### AgenticOLSConfig
 - `metadata.name` (must be `cluster`), `spec.suspended`, `spec.templog`

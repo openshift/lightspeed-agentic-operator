@@ -19,38 +19,34 @@ Behavioral specification for gating asynchronous workflow steps. **Phase derivat
 13. **Escalation idle**: When escalation is required, the run remains **Escalating** until escalation is approved (or auto policy) and the escalation agent completes or fails.
 14. **Execution option selection**: When multiple `RemediationOption` entries exist on the latest `AnalysisResult`, the user MUST select one via `AgenticRunApproval` execution stage `option`. If omitted, the effective index MUST default to option `0`.
 15. **Trim-on-execute**: Before executing, when more than one option remains stored, the controller SHOULD persist a trimmed `AnalysisResult.status.options` containing only the selected option; when only one option exists, trimming is a no-op beyond selection.
-16. **Execution agent override**: `AgenticRunApproval` execution stage `agent`, when set (non-empty), MUST override `spec.execution.agent` / default agent naming for resolving the `Agent` CR for that step. When omitted, the run’s execution step agent is used (no override).
-17. **Analysis/verification/escalation agent overrides**: Each stage’s nested object MAY carry `agent`. When non-empty it MUST override the run’s step agent for that stage; when omitted there is no override (escalation without override uses the analysis agent — per controller resolution rules). Nested approval objects MUST NOT default `agent` to `"default"` in the CRD schema.
-18. **Max attempts — ceiling**: Let `ceiling` be `ApprovalPolicy.spec.maxAttempts` when that value is positive; otherwise `ceiling` MUST be treated as `1` for attempt budgeting.
-19. **Max attempts — execution cap**: When `AgenticRunApproval` execution stage sets `maxAttempts` > 0, the effective maximum attempts MUST be the lesser of that value and `ceiling`. When execution stage omits `maxAttempts` or sets zero, the effective maximum MUST be `ceiling`.
-20. **Max attempts — policy absent**: With no `ApprovalPolicy` object, `ceiling` MUST be `1`; execution stage `maxAttempts` MUST still be capped by that effective ceiling (cannot raise attempts without a policy defining a higher ceiling).
-21. **Attempts semantics**: “Max attempts” counts total execution runs in the current analysis context (initial run plus post-verification retries) until success or escalation per `run-lifecycle.md`.
-22. **Verification approval persistence**: User approval for verification MUST apply across verification retries within the same analysis iteration (tests verify a single verification approval covers multiple verify invocations after execution retries).
-23. **CEL invariants on `AgenticRunApproval`**: Users MUST NOT remove prior stages; MUST NOT flip decisions; MUST NOT lower execution `maxAttempts` once set — CRD validation enforces these.
-24. **Append-only human workflow**: Operators SHOULD instruct users to add new stages by patching `spec.stages` append-only rather than replacing the whole list, to respect CEL.
-25. **Escalation stage existence**: Escalation is not in `AgenticRun.spec`; it appears only when retry/verification logic escalates. Approval for escalation follows the same Automatic/Manual rules as other stages.
+16. **Execution agent override**: `AgenticRunApproval` execution stage `agent`, when set (non-empty), MUST override `spec.execution.agent` / default agent naming for resolving the `Agent` CR for that step. When omitted, the run's execution step agent is used (no override).
+17. **Analysis/verification/escalation agent overrides**: Each stage's nested object MAY carry `agent`. When non-empty it MUST override the run's step agent for that stage; when omitted there is no override (escalation without override uses the analysis agent — per controller resolution rules). Nested approval objects MUST NOT default `agent` to `"default"` in the CRD schema.
+18. **Single execution attempt**: Execution runs exactly once per analysis iteration. On verification failure, the operator escalates directly — there are no execution retries. The `maxAttempts` field has been removed from `ApprovalPolicy` and `AgenticRunApproval`.
+19. **CEL invariants on `AgenticRunApproval`**: Users MUST NOT remove prior stages; MUST NOT flip decisions — CRD validation enforces these.
+20. **Append-only human workflow**: Operators SHOULD instruct users to add new stages by patching `spec.stages` append-only rather than replacing the whole list, to respect CEL.
+21. **Escalation stage existence**: Escalation is not in `AgenticRun.spec`; it appears when verification fails. Approval for escalation follows the same Automatic/Manual rules as other stages.
 
 ## Configuration Surface
 
 - `ApprovalPolicy.metadata.name` (must equal `cluster`)
 - `ApprovalPolicy.spec.stages[].name`, `ApprovalPolicy.spec.stages[].approval`
-- `ApprovalPolicy.spec.maxAttempts`, `ApprovalPolicy.spec.maxConcurrentRuns`
+- `ApprovalPolicy.spec.maxConcurrentRuns`
 - `AgenticRunApproval.metadata.name`, `AgenticRunApproval.metadata.namespace`
 - `AgenticRunApproval.spec.stages[].type`, `AgenticRunApproval.spec.stages[].decision`
 - `AgenticRunApproval.spec.stages[].analysis.agent`
-- `AgenticRunApproval.spec.stages[].execution.agent`, `.option`, `.maxAttempts`
+- `AgenticRunApproval.spec.stages[].execution.agent`, `.option`
 - `AgenticRunApproval.spec.stages[].verification.agent`
 - `AgenticRunApproval.spec.stages[].escalation.agent`
 
 ### Approval Authorization
 
-26. **Cluster-admin gate.** Only users in the `system:cluster-admins` group MAY approve run execution via `patch` on `agenticrunapprovals`. This is enforced by Kubernetes RBAC.
-27. **Dedicated approver ClusterRole.** The operator ships a ClusterRole `agentic-run-approver` granting `get`, `list`, `watch`, and `patch` on `agenticrunapprovals`, plus `get`, `list`, `watch` on `agenticruns` (so approvers can see what they're approving). A ClusterRoleBinding `agentic-run-approver-binding` binds this role to the `system:cluster-admins` group. No other operator-shipped binding grants `patch agenticrunapprovals` to human actors. The operator's own `agentic-operator-manager-role` retains `patch` since it seeds AgenticRunApproval CRs programmatically (bound to the `controller-manager` ServiceAccount, not a human).
-28. **Implementation.** Manifests live in `config/rbac/run_approver_role.yaml` and `config/rbac/run_approver_binding.yaml`, included via `config/rbac/kustomization.yaml`. Applied automatically on `make deploy`.
+22. **Cluster-admin gate.** Only users in the `system:cluster-admins` group MAY approve run execution via `patch` on `agenticrunapprovals`. This is enforced by Kubernetes RBAC.
+23. **Dedicated approver ClusterRole.** The operator ships a ClusterRole `agentic-run-approver` granting `get`, `list`, `watch`, and `patch` on `agenticrunapprovals`, plus `get`, `list`, `watch` on `agenticruns` (so approvers can see what they're approving). A ClusterRoleBinding `agentic-run-approver-binding` binds this role to the `system:cluster-admins` group. No other operator-shipped binding grants `patch agenticrunapprovals` to human actors. The operator's own `agentic-operator-manager-role` retains `patch` since it seeds AgenticRunApproval CRs programmatically (bound to the `controller-manager` ServiceAccount, not a human).
+24. **Implementation.** Manifests live in `config/rbac/run_approver_role.yaml` and `config/rbac/run_approver_binding.yaml`, included via `config/rbac/kustomization.yaml`. Applied automatically on `make deploy`.
 
 ## Constraints
 
-- Product documentation that speaks in terms such as “always approve”, “always require approval”, or “require approval only for execution” MUST be translated into explicit `Automatic`/`Manual` combinations on `ApprovalPolicy.spec.stages`; the CRD does **not** encode those phrases as enumerated `ApprovalMode` values.
+- Product documentation that speaks in terms such as "always approve", "always require approval", or "require approval only for execution" MUST be translated into explicit `Automatic`/`Manual` combinations on `ApprovalPolicy.spec.stages`; the CRD does **not** encode those phrases as enumerated `ApprovalMode` values.
 - Policy MUST NOT be namespace-scoped in the current API — only the cluster singleton is read by name `cluster`.
 - The cluster-admin approval gate is binary. Namespace-scoped approval delegation is out of scope for the current release (see the workspace-level agentic security spec at `ols/.ai/spec/what/agentic-security.md` Planned Changes).
 
