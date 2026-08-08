@@ -17,6 +17,10 @@ import (
 const (
 	defaultSandboxTimeout = 5 * time.Minute
 
+	analysisStepTimeout     = 10 * time.Minute
+	executionStepTimeout    = 10 * time.Minute
+	verificationStepTimeout = 30 * time.Minute
+
 	ErrAnalysisAgentCall         = "analysis agent call"
 	ErrParseAnalysisResponse     = "parse analysis response"
 	ErrExecutionAgentCall        = "execution agent call"
@@ -61,7 +65,7 @@ type SandboxLifecycle interface {
 type SandboxAgentCaller struct {
 	Sandbox       SandboxLifecycle
 	K8sClient     client.Client
-	ClientFactory func(endpoint string) AgentHTTPClientInterface
+	ClientFactory func(endpoint string, timeout time.Duration) AgentHTTPClientInterface
 	Namespace     string
 	Timeout       time.Duration
 	Audit         AuditLogger
@@ -183,6 +187,19 @@ func (s *SandboxAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.
 	}, nil
 }
 
+func stepTimeout(step string) time.Duration {
+	switch step {
+	case "analysis", "escalation":
+		return analysisStepTimeout
+	case "execution":
+		return executionStepTimeout
+	case "verification":
+		return verificationStepTimeout
+	default:
+		return analysisStepTimeout
+	}
+}
+
 func (s *SandboxAgentCaller) callWithSandbox(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
@@ -222,7 +239,7 @@ func (s *SandboxAgentCaller) callWithSandbox(
 		s.Audit.InjectTraceContext(ctx, run, headers)
 	}
 
-	client := s.ClientFactory(agentURL)
+	client := s.ClientFactory(agentURL, stepTimeout(stepName)-2*time.Minute)
 	resp, err := client.Run(ctx, "", query, schema, agentCtx, headers)
 	if err != nil {
 		return nil, err
