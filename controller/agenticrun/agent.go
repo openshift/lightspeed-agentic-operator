@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"context"
+	"time"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -53,10 +54,10 @@ type EscalationOutput struct {
 // HTTP implementations POST to /v1/agent/run — a step-agnostic
 // endpoint where all workflow context is in the request payload.
 type AgentCaller interface {
-	Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string) (*AnalysisOutput, error)
-	Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, serviceAccount string) (*ExecutionOutput, error)
-	Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput, serviceAccount string) (*VerificationOutput, error)
-	Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string) (*EscalationOutput, error)
+	Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string, timeout time.Duration) (*AnalysisOutput, error)
+	Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, serviceAccount string, timeout time.Duration) (*ExecutionOutput, error)
+	Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput, serviceAccount string, timeout time.Duration) (*VerificationOutput, error)
+	Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string, timeout time.Duration) (*EscalationOutput, error)
 	ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error
 }
 
@@ -64,7 +65,7 @@ type AgentCaller interface {
 // implementation (sandbox + HTTP) when the agent infrastructure is ready.
 type StubAgentCaller struct{}
 
-func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string) (*AnalysisOutput, error) {
+func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string, _ time.Duration) (*AnalysisOutput, error) {
 	actionRequired := true
 	return &AnalysisOutput{
 		Success:        true,
@@ -84,7 +85,7 @@ func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticR
 	}, nil
 }
 
-func (s *StubAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ string) (*ExecutionOutput, error) {
+func (s *StubAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ string, _ time.Duration) (*ExecutionOutput, error) {
 	return &ExecutionOutput{
 		Success: true,
 		ActionsTaken: []agenticv1alpha1.ExecutionAction{{
@@ -95,7 +96,7 @@ func (s *StubAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.AgenticR
 	}, nil
 }
 
-func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string) (*EscalationOutput, error) {
+func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string, _ time.Duration) (*EscalationOutput, error) {
 	return &EscalationOutput{
 		Success: true,
 		Summary: "Stub escalation summary",
@@ -107,7 +108,7 @@ func (s *StubAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1
 	return nil
 }
 
-func (s *StubAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ string) (*VerificationOutput, error) {
+func (s *StubAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ string, _ time.Duration) (*VerificationOutput, error) {
 	return &VerificationOutput{
 		Success: true,
 		Checks: []agenticv1alpha1.VerifyCheck{{

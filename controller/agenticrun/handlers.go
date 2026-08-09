@@ -99,7 +99,7 @@ func (r *AgenticRunReconciler) handleAnalysis(
 		r.Audit.EmitAgenticRunReceived(spanCtx, run)
 	}
 
-	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, run.Spec.Request, defaultSandboxSA)
+	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, run.Spec.Request, defaultSandboxSA, stepTimeout(resolved.Analysis))
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
@@ -182,7 +182,7 @@ func (r *AgenticRunReconciler) handleRevision(
 	revisionSuffix := buildRevisionContext(run)
 	requestWithRevision := run.Spec.Request + "\n\n" + revisionSuffix
 
-	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, requestWithRevision, defaultSandboxSA)
+	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, requestWithRevision, defaultSandboxSA, stepTimeout(resolved.Analysis))
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
@@ -329,7 +329,7 @@ func (r *AgenticRunReconciler) handleExecution(
 		}
 	}
 
-	execResult, err := r.Agent.Execute(spanCtx, run, *resolved.Execution, selectedOption, execSA)
+	execResult, err := r.Agent.Execute(spanCtx, run, *resolved.Execution, selectedOption, execSA, stepTimeout(*resolved.Execution))
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionExecuted, err)
 	}
@@ -468,7 +468,7 @@ func (r *AgenticRunReconciler) handleVerification(
 		}
 	}
 
-	verifyResult, err := r.Agent.Verify(spanCtx, run, *resolved.Verification, selectedOption, execOutput, defaultSandboxSA)
+	verifyResult, err := r.Agent.Verify(spanCtx, run, *resolved.Verification, selectedOption, execOutput, defaultSandboxSA, stepTimeout(*resolved.Verification))
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionVerified, err)
 	}
@@ -669,7 +669,7 @@ func (r *AgenticRunReconciler) handleEscalation(
 		if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.LLMProvider.Name}, &llm); err != nil {
 			return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionEscalated, fmt.Errorf("%s %q: %w", ErrGetEscalationLLMProvider, agent.Spec.LLMProvider.Name, err))
 		}
-		step = resolvedStep{Agent: &agent, LLM: &llm, Tools: step.Tools}
+		step = resolvedStep{Agent: &agent, LLM: &llm, Tools: step.Tools, TimeoutMinutes: step.TimeoutMinutes}
 	}
 
 	base := run.DeepCopy()
@@ -694,7 +694,7 @@ func (r *AgenticRunReconciler) handleEscalation(
 	}
 
 	escalationText := buildEscalationRequest(run)
-	escalationResult, err := r.Agent.Escalate(spanCtx, run, step, escalationText, defaultSandboxSA)
+	escalationResult, err := r.Agent.Escalate(spanCtx, run, step, escalationText, defaultSandboxSA, stepTimeout(step))
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionEscalated, err)
 	}

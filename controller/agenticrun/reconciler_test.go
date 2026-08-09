@@ -34,36 +34,42 @@ type testAgentCaller struct {
 	executeResult  *ExecutionOutput
 	verifyResult   *VerificationOutput
 	escalateResult *EscalationOutput
+
+	// lastAnalyzeTimeout records the timeout passed to the most recent
+	// Analyze call, so tests can assert that timeoutMinutes resolved from
+	// the AgenticRun spec is actually forwarded through the reconciler.
+	lastAnalyzeTimeout time.Duration
 }
 
 func newTestAgentCaller() *testAgentCaller {
 	stub := &StubAgentCaller{}
-	a, _ := stub.Analyze(context.Background(), nil, resolvedStep{}, "", "")
-	e, _ := stub.Execute(context.Background(), nil, resolvedStep{}, nil, "")
-	v, _ := stub.Verify(context.Background(), nil, resolvedStep{}, nil, nil, "")
-	esc, _ := stub.Escalate(context.Background(), nil, resolvedStep{}, "", "")
+	a, _ := stub.Analyze(context.Background(), nil, resolvedStep{}, "", "", 0)
+	e, _ := stub.Execute(context.Background(), nil, resolvedStep{}, nil, "", 0)
+	v, _ := stub.Verify(context.Background(), nil, resolvedStep{}, nil, nil, "", 0)
+	esc, _ := stub.Escalate(context.Background(), nil, resolvedStep{}, "", "", 0)
 	return &testAgentCaller{analyzeResult: a, executeResult: e, verifyResult: v, escalateResult: esc}
 }
 
-func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string) (*AnalysisOutput, error) {
+func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string, timeout time.Duration) (*AnalysisOutput, error) {
+	ta.lastAnalyzeTimeout = timeout
 	if ta.analyzeErr != nil {
 		return nil, ta.analyzeErr
 	}
 	return ta.analyzeResult, nil
 }
-func (ta *testAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ string) (*ExecutionOutput, error) {
+func (ta *testAgentCaller) Execute(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ string, _ time.Duration) (*ExecutionOutput, error) {
 	if ta.executeErr != nil {
 		return nil, ta.executeErr
 	}
 	return ta.executeResult, nil
 }
-func (ta *testAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ string) (*VerificationOutput, error) {
+func (ta *testAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ *agenticv1alpha1.RemediationOption, _ *ExecutionOutput, _ string, _ time.Duration) (*VerificationOutput, error) {
 	if ta.verifyErr != nil {
 		return nil, ta.verifyErr
 	}
 	return ta.verifyResult, nil
 }
-func (ta *testAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string) (*EscalationOutput, error) {
+func (ta *testAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string, _ time.Duration) (*EscalationOutput, error) {
 	if ta.escalateErr != nil {
 		return nil, ta.escalateErr
 	}
@@ -964,5 +970,42 @@ func TestHandleRBACCleanup_InvalidAnnotation(t *testing.T) {
 	}
 	if !result.Requeue {
 		t.Error("expected Requeue (cleanup succeeded, annotation reset to 0)")
+	}
+}
+
+// TestReconcile_PropagatesStepTimeout verifies that timeoutMinutes set on an
+// AgenticRunStep is resolved and forwarded to the AgentCaller as time.Duration.
+func TestReconcile_PropagatesStepTimeout(t *testing.T) {
+	const wantMinutes int32 = 30
+
+	scheme := testScheme()
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "timeout-check", Namespace: "default"},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request: "Pod crashing",
+			Tools:   testTools(),
+			Analysis: agenticv1alpha1.AgenticRunStep{
+				Agent:          "default",
+				TimeoutMinutes: wantMinutes,
+			},
+			Execution:    agenticv1alpha1.AgenticRunStep{Agent: "default"},
+			Verification: agenticv1alpha1.AgenticRunStep{Agent: "default"},
+		},
+	}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
+
+	caller := newTestAgentCaller()
+	r := &AgenticRunReconciler{Client: fc, Agent: caller, Namespace: "default"}
+
+	if _, err := reconcileOnce(r, "timeout-check"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	want := time.Duration(wantMinutes) * time.Minute
+	if caller.lastAnalyzeTimeout != want {
+		t.Errorf("Analyze timeout = %v, want %v", caller.lastAnalyzeTimeout, want)
 	}
 }

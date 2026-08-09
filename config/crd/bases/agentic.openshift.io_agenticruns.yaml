@@ -83,6 +83,19 @@ spec:
                     - message: 'must be a valid DNS subdomain: lowercase alphanumeric
                         characters, hyphens, and dots'
                       rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  timeoutMinutes:
+                    description: |-
+                      timeoutMinutes sets the timeout for this step's sandbox agent call.
+                      This controls only the agent call duration; pod startup always uses
+                      a fixed five-minute ceiling (defaultSandboxTimeout). Increase this
+                      for long-running tools (e.g., IntelliAide RCA takes 10-30 minutes).
+                      Defaults to 5 minutes when omitted.
+
+                      Mutable: can be adjusted at any time; the value is read when the step starts.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
                   tools:
                     description: |-
                       tools provides per-step tools that replace the shared spec.tools
@@ -500,6 +513,19 @@ spec:
                     - message: 'must be a valid DNS subdomain: lowercase alphanumeric
                         characters, hyphens, and dots'
                       rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  timeoutMinutes:
+                    description: |-
+                      timeoutMinutes sets the timeout for this step's sandbox agent call.
+                      This controls only the agent call duration; pod startup always uses
+                      a fixed five-minute ceiling (defaultSandboxTimeout). Increase this
+                      for long-running tools (e.g., IntelliAide RCA takes 10-30 minutes).
+                      Defaults to 5 minutes when omitted.
+
+                      Mutable: can be adjusted at any time; the value is read when the step starts.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
                   tools:
                     description: |-
                       tools provides per-step tools that replace the shared spec.tools
@@ -1294,6 +1320,19 @@ spec:
                     - message: 'must be a valid DNS subdomain: lowercase alphanumeric
                         characters, hyphens, and dots'
                       rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  timeoutMinutes:
+                    description: |-
+                      timeoutMinutes sets the timeout for this step's sandbox agent call.
+                      This controls only the agent call duration; pod startup always uses
+                      a fixed five-minute ceiling (defaultSandboxTimeout). Increase this
+                      for long-running tools (e.g., IntelliAide RCA takes 10-30 minutes).
+                      Defaults to 5 minutes when omitted.
+
+                      Mutable: can be adjusted at any time; the value is read when the step starts.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
                   tools:
                     description: |-
                       tools provides per-step tools that replace the shared spec.tools

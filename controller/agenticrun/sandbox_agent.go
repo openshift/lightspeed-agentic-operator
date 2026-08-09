@@ -17,10 +17,6 @@ import (
 const (
 	defaultSandboxTimeout = 5 * time.Minute
 
-	analysisStepTimeout     = 10 * time.Minute
-	executionStepTimeout    = 10 * time.Minute
-	verificationStepTimeout = 30 * time.Minute
-
 	ErrAnalysisAgentCall         = "analysis agent call"
 	ErrParseAnalysisResponse     = "parse analysis response"
 	ErrExecutionAgentCall        = "execution agent call"
@@ -70,13 +66,23 @@ type SandboxAgentCaller struct {
 	Audit         AuditLogger
 }
 
+// stepTimeout returns the effective timeout for a single step's sandbox operation.
+// Reads the step's timeoutMinutes when set; falls back to defaultSandboxTimeout.
+// This is the single place where timeout policy is decided.
+func stepTimeout(step resolvedStep) time.Duration {
+	if step.TimeoutMinutes > 0 {
+		return time.Duration(step.TimeoutMinutes) * time.Minute
+	}
+	return defaultSandboxTimeout
+}
+
 func stepString(step agenticv1alpha1.SandboxStep) string {
 	return strings.ToLower(string(step))
 }
 
-func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string) (*AnalysisOutput, error) {
+func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string, timeout time.Duration) (*AnalysisOutput, error) {
 	query := buildAnalysisQuery(requestText, run)
-	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(run), serviceAccount)
+	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(run), serviceAccount, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrAnalysisAgentCall, err)
 	}
@@ -114,14 +120,14 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.A
 	}, nil
 }
 
-func (s *SandboxAgentCaller) Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, serviceAccount string) (*ExecutionOutput, error) {
+func (s *SandboxAgentCaller) Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, serviceAccount string, timeout time.Duration) (*ExecutionOutput, error) {
 	agentCtx := buildAgentContext(run)
 	if option != nil {
 		agentCtx.ApprovedOption = option
 	}
 
 	query := buildExecutionQuery(option)
-	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx, serviceAccount)
+	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx, serviceAccount, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrExecutionAgentCall, err)
 	}
@@ -138,7 +144,7 @@ func (s *SandboxAgentCaller) Execute(ctx context.Context, run *agenticv1alpha1.A
 	}, nil
 }
 
-func (s *SandboxAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput, serviceAccount string) (*VerificationOutput, error) {
+func (s *SandboxAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput, serviceAccount string, timeout time.Duration) (*VerificationOutput, error) {
 	agentCtx := buildAgentContext(run)
 	if option != nil {
 		agentCtx.ApprovedOption = option
@@ -146,7 +152,7 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.Ag
 	agentCtx.ExecutionResult = executionOutputToAgentResult(exec)
 
 	query := buildVerificationQuery(option, exec)
-	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx, serviceAccount)
+	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx, serviceAccount, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrVerificationAgentCall, err)
 	}
@@ -163,9 +169,9 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.Ag
 	}, nil
 }
 
-func (s *SandboxAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string) (*EscalationOutput, error) {
+func (s *SandboxAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string, serviceAccount string, timeout time.Duration) (*EscalationOutput, error) {
 	agentCtx := buildAgentContext(run)
-	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx, serviceAccount)
+	raw, err := s.callWithSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, agentCtx, serviceAccount, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrEscalationAgentCall, err)
 	}
@@ -186,19 +192,6 @@ func (s *SandboxAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.
 	}, nil
 }
 
-func stepTimeout(step string) time.Duration {
-	switch step {
-	case "analysis", "escalation":
-		return analysisStepTimeout
-	case "execution":
-		return executionStepTimeout
-	case "verification":
-		return verificationStepTimeout
-	default:
-		return analysisStepTimeout
-	}
-}
-
 func (s *SandboxAgentCaller) callWithSandbox(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
@@ -207,9 +200,12 @@ func (s *SandboxAgentCaller) callWithSandbox(
 	query string,
 	agentCtx *agentContext,
 	serviceAccount string,
+	timeout time.Duration,
 ) (json.RawMessage, error) {
-	agentTimeout := stepTimeout(stepName)
-	podDeadline := agentTimeout + defaultSandboxTimeout
+	if timeout <= 0 {
+		timeout = defaultSandboxTimeout
+	}
+	podDeadline := timeout + defaultSandboxTimeout
 
 	name, err := s.Sandbox.Create(ctx, run, stepName, step.Agent, step.LLM, step.Tools, serviceAccount, podDeadline)
 	if err != nil {
@@ -218,6 +214,10 @@ func (s *SandboxAgentCaller) callWithSandbox(
 
 	s.patchSandboxInfo(ctx, run, stepName, name)
 
+	// Pod startup is an infrastructure concern unrelated to the agent's work
+	// budget. Using a fixed ceiling here ensures that the full user-configured
+	// timeout is available for the agent call itself, and avoids the effective
+	// wall-clock time being 2x the configured value.
 	endpoint, err := s.Sandbox.WaitReady(ctx, name, defaultSandboxTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrWaitForSandbox, err)
@@ -236,8 +236,8 @@ func (s *SandboxAgentCaller) callWithSandbox(
 		s.Audit.InjectTraceContext(ctx, run, headers)
 	}
 
-	client := s.ClientFactory(agentURL, podDeadline)
-	resp, err := client.Run(ctx, "", query, schema, agentCtx, headers, agentTimeout)
+	client := s.ClientFactory(agentURL, timeout)
+	resp, err := client.Run(ctx, "", query, schema, agentCtx, headers, timeout)
 	if err != nil {
 		return nil, err
 	}
