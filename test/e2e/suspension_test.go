@@ -104,12 +104,11 @@ func TestSuspension_AdmissionRejectsCreate(t *testing.T) {
 	}
 
 	name := "suspend-admission-blocked"
-	err := waitForSuspendedAdmissionReject(t, c, name, agenticv1alpha1.AgenticRunSpec{
+	waitForSuspendedAdmissionReject(t, c, name, agenticv1alpha1.AgenticRunSpec{
 		Request:          "should be rejected by VAP",
 		TargetNamespaces: []string{"staging"},
 		Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
 	})
-	t.Logf("CREATE rejected as expected: %v", err)
 
 	var got agenticv1alpha1.AgenticRun
 	if getErr := c.Get(ctx, types.NamespacedName{Name: name, Namespace: testNS}, &got); !apierrors.IsNotFound(getErr) {
@@ -147,20 +146,14 @@ func TestSuspension_AdmissionAllowsCreateWhenConfigAbsent(t *testing.T) {
 		t.Fatalf("timed out waiting for AgenticOLSConfig absence: %v", err)
 	}
 
-	run := &agenticv1alpha1.AgenticRun{
-		ObjectMeta: metav1.ObjectMeta{Name: "suspend-admission-absent-config", Namespace: testNS},
-		Spec: agenticv1alpha1.AgenticRunSpec{
-			Request:          "should be allowed when config is absent",
-			TargetNamespaces: []string{"staging"},
-			Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
-		},
-	}
-	cleanup(t, c, run)
-	t.Cleanup(func() { cleanup(t, c, run) })
-
-	if err := c.Create(ctx, run); err != nil {
-		t.Fatalf("expected AgenticRun CREATE to succeed with no AgenticOLSConfig, got: %v", err)
-	}
+	// Poll CREATE until VAP parameter cache observes the missing config
+	// (parameterNotFoundAction Allow). A single-shot Create can still see a
+	// stale suspended param and flake.
+	waitForAdmissionAllow(t, c, "suspend-admission-absent-config", agenticv1alpha1.AgenticRunSpec{
+		Request:          "should be allowed when config is absent",
+		TargetNamespaces: []string{"staging"},
+		Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
+	})
 	t.Log("CREATE succeeded with absent AgenticOLSConfig (parameterNotFoundAction Allow)")
 }
 
@@ -220,7 +213,7 @@ func TestSuspension_ResumeNewAgenticRun(t *testing.T) {
 	}
 
 	// Verify admission blocking while suspended (poll until VAP param cache catches up).
-	_ = waitForSuspendedAdmissionReject(t, c, "suspend-before-resume", agenticv1alpha1.AgenticRunSpec{
+	waitForSuspendedAdmissionReject(t, c, "suspend-before-resume", agenticv1alpha1.AgenticRunSpec{
 		Request:  "should be rejected while suspended",
 		Analysis: agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
 	})
@@ -233,15 +226,18 @@ func TestSuspension_ResumeNewAgenticRun(t *testing.T) {
 	if err := c.Patch(ctx, config, patch); err != nil {
 		t.Fatalf("patch config to resume: %v", err)
 	}
-	time.Sleep(5 * time.Second)
 
 	waitForConfigDeactivated(t, c)
 	waitForConfigEvent(t, c, "SuspensionDeactivated", "System resumed; agentic operations re-enabled")
 	t.Log("config deactivation condition and event verified")
 
-	// New run should proceed past Pending.
-	resumed := createAgenticRun(t, c, "suspend-after-resume")
-	waitForPhase(t, c, resumed.Name, agenticv1alpha1.AgenticRunPhaseProposed)
+	// Poll CREATE until VAP observes suspended=false (replaces fixed sleep).
+	waitForAdmissionAllow(t, c, "suspend-after-resume", agenticv1alpha1.AgenticRunSpec{
+		Request:          "resume after suspend",
+		TargetNamespaces: []string{"staging"},
+		Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
+	})
+	waitForPhase(t, c, "suspend-after-resume", agenticv1alpha1.AgenticRunPhaseProposed)
 	t.Log("new run proceeded normally after resume")
 }
 
@@ -266,8 +262,9 @@ func assertSuspensionVAPInstalled(t *testing.T, c client.Client) {
 
 // waitForSuspendedAdmissionReject polls AgenticRun CREATE until the VAP denies
 // it with Forbidden or Invalid and a "suspended" message. Retries when CREATE
-// succeeds (param cache lag) by deleting the accidental object.
-func waitForSuspendedAdmissionReject(t *testing.T, c client.Client, name string, spec agenticv1alpha1.AgenticRunSpec) error {
+// succeeds (param cache lag) by deleting the accidental object. Fatals on
+// timeout; logs the expected rejection on success.
+func waitForSuspendedAdmissionReject(t *testing.T, c client.Client, name string, spec agenticv1alpha1.AgenticRunSpec) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -289,14 +286,51 @@ func waitForSuspendedAdmissionReject(t *testing.T, c client.Client, name string,
 			return false, nil
 		}
 		if !strings.Contains(strings.ToLower(createErr.Error()), "suspended") {
-			return false, fmt.Errorf("admission error missing suspended mention: %v", createErr)
+			return false, fmt.Errorf("admission error missing suspended mention: %w", createErr)
 		}
 		return true, nil
 	})
 	if err != nil {
 		t.Fatalf("timed out waiting for suspended admission reject (last=%v): %v", lastErr, err)
 	}
-	return lastErr
+	t.Logf("CREATE rejected as expected: %v", lastErr)
+}
+
+// waitForAdmissionAllow polls AgenticRun CREATE until admission accepts it.
+// Retries while the VAP still denies with a suspension error (stale param
+// cache after delete/resume). The created object is registered for cleanup.
+func waitForAdmissionAllow(t *testing.T, c client.Client, name string, spec agenticv1alpha1.AgenticRunSpec) {
+	t.Helper()
+	ctx := context.Background()
+
+	var lastErr error
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		run := &agenticv1alpha1.AgenticRun{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS},
+			Spec:       spec,
+		}
+		createErr := c.Create(ctx, run)
+		if createErr == nil {
+			t.Cleanup(func() { cleanup(t, c, run) })
+			return true, nil
+		}
+		lastErr = createErr
+		if apierrors.IsAlreadyExists(createErr) {
+			// A prior successful create from this poll left the object.
+			t.Cleanup(func() { cleanup(t, c, run) })
+			return true, nil
+		}
+		if (apierrors.IsForbidden(createErr) || apierrors.IsInvalid(createErr)) &&
+			strings.Contains(strings.ToLower(createErr.Error()), "suspended") {
+			t.Logf("CREATE still denied by stale VAP param cache — retrying: %v", createErr)
+			return false, nil
+		}
+		t.Logf("waiting for admission allow, got %T / %v", createErr, createErr)
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("timed out waiting for admission allow (last=%v): %v", lastErr, err)
+	}
 }
 
 // waitForConfigSuspended polls AgenticOLSConfig until the Suspended condition
