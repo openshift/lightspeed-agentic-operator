@@ -24,6 +24,20 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 10. **Resumption**: Setting `spec.suspended` back to `false` re-enables the system for **new** runs only. Existing `EmergencyStopped` runs remain terminal.
 11. **New run blocking**: While `suspended=true`, runs that are already in `Pending` phase (no conditions set yet) MUST also be terminated with `EmergencyStopped` — suspension applies to all non-terminal runs, not just those with active sandboxes.
 
+### Admission-Time Blocking (OLS-3267)
+
+Primary enforcement so new runs never persist while the system is suspended. Spike design: OLS-3166 / closed PR #112 (updated for `AgenticRun` rename).
+
+11a. **AgenticRun CREATE rejection**: While `AgenticOLSConfig.spec.suspended` is `true`, the API server MUST reject `AgenticRun` CREATE requests at admission time with a clear error message stating that the agentic system is suspended. Enforcement MUST use a `ValidatingAdmissionPolicy` with `paramRef` to `AgenticOLSConfig`.
+11b. **CEL source of truth**: The admission policy CEL expression MUST evaluate `params.spec.suspended` on the referenced `AgenticOLSConfig`. It MUST NOT key off `status.conditions` (including the `Suspended` condition) — admission follows the admin-set kill switch immediately.
+11c. **Absence allows creation**: If no `AgenticOLSConfig` CR exists, admission MUST allow `AgenticRun` creation. Consistent with rule 3 (absence = `suspended=false`). Enforced via `parameterNotFoundAction: Allow` on the policy binding, with `paramRef.name` equal to `cluster`.
+11d. **CREATE-only on `agenticruns`**: The admission policy MUST only intercept `CREATE` operations on `agenticruns` (`apiGroup: agentic.openshift.io`, `apiVersion: v1alpha1`). Updates to existing `AgenticRun` objects MUST NOT be blocked. Other kinds in the API group (`AgenticRunApproval`, `Agent`, `LLMProvider`, `ApprovalPolicy`, result CRs, `AgenticOLSConfig`) MUST NOT be matched.
+11e. **Policy evaluation failure**: The `ValidatingAdmissionPolicy` MUST set `failurePolicy: Fail` so that if the policy cannot be evaluated, `AgenticRun` CREATE is denied.
+11f. **Deny action**: The `ValidatingAdmissionPolicyBinding` MUST set `validationActions: [Deny]`.
+11g. **Static install with operator**: The `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` MUST be static manifests installed with the operator (bundled alongside CRDs / wired into the default kustomize and OLM install path). They require no runtime create/update/delete management by an operator reconciler.
+11h. **Defense-in-depth**: The reconciler guard (rules 12–15) MUST remain as fallback enforcement. The admission policy is primary for new CREATE; the reconciler catches race conditions during suspension toggle, pre-existing non-terminal runs, and VAP removal or misinstallation.
+11i. **Approvals while suspended**: `AgenticRunApproval` CREATE/UPDATE (including human approve/deny PATCH) MUST remain allowed while suspended. The run reconciler MUST NOT start new workflow steps while suspended (rules 5, 13), so an approval written during suspension has no execution effect on a run that is or will become `EmergencyStopped`. Extending admission to block approvals or other kinds is deferred ([PLANNED: future]) if product needs require it later.
+
 ### Suspension Status and Observability
 
 5a. **Status subresource**: `AgenticOLSConfig` MUST have a `/status` subresource. The status MUST include a `conditions` array following the standard `metav1.Condition` shape.
@@ -71,7 +85,7 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 - Derived phase `EmergencyStopped` added to `AgenticRunPhase` enum
 
 ### Affected repositories
-- `lightspeed-agentic-operator` — CRD types, run reconciler, `AgenticOLSConfig` status controller, CLI commands; E2E: `test/e2e/suspension_test.go`
+- `lightspeed-agentic-operator` — CRD types, run reconciler, `AgenticOLSConfig` status controller, CLI commands, admission manifests (`ValidatingAdmissionPolicy` / binding); E2E: `test/e2e/suspension_test.go` (including admission rejection while suspended)
 - `lightspeed-agentic-console` — `derivePhaseFromConditions` sync, suspension banner, phase display
 
 ## Constraints
@@ -80,11 +94,14 @@ Jira tracking: OLS-3018 (base kill switch), OLS-3267 (hardening).
 - The `AgenticOLSConfig` controller RBAC MUST include `get`, `list`, `watch` on `agenticolsconfigs` for the run reconciler's service account.
 - The `oc agentic suspend` / `resume` commands require the user to have `patch` permissions on `AgenticOLSConfig`.
 - Termination of in-flight runs via Approach A (reconciler re-queue) is bounded by `maxConcurrentReconciles`; at default concurrency (5) with 100 runs, termination completes in approximately 4-8 seconds. This is acceptable for v1. If real-world scale requires faster termination, a batch-sweep approach (Approach B) can be added to the `AgenticOLSConfig` reconciler without changing any other component.
+- Admission-time blocking (rules 11a–11i) requires OpenShift 4.17+ (Kubernetes 1.30+, where `ValidatingAdmissionPolicy` is GA).
+- No additional operator ServiceAccount RBAC is required for the VAP/binding: they are cluster-scoped install-time resources, not created by the operator at runtime.
 
 ## Planned Changes
 
 - [PLANNED: future] Batch-sweep termination (Approach B): if Approach A's reconciler-based termination proves too slow at scale, add a direct sweep in the `AgenticOLSConfig` reconciler that lists and terminates all non-terminal runs in a single pass with goroutine fan-out.
 - [PLANNED: future] Additional config fields (e.g., system-wide defaults, feature gates) can be added to the `AgenticOLSConfig` spec as needed.
-- [PLANNED: OLS-3267] Admission-time run blocking via `ValidatingAdmissionPolicy` with `paramRef` to reject `AgenticRun` creation at the API server when suspended. See spike OLS-3166 for design. VAP/binding lifecycle mechanism deferred to OLS-3302.
+- [PLANNED: OLS-3267] Implement admission-time blocking per rules 11a–11i (VAP + binding manifests, kustomize/OLM wiring, E2E for CREATE rejection while suspended).
 - [PLANNED: OLS-3267] Sandbox pod isolation on suspension — isolate running sandbox pods without deleting them for post-incident forensics. Blocked on durable sandbox pod log mechanism (separate RFE).
+- [PLANNED: future] Extend admission-time blocking beyond `AgenticRun` CREATE (e.g. reject `AgenticRunApproval` updates while suspended) only if product needs require it.
 - [DONE: OLS-3295] Renamed `Proposal` references to `AgenticRun` in kill switch logic, CLI commands, and console display.
