@@ -13,7 +13,14 @@ NAMESPACE="${NAMESPACE:-openshift-lightspeed}"
 info()  { echo "  ✓ $*"; }
 step()  { echo "[operator] $*"; }
 
-# Delete webhook first so the fail-closed webhook doesn't block API calls.
+# Delete admission policy first so fail-closed VAP/webhook don't block cleanup.
+step "Deleting suspension ValidatingAdmissionPolicy"
+oc delete validatingadmissionpolicybinding agentic.openshift.io-agenticrun-suspension --ignore-not-found ||
+  step "Warning: could not delete ValidatingAdmissionPolicyBinding (managed cluster?)"
+oc delete validatingadmissionpolicy agentic.openshift.io-agenticrun-suspension --ignore-not-found ||
+  step "Warning: could not delete ValidatingAdmissionPolicy (managed cluster?)"
+info "Suspension ValidatingAdmissionPolicy deleted"
+
 step "Deleting webhook resources"
 oc delete mutatingwebhookconfiguration agentic-operator-mutating-webhook --ignore-not-found ||
   step "Warning: could not delete MutatingWebhookConfiguration (managed cluster?)"

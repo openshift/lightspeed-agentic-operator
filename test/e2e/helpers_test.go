@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -60,6 +61,7 @@ func newClient(t *testing.T) client.Client {
 
 	s := scheme.Scheme
 	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
+	utilruntime.Must(admissionregistrationv1.AddToScheme(s))
 
 	c, err := client.New(cfg, client.Options{Scheme: s})
 	if err != nil {
