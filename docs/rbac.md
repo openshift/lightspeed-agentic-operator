@@ -108,11 +108,11 @@ subjects:
 
 ## Dynamic analysis identity (per-AgenticRun)
 
-Before analysis, the operator creates a UID-qualified ServiceAccount in its own namespace and binds it to the built-in `view` ClusterRole only in the AgenticRun namespace. A supplemental Role grants only `pods/log` get. The identity has no ClusterRoleBinding, Secret access, Result write permission, or access to other entries in `spec.targetNamespaces`. It is deleted after analysis and by terminal/finalizer cleanup.
+Before analysis, the operator creates a UID-qualified ServiceAccount in its own namespace and binds it to the built-in `view` ClusterRole only in the AgenticRun namespace. A supplemental Role grants only `pods/log` get. The identity has no ClusterRoleBinding, Secret access, Result write permission, or access to other entries in `spec.targetNamespaces`. It remains while analysis is active and is deleted after analysis, on suspension, and by terminal/finalizer cleanup. Transient cleanup failures requeue reconciliation.
 
 ## Dynamic execution RBAC (per-AgenticRun)
 
-Created by the operator during the execution phase, deleted on terminal state or AgenticRun deletion.
+Created by the operator during execution only when approved RBAC is requested, then deleted on terminal state or AgenticRun deletion.
 
 | Resource | Name pattern | Scope | Content |
 |----------|-------------|-------|---------|
@@ -127,7 +127,7 @@ Lifecycle:
 - **Created**: just before execution agent call (`ensureExecutionRBAC`)
 - **Deleted**: immediately after execution completes (before verification starts). Retries on failure via requeue. Also cleaned up on AgenticRun deletion (finalizer), escalation, or system failure as fallback.
 
-> **Resolved: per-run SA isolation.** Each AgenticRun gets separate analysis and execution ServiceAccounts in the operator namespace. Analysis is read-only and namespace-scoped; execution receives only approved remediation RBAC. Both identities are explicitly deleted when their phase ends. Verification and escalation continue using the shared `lightspeed-agent` SA.
+> **Resolved: per-run SA isolation.** Each AgenticRun gets a per-run analysis ServiceAccount. Execution gets a separate per-run ServiceAccount only when approved remediation RBAC is requested; otherwise it uses the shared `lightspeed-agent` identity. Analysis is read-only and namespace-scoped, while privileged execution receives only approved remediation RBAC. Per-run identities are explicitly deleted when their phases end. Verification and escalation continue using `lightspeed-agent`.
 
 ## Agent RBAC per phase
 
@@ -136,7 +136,7 @@ The sandbox ServiceAccount is selected per phase:
 | Phase | SA | Read access | Write access | Notes |
 |-------|-----|-------------|--------------|-------|
 | Analysis | `ls-analysis-{ns}-{name}-{uid-hash}` (per-run) | Built-in `view` plus `pods/log`, only in the AgenticRun namespace | None | `targetNamespaces` cannot widen access |
-| Execution | `ls-exec-{ns}-{name}` (per-run) | Inherited from bound Roles | `ls-exec-*` Roles (operator-created) | Agent mutates cluster per remediation plan; isolated SA per AgenticRun |
+| Execution | `ls-exec-{ns}-{name}` when RBAC is requested; otherwise `lightspeed-agent` | Inherited from bound Roles or shared read access | `ls-exec-*` Roles only when requested | Privileged execution is isolated per AgenticRun |
 | Verification | `lightspeed-agent` | Admin-created read access | None | Per-proposal SA deleted after execution; verification has read only |
 | Escalation | `lightspeed-agent` | Admin-created read access | None | Agent re-analyzes failure; no mutations |
 
