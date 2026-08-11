@@ -30,10 +30,11 @@ type testAgentCaller struct {
 	verifyErr   error
 	escalateErr error
 
-	analyzeResult  *AnalysisOutput
-	executeResult  *ExecutionOutput
-	verifyResult   *VerificationOutput
-	escalateResult *EscalationOutput
+	analyzeResult          *AnalysisOutput
+	executeResult          *ExecutionOutput
+	verifyResult           *VerificationOutput
+	escalateResult         *EscalationOutput
+	analysisServiceAccount string
 }
 
 func newTestAgentCaller() *testAgentCaller {
@@ -45,7 +46,8 @@ func newTestAgentCaller() *testAgentCaller {
 	return &testAgentCaller{analyzeResult: a, executeResult: e, verifyResult: v, escalateResult: esc}
 }
 
-func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, _ string) (*AnalysisOutput, error) {
+func (ta *testAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string, serviceAccount string) (*AnalysisOutput, error) {
+	ta.analysisServiceAccount = serviceAccount
 	if ta.analyzeErr != nil {
 		return nil, ta.analyzeErr
 	}

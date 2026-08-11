@@ -17,6 +17,7 @@ import (
 
 const (
 	ErrUpdateToAnalyzing         = "update to Analyzing"
+	ErrEnsureAnalysisIdentity    = "ensure analysis identity"
 	ErrCreateAnalysisResult      = "create analysis result"
 	ErrUpdateAfterAnalysis       = "update after analysis"
 	ErrUpdateToAnalyzingRevision = "update to Analyzing (revision)"
@@ -99,7 +100,11 @@ func (r *AgenticRunReconciler) handleAnalysis(
 		r.Audit.EmitAgenticRunReceived(spanCtx, run)
 	}
 
-	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, run.Spec.Request, defaultSandboxSA)
+	analysisSA, err := ensureAnalysisIdentity(spanCtx, r.Client, run, r.Namespace)
+	if err != nil {
+		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, fmt.Errorf("%s: %w", ErrEnsureAnalysisIdentity, err))
+	}
+	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, run.Spec.Request, analysisSA)
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
@@ -182,7 +187,11 @@ func (r *AgenticRunReconciler) handleRevision(
 	revisionSuffix := buildRevisionContext(run)
 	requestWithRevision := run.Spec.Request + "\n\n" + revisionSuffix
 
-	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, requestWithRevision, defaultSandboxSA)
+	analysisSA, err := ensureAnalysisIdentity(spanCtx, r.Client, run, r.Namespace)
+	if err != nil {
+		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, fmt.Errorf("%s: %w", ErrEnsureAnalysisIdentity, err))
+	}
+	analysisResult, err := r.Agent.Analyze(spanCtx, run, resolved.Analysis, requestWithRevision, analysisSA)
 	if err != nil {
 		return r.failStep(spanCtx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
@@ -580,6 +589,9 @@ func (r *AgenticRunReconciler) handleFailed(
 			log.Error(err, "RBAC cleanup on failure")
 		}
 	}
+	if err := cleanupAnalysisIdentity(ctx, r.Client, run, r.Namespace); err != nil {
+		log.Error(err, "analysis identity cleanup on failure")
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -602,6 +614,9 @@ func (r *AgenticRunReconciler) handleSuspension(
 		if err := cleanupExecutionRBAC(ctx, r.Client, run, r.Namespace); err != nil {
 			log.Error(err, "best-effort RBAC cleanup during suspension")
 		}
+	}
+	if err := cleanupAnalysisIdentity(ctx, r.Client, run, r.Namespace); err != nil {
+		log.Error(err, "best-effort analysis identity cleanup during suspension")
 	}
 
 	if isTerminal(phase) {
