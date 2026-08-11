@@ -16,6 +16,7 @@ import (
 
 const (
 	defaultSandboxTimeout = 5 * time.Minute
+	httpGracePeriod       = 15 * time.Second
 
 	ErrAnalysisAgentCall         = "analysis agent call"
 	ErrParseAnalysisResponse     = "parse analysis response"
@@ -61,7 +62,7 @@ type SandboxLifecycle interface {
 type SandboxAgentCaller struct {
 	Sandbox       SandboxLifecycle
 	K8sClient     client.Client
-	ClientFactory func(endpoint string) AgentHTTPClientInterface
+	ClientFactory func(endpoint string, timeout time.Duration) AgentHTTPClientInterface
 	Namespace     string
 	Timeout       time.Duration
 	Audit         AuditLogger
@@ -222,13 +223,34 @@ func (s *SandboxAgentCaller) callWithSandbox(
 		s.Audit.InjectTraceContext(ctx, run, headers)
 	}
 
-	client := s.ClientFactory(agentURL)
-	resp, err := client.Run(ctx, "", query, schema, agentCtx, headers)
+	stepTimeout := timeoutForStep(stepName, step.Agent)
+	client := s.ClientFactory(agentURL, stepTimeout+httpGracePeriod)
+	timeoutMs := int64(stepTimeout / time.Millisecond)
+	resp, err := client.Run(ctx, "", query, schema, agentCtx, headers, &timeoutMs)
 	if err != nil {
 		return nil, err
 	}
 
 	return resp.Response, nil
+}
+
+func timeoutForStep(stepName string, agent *agenticv1alpha1.Agent) time.Duration {
+	if agent == nil {
+		return defaultSandboxTimeout
+	}
+	var seconds int32
+	switch stepName {
+	case "analysis":
+		seconds = agent.Spec.Timeouts.AnalysisSeconds
+	case "execution":
+		seconds = agent.Spec.Timeouts.ExecutionSeconds
+	case "verification":
+		seconds = agent.Spec.Timeouts.VerificationSeconds
+	}
+	if seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return defaultSandboxTimeout
 }
 
 func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error {

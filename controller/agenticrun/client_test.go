@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -35,8 +36,8 @@ func TestAgentHTTPClient_RunSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
-	resp, err := client.Run(context.Background(), "You are an SRE agent", "check health", nil, nil, nil)
+	client := NewAgentHTTPClient(server.URL, 0)
+	resp, err := client.Run(context.Background(), "You are an SRE agent", "check health", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -52,16 +53,16 @@ func TestAgentHTTPClient_RunHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
-	_, err := client.Run(context.Background(), "", "test", nil, nil, nil)
+	client := NewAgentHTTPClient(server.URL, 0)
+	_, err := client.Run(context.Background(), "", "test", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for HTTP 500")
 	}
 }
 
 func TestAgentHTTPClient_RunConnectionError(t *testing.T) {
-	client := NewAgentHTTPClient("http://127.0.0.1:1")
-	_, err := client.Run(context.Background(), "", "test", nil, nil, nil)
+	client := NewAgentHTTPClient("http://127.0.0.1:1", 0)
+	_, err := client.Run(context.Background(), "", "test", nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for connection failure")
 	}
@@ -93,7 +94,7 @@ func TestAgentHTTPClient_RunWithExecutionResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 		ExecutionResult: &agentExecutionResult{
@@ -103,7 +104,7 @@ func TestAgentHTTPClient_RunWithExecutionResult(t *testing.T) {
 			},
 		},
 	}
-	_, err := client.Run(context.Background(), "", "test", nil, agentCtx, nil)
+	_, err := client.Run(context.Background(), "", "test", nil, agentCtx, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,11 +125,11 @@ func TestAgentHTTPClient_RunWithoutExecutionResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 	}
-	_, err := client.Run(context.Background(), "", "test", nil, agentCtx, nil)
+	_, err := client.Run(context.Background(), "", "test", nil, agentCtx, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -158,12 +159,58 @@ func TestAgentHTTPClient_RunWithContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := NewAgentHTTPClient(server.URL)
+	client := NewAgentHTTPClient(server.URL, 0)
 	agentCtx := &agentContext{
 		TargetNamespaces: []string{"production"},
 		PreviousAttempts: []agentPreviousAttempt{{Attempt: 1, FailureReason: "timeout"}},
 	}
-	_, err := client.Run(context.Background(), "", "test", nil, agentCtx, nil)
+	_, err := client.Run(context.Background(), "", "test", nil, agentCtx, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAgentHTTPClient_RunTimeoutMsPropagated(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req agentRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+		if req.TimeoutMs == nil {
+			t.Fatal("expected timeout_ms to be set")
+		}
+		if *req.TimeoutMs != 600000 {
+			t.Errorf("timeout_ms = %d, want 600000", *req.TimeoutMs)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success": true}`))
+	}))
+	defer server.Close()
+
+	client := NewAgentHTTPClient(server.URL, 10*time.Minute)
+	timeoutMs := int64(600000)
+	_, err := client.Run(context.Background(), "", "test", nil, nil, nil, &timeoutMs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestAgentHTTPClient_RunTimeoutMsOmittedWhenNil(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req agentRunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("failed to decode request: %v", err)
+		}
+		if req.TimeoutMs != nil {
+			t.Errorf("timeout_ms should be nil, got %d", *req.TimeoutMs)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success": true}`))
+	}))
+	defer server.Close()
+
+	client := NewAgentHTTPClient(server.URL, 0)
+	_, err := client.Run(context.Background(), "", "test", nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

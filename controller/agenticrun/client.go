@@ -18,10 +18,11 @@ const (
 	maxResponseSize = 2 << 20 // 2 MiB
 	runPath         = "/v1/agent/run"
 
-	ErrMarshalRequest    = "failed to marshal request"
-	ErrCreateHTTPRequest = "failed to create HTTP request"
-	ErrPost              = "POST"
-	ErrReadResponseBody  = "failed to read response body"
+	ErrMarshalRequest        = "failed to marshal request"
+	ErrCreateHTTPRequest     = "failed to create HTTP request"
+	ErrPost                  = "POST"
+	ErrReadResponseBody      = "failed to read response body"
+	defaultHTTPClientTimeout = 5 * time.Minute
 )
 
 type agentRunRequest struct {
@@ -65,7 +66,7 @@ type agentRunResponse struct {
 
 // AgentHTTPClientInterface abstracts HTTP calls to the agent service for testability.
 type AgentHTTPClientInterface interface {
-	Run(ctx context.Context, systemPrompt, query string, outputSchema json.RawMessage, agentCtx *agentContext, extraHeaders http.Header) (*agentRunResponse, error)
+	Run(ctx context.Context, systemPrompt, query string, outputSchema json.RawMessage, agentCtx *agentContext, extraHeaders http.Header, timeoutMs *int64) (*agentRunResponse, error)
 }
 
 // AgentHTTPClient communicates with the agentic-sandbox REST API.
@@ -74,10 +75,13 @@ type AgentHTTPClient struct {
 	endpoint   string
 }
 
-func NewAgentHTTPClient(endpoint string) AgentHTTPClientInterface {
+func NewAgentHTTPClient(endpoint string, timeout time.Duration) AgentHTTPClientInterface {
+	if timeout <= 0 {
+		timeout = defaultHTTPClientTimeout
+	}
 	return &AgentHTTPClient{
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute,
+			Timeout: timeout,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // internal cluster traffic
 			},
@@ -86,12 +90,13 @@ func NewAgentHTTPClient(endpoint string) AgentHTTPClientInterface {
 	}
 }
 
-func (c *AgentHTTPClient) Run(ctx context.Context, systemPrompt, query string, outputSchema json.RawMessage, agentCtx *agentContext, extraHeaders http.Header) (*agentRunResponse, error) {
+func (c *AgentHTTPClient) Run(ctx context.Context, systemPrompt, query string, outputSchema json.RawMessage, agentCtx *agentContext, extraHeaders http.Header, timeoutMs *int64) (*agentRunResponse, error) {
 	req := agentRunRequest{
 		Query:        query,
 		SystemPrompt: systemPrompt,
 		OutputSchema: outputSchema,
 		Context:      agentCtx,
+		TimeoutMs:    timeoutMs,
 	}
 
 	body, err := json.Marshal(req)
