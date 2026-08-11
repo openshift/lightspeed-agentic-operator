@@ -262,7 +262,7 @@ func newMockSandboxAgent(analysisJSON, executionJSON, verificationJSON string) (
 	caller := &SandboxAgentCaller{
 		Sandbox:   sandbox,
 		K8sClient: fc,
-		ClientFactory: func(_ string) AgentHTTPClientInterface {
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface {
 			resp := responses[callCount%len(responses)]
 			callCount++
 			httpClient.response = &agentRunResponse{Response: json.RawMessage(resp)}

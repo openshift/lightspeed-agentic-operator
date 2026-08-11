@@ -41,17 +41,19 @@ func (m *mockSandboxProvider) Release(_ context.Context, _ string) error {
 }
 
 type mockHTTPClient struct {
-	response   *agentRunResponse
-	err        error
-	lastQuery  string
-	lastPrompt string
-	lastCtx    *agentContext
+	response      *agentRunResponse
+	err           error
+	lastQuery     string
+	lastPrompt    string
+	lastCtx       *agentContext
+	lastTimeoutMs *int64
 }
 
-func (m *mockHTTPClient) Run(_ context.Context, systemPrompt, query string, _ json.RawMessage, agentCtx *agentContext, _ http.Header) (*agentRunResponse, error) {
+func (m *mockHTTPClient) Run(_ context.Context, systemPrompt, query string, _ json.RawMessage, agentCtx *agentContext, _ http.Header, timeoutMs *int64) (*agentRunResponse, error) {
 	m.lastQuery = query
 	m.lastPrompt = systemPrompt
 	m.lastCtx = agentCtx
+	m.lastTimeoutMs = timeoutMs
 	return m.response, m.err
 }
 
@@ -61,7 +63,7 @@ func newTestSandboxAgentCaller(sandbox *mockSandboxProvider, httpClient *mockHTT
 	return &SandboxAgentCaller{
 		Sandbox:       sandbox,
 		K8sClient:     fc,
-		ClientFactory: func(_ string) AgentHTTPClientInterface { return httpClient },
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
 		Namespace:     "test-ns",
 		Timeout:       5 * time.Minute,
 	}
@@ -76,7 +78,7 @@ func newTestSandboxAgentCallerWithAgenticRun(sandbox *mockSandboxProvider, httpC
 	return &SandboxAgentCaller{
 		Sandbox:       sandbox,
 		K8sClient:     fc,
-		ClientFactory: func(_ string) AgentHTTPClientInterface { return httpClient },
+		ClientFactory: func(_ string, _ time.Duration) AgentHTTPClientInterface { return httpClient },
 		Namespace:     "test-ns",
 		Timeout:       5 * time.Minute,
 	}
@@ -718,6 +720,109 @@ func TestReleaseSandboxes_ContinuesOnError(t *testing.T) {
 	// Should still attempt all three
 	if len(*tracker.released) != 3 {
 		t.Fatalf("expected 3 release attempts, got %d", len(*tracker.released))
+	}
+}
+
+// --- Timeout wiring tests ---
+
+func TestTimeoutForStep(t *testing.T) {
+	agent := &agenticv1alpha1.Agent{
+		Spec: agenticv1alpha1.AgentSpec{
+			Timeouts: agenticv1alpha1.AgentTimeouts{
+				AnalysisSeconds:     600,
+				ExecutionSeconds:    900,
+				VerificationSeconds: 300,
+			},
+		},
+	}
+
+	cases := []struct {
+		step string
+		want time.Duration
+	}{
+		{"analysis", 600 * time.Second},
+		{"execution", 900 * time.Second},
+		{"verification", 300 * time.Second},
+		{"escalation", defaultSandboxTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.step, func(t *testing.T) {
+			got := timeoutForStep(tc.step, agent)
+			if got != tc.want {
+				t.Errorf("timeoutForStep(%q) = %v, want %v", tc.step, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTimeoutForStep_DefaultsWhenUnset(t *testing.T) {
+	agent := &agenticv1alpha1.Agent{}
+	for _, step := range []string{"analysis", "execution", "verification"} {
+		got := timeoutForStep(step, agent)
+		if got != defaultSandboxTimeout {
+			t.Errorf("timeoutForStep(%q) with unset timeouts = %v, want %v", step, got, defaultSandboxTimeout)
+		}
+	}
+}
+
+func TestTimeoutForStep_NilAgent(t *testing.T) {
+	got := timeoutForStep("analysis", nil)
+	if got != defaultSandboxTimeout {
+		t.Errorf("timeoutForStep with nil agent = %v, want %v", got, defaultSandboxTimeout)
+	}
+}
+
+func TestSandboxAgentCaller_TimeoutPropagatedToRequest(t *testing.T) {
+	sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
+	httpClient := &mockHTTPClient{
+		response: &agentRunResponse{
+			Response: json.RawMessage(`{"success": true, "options": []}`),
+		},
+	}
+
+	var capturedHTTPTimeout time.Duration
+	run := testSandboxAgenticRun()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(run).
+		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).
+		Build()
+	_ = fc.Create(context.Background(), fakeBaseTemplate())
+	caller := &SandboxAgentCaller{
+		Sandbox:   sandbox,
+		K8sClient: fc,
+		ClientFactory: func(_ string, timeout time.Duration) AgentHTTPClientInterface {
+			capturedHTTPTimeout = timeout
+			return httpClient
+		},
+		Namespace: "test-ns",
+		Timeout:   5 * time.Minute,
+	}
+
+	agent := testDefaultAgent()
+	agent.Spec.Timeouts = agenticv1alpha1.AgentTimeouts{
+		AnalysisSeconds: 600,
+	}
+	step := resolvedStep{
+		Agent: agent,
+		LLM:   testLLM("smart"),
+		Tools: func() *agenticv1alpha1.ToolsSpec { t := testTools(); return &t }(),
+	}
+
+	_, err := caller.Analyze(context.Background(), run, step, "test", defaultSandboxSA)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if httpClient.lastTimeoutMs == nil {
+		t.Fatal("expected timeout_ms to be set")
+	}
+	if *httpClient.lastTimeoutMs != 600000 {
+		t.Errorf("timeout_ms = %d, want 600000", *httpClient.lastTimeoutMs)
+	}
+
+	wantHTTPTimeout := 600*time.Second + httpGracePeriod
+	if capturedHTTPTimeout != wantHTTPTimeout {
+		t.Errorf("HTTP client timeout = %v, want %v (stepTimeout + grace)", capturedHTTPTimeout, wantHTTPTimeout)
 	}
 }
 
