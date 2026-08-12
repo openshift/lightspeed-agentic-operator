@@ -214,8 +214,9 @@ func TestSuspension_ResumeNewAgenticRun(t *testing.T) {
 
 	// Verify admission blocking while suspended (poll until VAP param cache catches up).
 	waitForSuspendedAdmissionReject(t, c, "suspend-before-resume", agenticv1alpha1.AgenticRunSpec{
-		Request:  "should be rejected while suspended",
-		Analysis: agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
+		Request:          "should be rejected while suspended",
+		TargetNamespaces: []string{"staging"},
+		Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
 	})
 	t.Log("confirmed admission blocking while suspended")
 
