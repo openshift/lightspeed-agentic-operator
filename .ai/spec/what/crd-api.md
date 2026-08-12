@@ -13,7 +13,13 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 7. **AgenticRun — `spec.targetNamespaces`**: Optional list of namespaces for context and RBAC targeting; immutable once set; when empty, RBAC targeting MAY fall back to namespaces declared in analysis RBAC output at execution time (see `sandbox-execution.md`).
 8. **AgenticRun — `spec.analysisOutput`**: Immutable after set. `mode` defaults to full analysis schema when empty/default. `mode=Minimal` REQUIRES `schema` to be set, forbids `spec.execution` and `spec.verification`, and restricts option shape accordingly.
 9. **AgenticRun — `spec.tools`**: Default `ToolsSpec` for all steps; immutable once set. Per-step `tools` on `spec.analysis` / `spec.execution` / `spec.verification` replaces the default for that step only when non-zero.
-10. **AgenticRun — `spec.analysis|execution|verification`**: Immutable `AgenticRunStep` records after set. Each non-zero step MAY name `agent` (DNS subdomain) defaulting to `default` when empty; MAY carry per-step `tools`.
+10. **AgenticRun — `spec.analysis|execution|verification`**: Immutable `AgenticRunStep` records after set. Each non-zero step MAY name `agent` (DNS subdomain) defaulting to `default` when empty; MAY carry per-step `tools`; MAY carry per-step `instructions` [PLANNED: OLS-3491].
+10a. [PLANNED: OLS-3491] **AgenticRunStep — `instructions`**: Optional string (MaxLength=32768). Full **replacement** of the step’s system instructions (sandbox `systemPrompt` / batch `/input/system-prompt`). MUST NOT contain the step’s task input (`spec.request`, approved option JSON, execution output JSON). When omitted at create time, the defaulting webhook MUST materialize the effective instructions into the field (see rule 10b). Empty string after defaulting is forbidden — materialization MUST always produce a non-empty value for present steps.
+10b. [PLANNED: OLS-3491] **Create-time materialization (analysis / execution / verification)**: On AgenticRun create (mutating defaulting webhook), for each present step whose `instructions` is omitted, the operator MUST write the effective instructions into `spec.<step>.instructions` using priority: (1) creator-supplied `instructions` if present, else (2) cluster default from handoff ConfigMap `instructions-<step>` when present, else (3) product built-in for that step **render-then-store** (evaluate any run-shape conditionals such as HasExecution / HasVerification, then store plain final text). After materialization, existing step immutability freezes the value for the life of the run. Operator upgrades that change built-ins MUST NOT alter already-materialized runs.
+10c. [PLANNED: OLS-3491] **Escalation instructions**: There is no `spec.escalation` / per-run escalation `instructions` field in this change. Escalation resolves at escalation time: handoff ConfigMap `instructions-escalation` if present, else product built-in. Cluster changes MAY affect runs that have not yet escalated. [FOLLOW-UP RFE] Full `spec.escalation` as an `AgenticRunStep` (agent / tools / instructions) is out of scope for OLS-3491.
+10d. [PLANNED: OLS-3491] **Channel split**: Step **system instructions** travel on the system channel (`systemPrompt` / `/input/system-prompt`). Step **input** travels on the query channel (`query` / `/input/query`): analysis uses `spec.request` (plus existing revision suffix behavior unchanged); execution uses approved option JSON; verification uses option + execution output JSON; escalation uses its dynamic payload (run metadata, request, result refs). Role text MUST NOT be embedded in `query`.
+10e. [PLANNED: OLS-3491] **Revision feedback**: `spec.revisionFeedback` / revision context template remain query-side append behavior; not part of `instructions` override in OLS-3491.
+10f. [PLANNED: OLS-3491] **Agent CR**: `Agent` remains compute tier only (model / provider / timeouts). Domain or step instructions MUST NOT be added to `Agent`.
 11. **AgenticRun — `status`**: Observed-only. `status.conditions` holds map-merge conditions (types include `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`, `EmergencyStopped`). `status.steps` holds per-step sandbox info and result refs.
 12. **Phase display types**: `AgenticRunPhase` and `StepPhase` string enums in the API describe display labels only; they are not stored fields on `AgenticRun` (phase is derived — see `run-lifecycle.md`). `AgenticRunPhase` values include `EmergencyStopped` (terminal, set by kill switch — see `system-config.md`) and `NoActionRequired` [PLANNED: OLS-3268] (terminal, set when analysis determines no remediation is needed). `StepPhase` values include `PendingApproval`, `Running`, `Completed`, `Failed`, `Skipped`.
 13. **Sandbox step enum**: `SandboxStep` values `Analysis`, `Execution`, `Verification`, `Escalation` identify workflow steps for approvals, sandbox labels, and policies.
@@ -58,6 +64,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 ### AgenticRun
 - `metadata.*`
 - `spec.request`, `spec.targetNamespaces`, `spec.revisionFeedback`, `spec.analysisOutput`, `spec.tools`, `spec.analysis`, `spec.execution`, `spec.verification`
+- `spec.analysis.instructions`, `spec.execution.instructions`, `spec.verification.instructions` [PLANNED: OLS-3491]
 - `status.conditions`, `status.steps.analysis|execution|verification|escalation.*`
 
 ### Agent
@@ -82,6 +89,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `metadata.name`, `metadata.namespace`, `spec.*`, `status.*`
 
 ### Shared / embedded types
+- `AgenticRunStep`: `agent`, `tools`, `instructions` [PLANNED: OLS-3491]
 - `ToolsSpec`: `skills[]`, `mcpServers[]`, `requiredSecrets[]` (`disableDefaultMCP` deferred — see rule 37a / OLS-3594)
 - `SkillsSource`: `image`, `paths[]`
 - `SecretRequirement`: `name`, `description`, `mountAs.*`
@@ -96,7 +104,8 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 ## Planned Changes
 
 - [PLANNED: OLS-2940] Autonomous workflow CRD migrations may rename or reshape fields; specs MUST be updated when `v1alpha1` changes.
-- [PLANNED: OLS-2894] Explicit **Agent** fields for per-step system prompts if moved from template/runtime-only assembly (today prompts are composed outside `Agent` CR — see `sandbox-execution.md`).
+- [PLANNED: OLS-3491] Configurable per-step `instructions` on `AgenticRunStep` + cluster defaults via OLSConfig `spec.agenticOLS.instructions` / handoff ConfigMap. See rules 10a–10f and `sandbox-execution.md`. Follow-up RFE: full `spec.escalation` as `AgenticRunStep`.
+- ~~[PLANNED: OLS-2894] Explicit **Agent** fields for per-step system prompts~~ **Superseded by OLS-3491** — instructions live on `AgenticRunStep` / cluster `agenticOLS`, not on `Agent` (compute tier).
 - [OLS-3328] Add `spec.templog` to `AgenticOLSConfig` CRD for temporary audit log storage.
 - [DONE: OLS-3295] Renamed `Proposal` → `AgenticRun`, `ProposalApproval` → `AgenticRunApproval` CRD kinds and all associated field names, RBAC resources, and label keys.
 - [PLANNED: OLS-3594] Optional `disableDefaultMCP` (and related auto-injection) — deferred; blocked by OLS-3526 and OLS-3572. Not near-term.
