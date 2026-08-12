@@ -412,6 +412,100 @@ func TestSandboxAgentCaller_Analyze_EmptyTopLevelDiagnosis(t *testing.T) {
 	}
 }
 
+// --- OLS-3864: empty per-option diagnosis sanitization ---
+
+func TestSandboxAgentCaller_Analyze_EmptyPerOptionDiagnosis(t *testing.T) {
+	cases := []struct {
+		name         string
+		diagnosis    string
+		expectZeroed bool
+	}{
+		{"both empty", `"diagnosis": {"summary": "", "rootCause": ""}`, true},
+		{"summary empty", `"diagnosis": {"summary": "", "rootCause": "some cause"}`, true},
+		{"rootCause empty", `"diagnosis": {"summary": "some summary", "rootCause": ""}`, true},
+		{"both present", `"diagnosis": {"summary": "OOM detected", "rootCause": "memory limit"}`, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
+			httpClient := &mockHTTPClient{
+				response: &agentRunResponse{
+					Response: json.RawMessage(fmt.Sprintf(`{
+						"success": true,
+						"actionRequired": true,
+						"options": [{
+							"title": "Fix it",
+							%s,
+							"remediationPlan": {"description": "Do stuff", "actions": [{"command": "kubectl patch", "type": "patch", "description": "patch it"}]}
+						}]
+					}`, tc.diagnosis)),
+				},
+			}
+
+			caller := newTestSandboxAgentCaller(sandbox, httpClient)
+			result, err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "test", defaultSandboxSA)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(result.Options) != 1 {
+				t.Fatalf("expected 1 option, got %d", len(result.Options))
+			}
+			diag := result.Options[0].Diagnosis
+			if tc.expectZeroed {
+				if diag.Summary != "" || diag.RootCause != "" {
+					t.Errorf("expected zeroed diagnosis, got summary=%q rootCause=%q", diag.Summary, diag.RootCause)
+				}
+			} else {
+				if diag.Summary == "" || diag.RootCause == "" {
+					t.Errorf("expected preserved diagnosis, got summary=%q rootCause=%q", diag.Summary, diag.RootCause)
+				}
+			}
+		})
+	}
+}
+
+// --- OLS-3865: truncation of long option fields ---
+
+func TestSandboxAgentCaller_Analyze_TruncatesLongFields(t *testing.T) {
+	longTitle := strings.Repeat("x", 300)
+	longSummary := strings.Repeat("y", 2000)
+
+	sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash", endpoint: "http://sandbox:8080"}
+	httpClient := &mockHTTPClient{
+		response: &agentRunResponse{
+			Response: json.RawMessage(fmt.Sprintf(`{
+				"success": true,
+				"actionRequired": true,
+				"options": [{
+					"title": %q,
+					"summary": %q,
+					"diagnosis": {"summary": "short", "rootCause": "short"},
+					"remediationPlan": {"description": "Do stuff", "actions": [{"command": "kubectl patch", "type": "patch", "description": "patch it"}]}
+				}]
+			}`, longTitle, longSummary)),
+		},
+	}
+
+	caller := newTestSandboxAgentCaller(sandbox, httpClient)
+	result, err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "test", defaultSandboxSA)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Options) != 1 {
+		t.Fatalf("expected 1 option, got %d", len(result.Options))
+	}
+	opt := result.Options[0]
+	if len(opt.Title) != maxLenOptionTitle {
+		t.Errorf("title length = %d, want %d", len(opt.Title), maxLenOptionTitle)
+	}
+	if len(opt.Summary) != maxLenOptionSummary {
+		t.Errorf("summary length = %d, want %d", len(opt.Summary), maxLenOptionSummary)
+	}
+}
+
 // --- Per-phase query construction tests ---
 
 func TestSandboxAgentCaller_AnalysisQueryFraming(t *testing.T) {

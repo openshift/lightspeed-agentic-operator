@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -31,6 +32,26 @@ const (
 	ErrParseEscalationResponse   = "parse escalation response"
 	ErrClaimSandbox              = "claim sandbox"
 	ErrWaitForSandbox            = "wait for sandbox"
+
+	// CRD maxLength limits for analysis option fields, used by
+	// sanitizeAnalysisOptions as a safety net for LLM output that
+	// exceeds CRD validation constraints.
+	maxLenOptionTitle              = 256
+	maxLenOptionSummary            = 1024
+	maxLenDiagnosisSummary         = 8192
+	maxLenDiagnosisRootCause       = 1024
+	maxLenPlanDescription          = 8192
+	maxLenActionCommand            = 4096
+	maxLenActionType               = 256
+	maxLenActionDescription        = 4096
+	maxLenRollbackDescription      = 4096
+	maxLenRollbackCommand          = 4096
+	maxLenVerificationDescription  = 4096
+	maxLenVerificationStepName     = 253
+	maxLenVerificationStepCommand  = 4096
+	maxLenVerificationStepExpected = 1024
+	maxLenVerificationStepType     = 256
+	maxLenRBACJustification        = 1024
 )
 
 type analysisResponse struct {
@@ -94,6 +115,8 @@ func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.A
 			}
 		}
 	}
+
+	sanitizeAnalysisOptions(log, run.Name, resp.Options)
 
 	if resp.Diagnosis != nil && (resp.Diagnosis.Summary == "" || resp.Diagnosis.RootCause == "") {
 		log.Info("ignoring empty top-level diagnosis (per-option diagnoses used instead)", "run", run.Name)
@@ -310,6 +333,107 @@ func collectFailedResults(results []agenticv1alpha1.StepResultRef, stepName stri
 		}
 	}
 	return attempts
+}
+
+// truncate returns s unchanged if its byte length is within max,
+// otherwise it returns the first max bytes.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
+}
+
+// sanitizeAnalysisOptions cleans up LLM-produced options before they are
+// written to an AnalysisResult CR. It addresses two failure modes:
+//   - per-option Diagnosis with empty required fields (Summary or RootCause)
+//     is zeroed so omitzero omits the struct entirely, preventing CRD
+//     MinLength validation failures.
+//   - string fields that exceed CRD MaxLength limits are truncated to the
+//     constant-defined cap so the status patch is not rejected.
+func sanitizeAnalysisOptions(log logr.Logger, runName string, options []agenticv1alpha1.RemediationOption) {
+	for i := range options {
+		opt := &options[i]
+
+		if opt.Diagnosis.Summary == "" || opt.Diagnosis.RootCause == "" {
+			log.Info("zeroing per-option diagnosis with empty required fields", "run", runName, "option", i)
+			opt.Diagnosis = agenticv1alpha1.DiagnosisResult{}
+		}
+
+		if n := len(opt.Title); n > maxLenOptionTitle {
+			log.Info("truncating option title", "run", runName, "option", i, "from", n, "to", maxLenOptionTitle)
+			opt.Title = truncate(opt.Title, maxLenOptionTitle)
+		}
+		if n := len(opt.Summary); n > maxLenOptionSummary {
+			log.Info("truncating option summary", "run", runName, "option", i, "from", n, "to", maxLenOptionSummary)
+			opt.Summary = truncate(opt.Summary, maxLenOptionSummary)
+		}
+		if n := len(opt.Diagnosis.Summary); n > maxLenDiagnosisSummary {
+			log.Info("truncating option diagnosis summary", "run", runName, "option", i, "from", n, "to", maxLenDiagnosisSummary)
+			opt.Diagnosis.Summary = truncate(opt.Diagnosis.Summary, maxLenDiagnosisSummary)
+		}
+		if n := len(opt.Diagnosis.RootCause); n > maxLenDiagnosisRootCause {
+			log.Info("truncating option diagnosis rootCause", "run", runName, "option", i, "from", n, "to", maxLenDiagnosisRootCause)
+			opt.Diagnosis.RootCause = truncate(opt.Diagnosis.RootCause, maxLenDiagnosisRootCause)
+		}
+
+		if n := len(opt.RemediationPlan.Description); n > maxLenPlanDescription {
+			log.Info("truncating remediationPlan description", "run", runName, "option", i, "from", n, "to", maxLenPlanDescription)
+			opt.RemediationPlan.Description = truncate(opt.RemediationPlan.Description, maxLenPlanDescription)
+		}
+		for j := range opt.RemediationPlan.Actions {
+			a := &opt.RemediationPlan.Actions[j]
+			if n := len(a.Command); n > maxLenActionCommand {
+				log.Info("truncating action command", "run", runName, "option", i, "action", j, "from", n, "to", maxLenActionCommand)
+				a.Command = truncate(a.Command, maxLenActionCommand)
+			}
+			if n := len(a.Type); n > maxLenActionType {
+				a.Type = truncate(a.Type, maxLenActionType)
+			}
+			if n := len(a.Description); n > maxLenActionDescription {
+				a.Description = truncate(a.Description, maxLenActionDescription)
+			}
+		}
+
+		if n := len(opt.RemediationPlan.RollbackPlan.Description); n > maxLenRollbackDescription {
+			opt.RemediationPlan.RollbackPlan.Description = truncate(opt.RemediationPlan.RollbackPlan.Description, maxLenRollbackDescription)
+		}
+		if n := len(opt.RemediationPlan.RollbackPlan.Command); n > maxLenRollbackCommand {
+			opt.RemediationPlan.RollbackPlan.Command = truncate(opt.RemediationPlan.RollbackPlan.Command, maxLenRollbackCommand)
+		}
+
+		if n := len(opt.Verification.Description); n > maxLenVerificationDescription {
+			opt.Verification.Description = truncate(opt.Verification.Description, maxLenVerificationDescription)
+		}
+		for j := range opt.Verification.Steps {
+			s := &opt.Verification.Steps[j]
+			if n := len(s.Name); n > maxLenVerificationStepName {
+				s.Name = truncate(s.Name, maxLenVerificationStepName)
+			}
+			if n := len(s.Command); n > maxLenVerificationStepCommand {
+				s.Command = truncate(s.Command, maxLenVerificationStepCommand)
+			}
+			if n := len(s.Expected); n > maxLenVerificationStepExpected {
+				s.Expected = truncate(s.Expected, maxLenVerificationStepExpected)
+			}
+			if n := len(s.Type); n > maxLenVerificationStepType {
+				s.Type = truncate(s.Type, maxLenVerificationStepType)
+			}
+		}
+
+		for j := range opt.RBAC.NamespaceScoped {
+			r := &opt.RBAC.NamespaceScoped[j]
+			if n := len(r.Justification); n > maxLenRBACJustification {
+				r.Justification = truncate(r.Justification, maxLenRBACJustification)
+			}
+		}
+		for j := range opt.RBAC.ClusterScoped {
+			r := &opt.RBAC.ClusterScoped[j]
+			if n := len(r.Justification); n > maxLenRBACJustification {
+				r.Justification = truncate(r.Justification, maxLenRBACJustification)
+			}
+		}
+	}
 }
 
 func buildAgentContext(run *agenticv1alpha1.AgenticRun) *agentContext {

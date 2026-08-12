@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"encoding/json"
+	"fmt"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -11,7 +12,7 @@ import (
 // controls the base schema (Default or Minimal mode) and optionally injects
 // a custom schema as a required "components" property in each option.
 
-var AnalysisOutputSchema = json.RawMessage(`{
+var AnalysisOutputSchema = json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
     "actionRequired": {
@@ -22,8 +23,8 @@ var AnalysisOutputSchema = json.RawMessage(`{
       "type": "object",
       "description": "Top-level root cause analysis. Required when actionRequired is false. When actionRequired is true, diagnosis is provided per-option instead.",
       "properties": {
-        "summary": { "type": "string", "description": "Markdown-formatted diagnosis summary explaining the problem, symptoms, and findings" },
-        "rootCause": { "type": "string", "description": "Concise one-line root cause" }
+        "summary": { "type": "string", "maxLength": %d, "description": "Markdown-formatted diagnosis summary explaining the problem, symptoms, and findings" },
+        "rootCause": { "type": "string", "maxLength": %d, "description": "Concise one-line root cause" }
       },
       "required": ["summary", "rootCause"]
     },
@@ -34,29 +35,29 @@ var AnalysisOutputSchema = json.RawMessage(`{
       "items": {
         "type": "object",
         "properties": {
-          "title": { "type": "string", "description": "Short human-readable title for this option (e.g., 'Increase memory limit', 'Scale horizontally')" },
-          "summary": { "type": "string", "description": "Brief one-paragraph summary of this remediation approach" },
+          "title": { "type": "string", "maxLength": %d, "description": "Short human-readable title for this option (e.g., 'Increase memory limit', 'Scale horizontally')" },
+          "summary": { "type": "string", "maxLength": %d, "description": "Brief one-paragraph summary of this remediation approach" },
           "diagnosis": {
             "type": "object",
             "properties": {
-              "summary": { "type": "string", "description": "Markdown-formatted root cause analysis explaining the problem, symptoms, and findings" },
-              "rootCause": { "type": "string", "description": "Concise one-line root cause (e.g., 'OOMKilled due to memory limit of 256Mi')" }
+              "summary": { "type": "string", "maxLength": %d, "description": "Markdown-formatted root cause analysis explaining the problem, symptoms, and findings" },
+              "rootCause": { "type": "string", "maxLength": %d, "description": "Concise one-line root cause (e.g., 'OOMKilled due to memory limit of 256Mi')" }
             },
             "required": ["summary", "rootCause"]
           },
           "remediationPlan": {
             "type": "object",
             "properties": {
-              "description": { "type": "string", "description": "Markdown-formatted summary of the overall remediation approach" },
+              "description": { "type": "string", "maxLength": %d, "description": "Markdown-formatted summary of the overall remediation approach" },
               "actions": {
                 "type": "array",
                 "description": "Ordered list of exact bash commands to execute. Each action is one command.",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "command": { "type": "string", "description": "Exact executable bash command using kubectl or oc (e.g., 'kubectl set image deployment/foo container=registry/foo:v1.3 -n production')" },
-                    "type": { "type": "string", "description": "Action phase category (e.g., 'pre-check', 'mutation', 'wait', 'post-check')" },
-                    "description": { "type": "string", "description": "What this command does and why" }
+                    "command": { "type": "string", "maxLength": %d, "description": "Exact executable bash command using kubectl or oc (e.g., 'kubectl set image deployment/foo container=registry/foo:v1.3 -n production')" },
+                    "type": { "type": "string", "maxLength": %d, "description": "Action phase category (e.g., 'pre-check', 'mutation', 'wait', 'post-check')" },
+                    "description": { "type": "string", "maxLength": %d, "description": "What this command does and why" }
                   },
                   "required": ["command", "type", "description"]
                 }
@@ -66,8 +67,8 @@ var AnalysisOutputSchema = json.RawMessage(`{
                 "type": "object",
                 "description": "How to undo the remediation if it fails or causes issues. Required when reversible is Reversible or Partial.",
                 "properties": {
-                  "description": { "type": "string", "description": "How to undo the remediation if it fails or causes issues" },
-                  "command": { "type": "string", "description": "The rollback command or steps to execute" }
+                  "description": { "type": "string", "maxLength": %d, "description": "How to undo the remediation if it fails or causes issues" },
+                  "command": { "type": "string", "maxLength": %d, "description": "The rollback command or steps to execute" }
                 },
                 "required": ["description", "command"]
               }
@@ -77,17 +78,17 @@ var AnalysisOutputSchema = json.RawMessage(`{
           "verification": {
             "type": "object",
             "properties": {
-              "description": { "type": "string", "description": "Summary of how to verify the remediation worked" },
+              "description": { "type": "string", "maxLength": %d, "description": "Summary of how to verify the remediation worked" },
               "steps": {
                 "type": "array",
                 "description": "Ordered verification checks for the verification agent to run after execution",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "name": { "type": "string", "description": "Short check identifier (e.g., 'pod-running', 'memory-usage-normal')" },
-                    "command": { "type": "string", "description": "Command or API call to run (e.g., 'oc get pod -n production -l app=web -o jsonpath={.status.phase}')" },
-                    "expected": { "type": "string", "description": "Expected output or condition (e.g., 'Running', 'ready=true')" },
-                    "type": { "type": "string", "description": "Check category (e.g., 'command', 'metric', 'condition')" }
+                    "name": { "type": "string", "maxLength": %d, "description": "Short check identifier (e.g., 'pod-running', 'memory-usage-normal')" },
+                    "command": { "type": "string", "maxLength": %d, "description": "Command or API call to run (e.g., 'oc get pod -n production -l app=web -o jsonpath={.status.phase}')" },
+                    "expected": { "type": "string", "maxLength": %d, "description": "Expected output or condition (e.g., 'Running', 'ready=true')" },
+                    "type": { "type": "string", "maxLength": %d, "description": "Check category (e.g., 'command', 'metric', 'condition')" }
                   },
                   "required": ["name", "type"]
                 }
@@ -109,7 +110,7 @@ var AnalysisOutputSchema = json.RawMessage(`{
                     "resources": { "type": "array", "items": { "type": "string" }, "description": "Resource types (e.g., 'pods', 'deployments', 'configmaps')" },
                     "resourceNames": { "type": "array", "items": { "type": "string" }, "description": "Restrict to specific named resources. Omit to allow all resources of the given type" },
                     "verbs": { "type": "array", "items": { "type": "string" }, "description": "Allowed operations (e.g., 'get', 'list', 'patch', 'delete')" },
-                    "justification": { "type": "string", "description": "Why this permission is needed (e.g., 'Need to patch deployment to increase memory limit')" }
+                    "justification": { "type": "string", "maxLength": %d, "description": "Why this permission is needed (e.g., 'Need to patch deployment to increase memory limit')" }
                   },
                   "required": ["apiGroups", "resources", "verbs", "justification"]
                 }
@@ -124,7 +125,7 @@ var AnalysisOutputSchema = json.RawMessage(`{
                     "resources": { "type": "array", "items": { "type": "string" }, "description": "Resource types (e.g., 'nodes', 'clusterroles')" },
                     "resourceNames": { "type": "array", "items": { "type": "string" }, "description": "Restrict to specific named resources. Omit to allow all resources of the given type" },
                     "verbs": { "type": "array", "items": { "type": "string" }, "description": "Allowed operations (e.g., 'get', 'list', 'patch', 'delete')" },
-                    "justification": { "type": "string", "description": "Why this permission is needed" }
+                    "justification": { "type": "string", "maxLength": %d, "description": "Why this permission is needed" }
                   },
                   "required": ["apiGroups", "resources", "verbs", "justification"]
                 }
@@ -137,14 +138,34 @@ var AnalysisOutputSchema = json.RawMessage(`{
     }
   },
   "required": ["actionRequired", "options"]
-}`)
+}`,
+	maxLenDiagnosisSummary,         // diagnosis.summary
+	maxLenDiagnosisRootCause,       // diagnosis.rootCause
+	maxLenOptionTitle,              // options[].title
+	maxLenOptionSummary,            // options[].summary
+	maxLenDiagnosisSummary,         // options[].diagnosis.summary
+	maxLenDiagnosisRootCause,       // options[].diagnosis.rootCause
+	maxLenPlanDescription,          // remediationPlan.description
+	maxLenActionCommand,            // actions[].command
+	maxLenActionType,               // actions[].type
+	maxLenActionDescription,        // actions[].description
+	maxLenRollbackDescription,      // rollbackPlan.description
+	maxLenRollbackCommand,          // rollbackPlan.command
+	maxLenVerificationDescription,  // verification.description
+	maxLenVerificationStepName,     // steps[].name
+	maxLenVerificationStepCommand,  // steps[].command
+	maxLenVerificationStepExpected, // steps[].expected
+	maxLenVerificationStepType,     // steps[].type
+	maxLenRBACJustification,        // namespaceScoped[].justification
+	maxLenRBACJustification,        // clusterScoped[].justification
+))
 
 // MinimalAnalysisOutputSchema is the base analysis output schema used
 // when AnalysisOutputMode is Minimal. It contains only the options array
 // with title per option. Built-in properties (diagnosis, remediationPlan, rbac,
 // verification, summary) are omitted. If execution or verification steps
 // exist, those specific property definitions are added back dynamically.
-var MinimalAnalysisOutputSchema = json.RawMessage(`{
+var MinimalAnalysisOutputSchema = json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
     "actionRequired": {
@@ -155,8 +176,8 @@ var MinimalAnalysisOutputSchema = json.RawMessage(`{
       "type": "object",
       "description": "Top-level root cause analysis. Required when actionRequired is false.",
       "properties": {
-        "summary": { "type": "string", "description": "Markdown-formatted diagnosis summary" },
-        "rootCause": { "type": "string", "description": "Concise one-line root cause" }
+        "summary": { "type": "string", "maxLength": %d, "description": "Markdown-formatted diagnosis summary" },
+        "rootCause": { "type": "string", "maxLength": %d, "description": "Concise one-line root cause" }
       },
       "required": ["summary", "rootCause"]
     },
@@ -167,14 +188,18 @@ var MinimalAnalysisOutputSchema = json.RawMessage(`{
       "items": {
         "type": "object",
         "properties": {
-          "title": { "type": "string", "description": "Short human-readable title for this option" }
+          "title": { "type": "string", "maxLength": %d, "description": "Short human-readable title for this option" }
         },
         "required": ["title"]
       }
     }
   },
   "required": ["actionRequired", "options"]
-}`)
+}`,
+	maxLenDiagnosisSummary,   // diagnosis.summary
+	maxLenDiagnosisRootCause, // diagnosis.rootCause
+	maxLenOptionTitle,        // options[].title
+))
 
 var ExecutionOutputSchema = json.RawMessage(`{
   "type": "object",
