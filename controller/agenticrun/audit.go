@@ -68,7 +68,6 @@ type AuditLogger interface {
 	EmitAnalysisCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.AnalysisResult)
 	EmitExecutionCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.ExecutionResult)
 	EmitVerificationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult)
-	EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int)
 	EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult)
 
 	// InjectTraceContext injects W3C traceparent header for downstream propagation.
@@ -427,31 +426,6 @@ func (l *ProductionAuditLogger) EmitVerificationCompleted(ctx context.Context, r
 	span.AddEvent("agenticrun.verification.completed", trace.WithAttributes(attrs...))
 }
 
-func (l *ProductionAuditLogger) EmitVerificationRetry(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.VerificationResult, retryCount int) {
-	serialized, err := serializeCR(result)
-	if err != nil {
-		l.logger.Error("Failed to serialize VerificationResult for audit retry", zap.Error(err))
-	} else {
-		l.emitStructuredLog(ctx, string(run.UID), "verification", "audit.verification.retry", map[string]interface{}{
-			"verificationResult": serialized,
-			"retryCount":         retryCount,
-		})
-	}
-
-	span := trace.SpanFromContext(ctx)
-	if span == nil || !span.IsRecording() {
-		return
-	}
-	span.AddEvent("agenticrun.verification.retry", trace.WithAttributes(
-		attribute.String("agenticrun.name", run.Name),
-		attribute.String("result.name", result.Name),
-		attribute.String("summary", result.Status.Summary),
-		attribute.Int("retry_count", retryCount),
-		attribute.Int("checks.count", len(result.Status.Checks)),
-		attribute.String("agenticrun.cr", serializeCRJSON(result)),
-	))
-}
-
 func (l *ProductionAuditLogger) EmitEscalationCompleted(ctx context.Context, run *agenticv1alpha1.AgenticRun, result *agenticv1alpha1.EscalationResult) {
 	serialized, err := serializeCR(result)
 	if err != nil {
@@ -522,8 +496,6 @@ func (l *NoOpAuditLogger) EmitAnalysisCompleted(_ context.Context, _ *agenticv1a
 func (l *NoOpAuditLogger) EmitExecutionCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.ExecutionResult) {
 }
 func (l *NoOpAuditLogger) EmitVerificationCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.VerificationResult) {
-}
-func (l *NoOpAuditLogger) EmitVerificationRetry(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.VerificationResult, _ int) {
 }
 func (l *NoOpAuditLogger) EmitEscalationCompleted(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ *agenticv1alpha1.EscalationResult) {
 }

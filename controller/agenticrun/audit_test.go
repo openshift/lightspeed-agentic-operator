@@ -114,7 +114,6 @@ func TestNoOpAuditLogger_NoPanic(t *testing.T) {
 	logger.EmitAnalysisCompleted(context.Background(), run, nil)
 	logger.EmitExecutionCompleted(context.Background(), run, nil)
 	logger.EmitVerificationCompleted(context.Background(), run, nil)
-	logger.EmitVerificationRetry(context.Background(), run, nil, 1)
 	logger.EmitEscalationCompleted(context.Background(), run, nil)
 	logger.EmitApprovalSpan(context.Background(), run, nil, "")
 	logger.EmitTerminalSpan(context.Background(), run, "Completed", "success")
