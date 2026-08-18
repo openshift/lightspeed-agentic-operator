@@ -57,7 +57,9 @@ type AgenticRunReconciler struct {
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=escalationresults,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=analysisresults/status;executionresults/status;verificationresults/status;escalationresults/status,verbs=get;patch;update
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;create;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,resourceNames=view,verbs=bind
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;create;update;delete
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticolsconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
@@ -101,6 +103,15 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
+
+	// Keep the per-run identity while analysis is active. All later phases must
+	// revoke it before progressing; retry transient cleanup failures.
+	if phase != agenticv1alpha1.AgenticRunPhasePending && phase != agenticv1alpha1.AgenticRunPhaseAnalyzing {
+		if err := cleanupAnalysisIdentity(ctx, r.Client, &run, r.Namespace); err != nil {
+			log.Error(err, "analysis identity cleanup failed, will retry")
+			return ctrl.Result{RequeueAfter: rbacCleanupRequeueAfter}, nil
+		}
+	}
 
 	// --- Terminal phases (before suspension guard so audit cleanup always runs) ---
 	switch phase {
@@ -350,12 +361,16 @@ func (r *AgenticRunReconciler) handleRBACCleanup(ctx context.Context, run *agent
 	if attempts < rbacMaxCleanupAttempts {
 		sandboxErr := r.Agent.ReleaseSandboxes(ctx, run)
 		rbacErr := cleanupExecutionRBAC(ctx, r.Client, run, r.Namespace)
-		if sandboxErr != nil || rbacErr != nil {
+		analysisIdentityErr := cleanupAnalysisIdentity(ctx, r.Client, run, r.Namespace)
+		if sandboxErr != nil || rbacErr != nil || analysisIdentityErr != nil {
 			if sandboxErr != nil {
 				log.Error(sandboxErr, "sandbox release failed, will retry", "attempt", attempts+1, "max", rbacMaxCleanupAttempts)
 			}
 			if rbacErr != nil {
 				log.Error(rbacErr, "RBAC cleanup failed, will retry", "attempt", attempts+1, "max", rbacMaxCleanupAttempts)
+			}
+			if analysisIdentityErr != nil {
+				log.Error(analysisIdentityErr, "analysis identity cleanup failed, will retry", "attempt", attempts+1, "max", rbacMaxCleanupAttempts)
 			}
 			original := run.DeepCopy()
 			if run.Annotations == nil {
