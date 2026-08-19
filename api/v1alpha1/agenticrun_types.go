@@ -269,10 +269,22 @@ type AgenticRunStep struct {
 	// for this step. Use this when different steps need different skills.
 	// +optional
 	Tools ToolsSpec `json:"tools,omitzero"`
+
+	// timeoutMinutes sets the timeout for this step's sandbox agent call.
+	// This controls only the agent call duration; pod startup always uses
+	// a fixed five-minute ceiling (defaultSandboxTimeout). Increase this
+	// for long-running tools (e.g., IntelliAide RCA takes 10-30 minutes).
+	// Defaults to 5 minutes when omitted.
+	//
+	// Mutable: can be adjusted at any time; the value is read when the step starts.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=60
+	TimeoutMinutes int32 `json:"timeoutMinutes,omitempty"`
 }
 
 func (s AgenticRunStep) IsZero() bool {
-	return s.Agent == "" && s.Tools.IsZero()
+	return s.Agent == "" && s.Tools.IsZero() && s.TimeoutMinutes == 0
 }
 
 // AgenticRunSpec defines the desired state of AgenticRun.
