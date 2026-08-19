@@ -103,7 +103,8 @@ func IsTerminalPhase(phase agenticv1alpha1.AgenticRunPhase) bool {
 		agenticv1alpha1.AgenticRunPhaseFailed,
 		agenticv1alpha1.AgenticRunPhaseEscalated,
 		agenticv1alpha1.AgenticRunPhaseDenied,
-		agenticv1alpha1.AgenticRunPhaseEmergencyStopped:
+		agenticv1alpha1.AgenticRunPhaseEmergencyStopped,
+		agenticv1alpha1.AgenticRunPhaseNoActionRequired:
 		return true
 	}
 	return false

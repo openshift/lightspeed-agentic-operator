@@ -233,10 +233,13 @@ func TestSuspension_ResumeNewAgenticRun(t *testing.T) {
 	t.Log("config deactivation condition and event verified")
 
 	// Poll CREATE until VAP observes suspended=false (replaces fixed sleep).
+	// Execution must be configured so the run waits for approval at Proposed
+	// rather than auto-completing (analysis-only runs skip directly to Completed).
 	waitForAdmissionAllow(t, c, "suspend-after-resume", agenticv1alpha1.AgenticRunSpec{
 		Request:          "resume after suspend",
 		TargetNamespaces: []string{"staging"},
 		Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
+		Execution:        agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
 	})
 	waitForPhase(t, c, "suspend-after-resume", agenticv1alpha1.AgenticRunPhaseProposed)
 	t.Log("new run proceeded normally after resume")

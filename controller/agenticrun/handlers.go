@@ -158,6 +158,11 @@ func (r *AgenticRunReconciler) handleRevision(
 	meta.RemoveStatusCondition(&run.Status.Conditions, agenticv1alpha1.AgenticRunConditionVerified)
 	meta.RemoveStatusCondition(&run.Status.Conditions, agenticv1alpha1.AgenticRunConditionEscalated)
 	resetExecutionAndVerification(&run.Status.Steps)
+	// The run is leaving its terminal phase to re-analyze; clear terminalTime
+	// so that if it reaches a terminal phase again, handleTerminalTTL stamps
+	// a fresh timestamp instead of computing expiry off the prior terminal
+	// event (see run-lifecycle.md rule 23/24).
+	run.Status.TerminalTime = nil
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
 		Status:             metav1.ConditionUnknown,
@@ -533,18 +538,14 @@ func (r *AgenticRunReconciler) handleVerification(
 	return ctrl.Result{}, nil
 }
 
-// handleFailed performs cleanup for system failures.
+// handleFailed performs RBAC cleanup for system failures.
+// Audit emission is handled by handleTerminalCleanup which is called after this.
 func (r *AgenticRunReconciler) handleFailed(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("handling system failure (terminal)")
-
-	if r.Audit != nil {
-		r.Audit.EmitTerminalSpan(ctx, run, string(agenticv1alpha1.AgenticRunPhaseFailed), terminalReason(run))
-		r.Audit.Cleanup(run)
-	}
 
 	if run.Annotations[rbacNamespacesAnnotation] != "" {
 		if err := cleanupExecutionRBAC(ctx, r.Client, run, r.Namespace); err != nil {

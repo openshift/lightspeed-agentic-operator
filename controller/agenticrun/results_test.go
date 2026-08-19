@@ -259,6 +259,110 @@ func TestCreateAnalysisResult_EmptyTopLevelDiagnosis(t *testing.T) {
 	}
 }
 
+// TestCreateAnalysisResult_ZerosTopLevelDiagnosisWhenActionRequired verifies
+// OLS-3724: when actionRequired is true, the top-level diagnosis is zeroed out
+// even if the LLM populated it.
+func TestCreateAnalysisResult_ZerosTopLevelDiagnosisWhenActionRequired(t *testing.T) {
+	scheme := testScheme()
+	fc := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&agenticv1alpha1.AnalysisResult{}).Build()
+
+	run := testAgenticRun()
+	run.UID = "test-uid"
+
+	actionRequired := true
+	result := &AnalysisOutput{
+		Success:        true,
+		ActionRequired: &actionRequired,
+		Diagnosis: &agenticv1alpha1.DiagnosisResult{
+			Confidence: agenticv1alpha1.ConfidenceLevelHigh,
+			RootCause:  "OOMKilled due to memory limit of 256Mi",
+			Summary:    "The pod is being OOMKilled because memory limit is too low",
+		},
+		Options: []agenticv1alpha1.RemediationOption{{
+			Title: "Increase memory limit",
+			Diagnosis: agenticv1alpha1.DiagnosisResult{
+				Confidence: agenticv1alpha1.ConfidenceLevelHigh,
+				RootCause:  "OOMKilled due to memory limit of 256Mi",
+				Summary:    "The pod is being OOMKilled because memory limit is too low",
+			},
+			RemediationPlan: agenticv1alpha1.RemediationPlan{
+				Description: "Increase memory limit to 512Mi",
+				Actions:     []agenticv1alpha1.ProposedAction{{Command: "kubectl set resources", Type: "patch", Description: "Set memory limit"}},
+				Risk:        agenticv1alpha1.RiskLevelLow,
+			},
+		}},
+	}
+
+	r := &AgenticRunReconciler{Client: fc}
+	startTime := metav1.Now()
+	completionTime := metav1.Now()
+	_, snapshot, err := r.createAnalysisResult(
+		context.Background(), run, result,
+		agenticv1alpha1.SandboxInfo{ClaimName: "test-sandbox", Namespace: "openshift-lightspeed"},
+		&startTime, &completionTime, "",
+	)
+	if err != nil {
+		t.Fatalf("createAnalysisResult: %v", err)
+	}
+
+	if snapshot.Status.Diagnosis.Summary != "" || snapshot.Status.Diagnosis.RootCause != "" || snapshot.Status.Diagnosis.Confidence != "" {
+		t.Errorf("top-level diagnosis should be zeroed when actionRequired=true, got confidence=%q summary=%q rootCause=%q",
+			snapshot.Status.Diagnosis.Confidence,
+			snapshot.Status.Diagnosis.Summary,
+			snapshot.Status.Diagnosis.RootCause)
+	}
+
+	if len(snapshot.Status.Options) != 1 {
+		t.Fatalf("expected 1 option, got %d", len(snapshot.Status.Options))
+	}
+	if snapshot.Status.Options[0].Diagnosis.RootCause == "" {
+		t.Error("per-option diagnosis should be preserved")
+	}
+}
+
+// TestCreateAnalysisResult_PreservesTopLevelDiagnosisWhenNoAction verifies
+// that the top-level diagnosis IS populated when actionRequired is false.
+func TestCreateAnalysisResult_PreservesTopLevelDiagnosisWhenNoAction(t *testing.T) {
+	scheme := testScheme()
+	fc := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&agenticv1alpha1.AnalysisResult{}).Build()
+
+	run := testAgenticRun()
+	run.UID = "test-uid"
+
+	actionRequired := false
+	result := &AnalysisOutput{
+		Success:        true,
+		ActionRequired: &actionRequired,
+		Diagnosis: &agenticv1alpha1.DiagnosisResult{
+			Confidence: agenticv1alpha1.ConfidenceLevelHigh,
+			RootCause:  "Alert is a false alarm — metrics recovered",
+			Summary:    "The alert fired due to a transient spike that self-healed",
+		},
+		Options: []agenticv1alpha1.RemediationOption{},
+	}
+
+	r := &AgenticRunReconciler{Client: fc}
+	startTime := metav1.Now()
+	completionTime := metav1.Now()
+	_, snapshot, err := r.createAnalysisResult(
+		context.Background(), run, result,
+		agenticv1alpha1.SandboxInfo{ClaimName: "test-sandbox", Namespace: "openshift-lightspeed"},
+		&startTime, &completionTime, "",
+	)
+	if err != nil {
+		t.Fatalf("createAnalysisResult: %v", err)
+	}
+
+	if snapshot.Status.Diagnosis.Summary == "" {
+		t.Error("top-level diagnosis should be populated when actionRequired=false")
+	}
+	if snapshot.Status.Diagnosis.RootCause != "Alert is a false alarm — metrics recovered" {
+		t.Errorf("rootCause = %q, want original value", snapshot.Status.Diagnosis.RootCause)
+	}
+}
+
 func TestCreateIdempotent_ExecutionResult(t *testing.T) {
 	scheme := testScheme()
 	fc := fake.NewClientBuilder().WithScheme(scheme).

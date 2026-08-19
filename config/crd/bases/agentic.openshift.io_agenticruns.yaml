@@ -884,8 +884,11 @@ spec:
                   the operator detects (generation > observedGeneration) and triggers
                   re-analysis with the feedback appended to the original request.
 
-                  Mutable: this is the only mutable spec field. All other spec fields
-                  are immutable via CEL rules, so generation changes signal revision.
+                  Mutable: this and ttlAfterTerminal below are the only mutable spec
+                  fields. All other spec fields are immutable via CEL rules, so a
+                  generation change coming from one of those would signal revision;
+                  see ttlAfterTerminal for how the controller avoids that trap for its
+                  own writes.
                 maxLength: 32768
                 minLength: 1
                 type: string
@@ -1275,6 +1278,28 @@ spec:
                     - image
                     x-kubernetes-list-type: map
                 type: object
+              ttlAfterTerminal:
+                description: |-
+                  ttlAfterTerminal is the time-to-live in seconds for this AgenticRun
+                  after it reaches a terminal state (Completed, Failed, Denied,
+                  Escalated, EmergencyStopped, NoActionRequired). When the TTL expires,
+                  the operator deletes the AgenticRun CR and Kubernetes garbage
+                  collection cascades deletion to owned resources.
+
+                  Overrides the cluster-wide default from
+                  AgenticOLSConfig.spec.lifecycle.terminalTTL for this run.
+
+                  Set to 0 to disable automatic deletion for this run.
+
+                  Mutable: adapters or admins may pre-set this before the run reaches
+                  terminal state. The operator will not overwrite a pre-set value.
+                  When the operator stamps this itself, it also advances
+                  Analyzed.observedGeneration to match in the same operation, so its
+                  own write is never mistaken by needsRevision() for a pending
+                  revisionFeedback request.
+                format: int32
+                minimum: 0
+                type: integer
               verification:
                 description: |-
                   verification defines per-step configuration for the verification step.
@@ -2259,6 +2284,18 @@ spec:
                         type: object
                     type: object
                 type: object
+              terminalTime:
+                description: |-
+                  terminalTime is the timestamp when the run reached its current
+                  terminal state (Completed, Failed, Denied, Escalated,
+                  EmergencyStopped, NoActionRequired). Set once by the operator and not
+                  updated again while the run remains terminal; cleared when a
+                  revision request moves the run out of a terminal phase back into
+                  analysis, so a later terminal phase gets a fresh timestamp.
+                  Used together with spec.ttlAfterTerminal to compute when the run
+                  should be garbage-collected.
+                format: date-time
+                type: string
             type: object
         required:
         - spec

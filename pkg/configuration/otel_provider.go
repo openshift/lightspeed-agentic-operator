@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otellog "go.opentelemetry.io/otel/log"
@@ -326,11 +327,11 @@ func (p *Provider) EmitLog(ctx context.Context, traceID trace.TraceID, runUID, p
 
 	var record otellog.Record
 	record.SetTimestamp(time.Now())
-	record.SetBody(otellog.StringValue(string(body)))
+	record.SetBody(attribute.StringValue(string(body)))
 	record.AddAttributes(
-		otellog.String("agenticrun.uid", runUID),
-		otellog.String("agenticrun.phase", phase),
-		otellog.String("event", event),
+		attribute.String("agenticrun.uid", runUID),
+		attribute.String("agenticrun.phase", phase),
+		attribute.String("event", event),
 	)
 
 	logger.Emit(ctx, record)

@@ -375,12 +375,36 @@ type AgenticRunSpec struct {
 	// the operator detects (generation > observedGeneration) and triggers
 	// re-analysis with the feedback appended to the original request.
 	//
-	// Mutable: this is the only mutable spec field. All other spec fields
-	// are immutable via CEL rules, so generation changes signal revision.
+	// Mutable: this and ttlAfterTerminal below are the only mutable spec
+	// fields. All other spec fields are immutable via CEL rules, so a
+	// generation change coming from one of those would signal revision;
+	// see ttlAfterTerminal for how the controller avoids that trap for its
+	// own writes.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
+
+	// ttlAfterTerminal is the time-to-live in seconds for this AgenticRun
+	// after it reaches a terminal state (Completed, Failed, Denied,
+	// Escalated, EmergencyStopped, NoActionRequired). When the TTL expires,
+	// the operator deletes the AgenticRun CR and Kubernetes garbage
+	// collection cascades deletion to owned resources.
+	//
+	// Overrides the cluster-wide default from
+	// AgenticOLSConfig.spec.lifecycle.terminalTTL for this run.
+	//
+	// Set to 0 to disable automatic deletion for this run.
+	//
+	// Mutable: adapters or admins may pre-set this before the run reaches
+	// terminal state. The operator will not overwrite a pre-set value.
+	// When the operator stamps this itself, it also advances
+	// Analyzed.observedGeneration to match in the same operation, so its
+	// own write is never mistaken by needsRevision() for a pending
+	// revisionFeedback request.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TTLAfterTerminal *int32 `json:"ttlAfterTerminal,omitempty"`
 }
 
 // AgenticRunStatus defines the observed state of AgenticRun. All fields are
@@ -409,6 +433,17 @@ type AgenticRunStatus struct {
 	// info, and references to result CRs.
 	// +optional
 	Steps StepsStatus `json:"steps,omitzero"`
+
+	// terminalTime is the timestamp when the run reached its current
+	// terminal state (Completed, Failed, Denied, Escalated,
+	// EmergencyStopped, NoActionRequired). Set once by the operator and not
+	// updated again while the run remains terminal; cleared when a
+	// revision request moves the run out of a terminal phase back into
+	// analysis, so a later terminal phase gets a fresh timestamp.
+	// Used together with spec.ttlAfterTerminal to compute when the run
+	// should be garbage-collected.
+	// +optional
+	TerminalTime *metav1.Time `json:"terminalTime,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -9,7 +9,9 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 3. **Scope — cluster**: `Agent`, `LLMProvider`, `ApprovalPolicy`, and `AgenticOLSConfig` MUST be cluster-scoped; `metadata.name` is the global identifier.
 4. **AgenticRun identity**: A `AgenticRun` MUST include required immutable fields per CEL: at minimum `spec.request` and `spec.analysis`. Omitting `spec.execution` or `spec.verification` means those steps do not exist for that run (see `run-lifecycle.md`).
 5. **AgenticRun — `spec.request`**: Human/agent input text; immutable after creation; max length enforced by validation.
-6. **AgenticRun — `spec.revisionFeedback`**: Only mutable spec field; when set/non-empty and `metadata.generation` advances beyond the analyzed condition’s `observedGeneration`, operators MUST trigger re-analysis per `run-lifecycle.md`.
+6. **AgenticRun — `spec.revisionFeedback`**: User-mutable spec field for iterative feedback; when set/non-empty and `metadata.generation` advances beyond the analyzed condition’s `observedGeneration`, operators MUST trigger re-analysis per `run-lifecycle.md`. `spec.ttlAfterTerminal` (rule 6a) is the only other mutable spec field; the controller MUST advance `Analyzed.observedGeneration` in the same write whenever it patches `ttlAfterTerminal`, so that its own generation bump is never misread as an outstanding revision request.
+6a. **AgenticRun — `spec.ttlAfterTerminal`**: Optional time-to-live in seconds after the run reaches a terminal state (see `run-lifecycle.md` rule 4 for the terminal set), after which the operator deletes the `AgenticRun` CR (Kubernetes GC cascades to owned resources via owner references). Mutable — adapters or admins MAY pre-set it before the run reaches terminal state; once terminal, if unset, the operator stamps it from `AgenticOLSConfig.spec.lifecycle.terminalTTL` (cluster default) without overwriting a pre-set value. `0` explicitly disables auto-deletion for that run. When omitted and no cluster default exists, no automatic deletion occurs (backwards-compatible). See `run-lifecycle.md` rule 23.
+6b. **AgenticRun — `status.terminalTime`**: Timestamp the operator stamps once, the first time a run reaches a terminal state; not updated again while the run remains terminal. Cleared by the revision handler when a terminal run re-enters analysis (rule 6/23), so a subsequent terminal phase gets a fresh timestamp instead of reusing the prior terminal event's. Used with `spec.ttlAfterTerminal` to compute the deletion deadline.
 7. **AgenticRun — `spec.targetNamespaces`**: Optional list of namespaces for context and RBAC targeting; immutable once set; when empty, RBAC targeting MAY fall back to namespaces declared in analysis RBAC output at execution time (see `sandbox-execution.md`).
 8. **AgenticRun — `spec.analysisOutput`**: Immutable after set. `mode` defaults to full analysis schema when empty/default. `mode=Minimal` REQUIRES `schema` to be set, forbids `spec.execution` and `spec.verification`, and restricts option shape accordingly.
 9. **AgenticRun — `spec.tools`**: Default `ToolsSpec` for all steps; immutable once set. Per-step `tools` on `spec.analysis` / `spec.execution` / `spec.verification` replaces the default for that step only when non-zero.
@@ -59,14 +61,15 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 45. **AgenticOLSConfig — absence**: When no `AgenticOLSConfig` CR exists, the system MUST behave as if `spec.suspended` is `false`.
 46. **AgenticOLSConfig — status subresource**: `AgenticOLSConfig` MUST have a `/status` subresource with `conditions` array (`metav1.Condition`). Condition type `Suspended` tracks whether the operator has acknowledged and acted on `spec.suspended`. See `system-config.md` rules 5a–5e for full semantics.
 47. **AgenticOLSConfig — status RBAC**: The operator’s service account MUST have `get`, `update`, `patch` on `agenticolsconfigs/status` in addition to existing permissions on the main resource.
+48. **AgenticOLSConfig — `spec.lifecycle.terminalTTL`**: Optional cluster-wide default time-to-live in seconds for terminal `AgenticRun` resources, applied only when a given run's `spec.ttlAfterTerminal` is unset (per-run override always wins — see rule 6a). `spec.lifecycle` requires at least one property when present (`minProperties: 1`) and is omitted entirely from the object when zero-valued. When omitted or no `AgenticOLSConfig` exists, no cluster-wide default gets stamped, so runs relying on the default are never auto-deleted — but this does NOT affect runs that already carry a pre-set `spec.ttlAfterTerminal` independently of the cluster config; those are still deleted on schedule regardless of whether `AgenticOLSConfig` exists.
 
 ## Configuration Surface (by path)
 
 ### AgenticRun
 - `metadata.*`
-- `spec.request`, `spec.targetNamespaces`, `spec.revisionFeedback`, `spec.analysisOutput`, `spec.tools`, `spec.analysis`, `spec.execution`, `spec.verification`
+- `spec.request`, `spec.targetNamespaces`, `spec.revisionFeedback`, `spec.ttlAfterTerminal`, `spec.analysisOutput`, `spec.tools`, `spec.analysis`, `spec.execution`, `spec.verification`
 - `spec.analysis.instructions`, `spec.execution.instructions`, `spec.verification.instructions` [PLANNED: OLS-3491]
-- `status.conditions`, `status.steps.analysis|execution|verification|escalation.*`
+- `status.conditions`, `status.steps.analysis|execution|verification|escalation.*`, `status.terminalTime`
 
 ### Agent
 - `metadata.name`, `spec.llmProvider.name`, `spec.model`, `spec.reasoningConfig`, `spec.timeouts.*`, `spec.maxTurns`, `status.conditions`
@@ -78,8 +81,9 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `metadata.name` (must be `cluster`), `spec.stages[]`, `spec.maxConcurrentRuns`
 
 ### AgenticOLSConfig
-- `metadata.name` (must be `cluster`), `spec.suspended`, `spec.templog`
+- `metadata.name` (must be `cluster`), `spec.suspended`, `spec.templog`, `spec.lifecycle.terminalTTL`
 - `spec.templog` (bool, default `true`): When `true` or absent, the lightspeed-operator deploys a custom OTel Collector for temporary audit log storage in PostgreSQL. See `templog.md`.
+- `spec.lifecycle.terminalTTL` (optional int, seconds): Cluster-wide default TTL for terminal `AgenticRun` deletion; see rule 48.
 - `status.conditions` — condition types: `Suspended`
 - See `system-config.md` for full behavioral rules
 
@@ -110,3 +114,4 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - [OLS-3328] Add `spec.templog` to `AgenticOLSConfig` CRD for temporary audit log storage.
 - [DONE: OLS-3295] Renamed `Proposal` → `AgenticRun`, `ProposalApproval` → `AgenticRunApproval` CRD kinds and all associated field names, RBAC resources, and label keys.
 - [PLANNED: OLS-3594] Optional `disableDefaultMCP` (and related auto-injection) — deferred; blocked by OLS-3526 and OLS-3572. Not near-term.
+- [DONE: OLS-3566] Added `AgenticOLSConfig.spec.lifecycle.terminalTTL` (cluster default) and `AgenticRun.spec.ttlAfterTerminal` / `status.terminalTime` (per-run override + stamp) for automatic terminal-run cleanup. Added `oc agentic run cleanup` CLI command for manual batch cleanup (see `how/cli.md`).

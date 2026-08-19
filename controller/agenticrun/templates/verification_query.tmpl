@@ -10,7 +10,7 @@ Run each check from the approved option's verification plan in order. Report eve
 
 Some checks depend on cluster state that converges over time after a remediation: alerts clearing, pods becoming ready, metrics dropping, or error logs stopping.
 
-A result of "Failed" is INVALID for any convergence-dependent check unless you have exhausted the full retry budget below. Reporting a single-attempt failure for a convergence-dependent check is WRONG. There is no exception.
+A result of "Failed" is INVALID for any convergence-dependent check unless you have retried according to the rules below and never observed a passing result. Reporting a single-attempt failure for a convergence-dependent check is WRONG. There is no exception.
 
 RULE: For **alert checks** (alert stopped firing), you MUST wait 60 seconds and re-run the check at least 10 times (~10 minutes) before you are permitted to report Failed. Alerts have a `for` duration before they clear.
 
@@ -18,11 +18,13 @@ RULE: For **pod readiness / rollout checks**, you MUST wait 30 seconds and re-ru
 
 RULE: For **metrics checks** (error rate below threshold), you MUST wait 60 seconds and re-run the check at least 10 times (~10 minutes) before you are permitted to report Failed. Metrics windows need time to reflect the new state.
 
-RULE: For **log-absence checks** (error message no longer appears), you MUST wait 2 minutes and then re-run the command with `--since=2m` at least 4 times (~10 minutes) before you are permitted to report Failed. After a fix, connections drain and processes restart. A single clean observation is not sufficient — you MUST observe at least one additional consecutive clean window to confirm the error has stopped, not merely paused.
+RULE: For **log-absence checks** (error message no longer appears), you MUST wait 2 minutes and then re-run the command with `--since=2m` at least 4 times (~8 minutes) before you are permitted to report Failed. After a fix, connections drain and processes restart. The `--since=2m` window already covers 2 full minutes — if a single observation returns no matching errors, that confirms the error has stopped. Report Passed immediately and stop retrying.
 
 RULE: **Instant state checks** (image tag, config value, resource field) reflect immediately. Do not retry these.
 
-You MUST use the full retry budget. If a check passes on a later retry, report it as Passed. Only report Failed after all retries are exhausted, with the last observed output as evidence.
+**When a convergence-dependent check fails, you MUST execute `sleep` and retry within the budget before reporting Failed.** Only report a check as Failed after exhausting that check's retries without a single passing observation.
+
+Each check has its own independent retry budget. If a convergence-dependent check passes on any retry, report that check as Passed and move on to the next check — do not consume that check's remaining retries. A passing check does NOT affect other checks — every failing check must still receive its own full retry budget.
 
 ## Approved Option
 

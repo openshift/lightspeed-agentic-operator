@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -757,6 +758,64 @@ func TestReconcile_RevisionFromCompleted(t *testing.T) {
 	}
 	if analyzed := meta.FindStatusCondition(p.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.ObservedGeneration != p.Generation {
 		t.Fatalf("expected observedGeneration to equal current generation %d after revision from Completed", p.Generation)
+	}
+}
+
+// TestReconcile_RevisionClearsTerminalTime verifies that a run which already
+// carries a terminalTime (stamped by handleTerminalTTL, OLS-3566) has it
+// cleared once a revision moves it back out of the terminal phase --
+// otherwise a later terminal phase would compute TTL expiry off the stale,
+// earlier terminal event instead of a fresh one (run-lifecycle.md rule 23/24).
+func TestReconcile_RevisionClearsTerminalTime(t *testing.T) {
+	scheme := testScheme()
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request:          "Investigate issue",
+			Tools:            testTools(),
+			TargetNamespaces: []string{"production"},
+			Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "default"},
+		},
+	}
+
+	objs := append([]client.Object{run}, defaultObjects()...)
+	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
+		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
+
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
+
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 1: %v", err)
+	}
+	approveAgenticRun(t, fc, "fix-crash")
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+	p, _ := getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseCompleted {
+		t.Fatalf("expected Completed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+
+	// Simulate handleTerminalTTL having already stamped terminalTime on an
+	// earlier reconcile of this terminal run.
+	staleTerminalTime := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	base := p.DeepCopy()
+	p.Status.TerminalTime = &staleTerminalTime
+	if err := fc.Status().Patch(context.Background(), p, client.MergeFrom(base)); err != nil {
+		t.Fatalf("stamp stale terminalTime: %v", err)
+	}
+
+	reviseAgenticRun(t, fc, "fix-crash", "re-analyse with different focus")
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile 3 (revision from Completed): %v", err)
+	}
+
+	p, _ = getAgenticRun(r, "fix-crash")
+	if agenticv1alpha1.DerivePhase(p.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseProposed {
+		t.Fatalf("expected Proposed after revision from Completed, got %s", agenticv1alpha1.DerivePhase(p.Status.Conditions))
+	}
+	if p.Status.TerminalTime != nil {
+		t.Errorf("expected terminalTime to be cleared once revision moves run out of terminal phase, got %v", p.Status.TerminalTime)
 	}
 }
 

@@ -81,6 +81,19 @@ func isSuspended(ctx context.Context, c client.Client) (bool, error) {
 	return config.Spec.Suspended, nil
 }
 
+// getTerminalTTL returns the cluster-wide default TTL from AgenticOLSConfig,
+// or nil if no config exists or no TTL is configured.
+func getTerminalTTL(ctx context.Context, c client.Client) (*int32, error) {
+	var config agenticv1alpha1.AgenticOLSConfig
+	if err := c.Get(ctx, client.ObjectKey{Name: "cluster"}, &config); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return config.Spec.Lifecycle.TerminalTTL, nil
+}
+
 // failStep marks a step as failed and creates a failure result CR.
 // The caller must have set the step condition to ConditionUnknown before
 // calling failStep so that conditionTime can extract the start time.

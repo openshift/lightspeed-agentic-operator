@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -25,6 +26,8 @@ const (
 	ErrPatchTemplogCleanupAttempts = "patch templog cleanup attempts"
 	ErrPatchRBACCleanupAttempts    = "patch rbac cleanup attempts"
 	ErrMigrateLeftoverToEscalation = "migrate leftover verification-failed run to escalation"
+	ErrStampTerminalTTL            = "stamp terminal TTL"
+	ErrDeleteExpiredRun            = "delete expired run"
 )
 
 // TempLogCleaner is the interface for deleting templog records on CR deletion.
@@ -137,49 +140,25 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	switch phase {
 	case agenticv1alpha1.AgenticRunPhaseNoActionRequired:
 		if !needsRevision(&run) {
-			if hasSandboxClaims(&run) {
-				if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
-					log.Error(err, "sandbox cleanup failed at terminal phase")
-				}
-			}
-			if r.Audit != nil {
-				r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
-				r.Audit.Cleanup(&run)
-			}
-			return ctrl.Result{}, nil
+			return r.handleTerminalCleanup(ctx, &run, phase)
 		}
 
 	case agenticv1alpha1.AgenticRunPhaseCompleted:
 		if !(run.Spec.Execution.IsZero() && needsRevision(&run)) {
-			if hasSandboxClaims(&run) {
-				if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
-					log.Error(err, "sandbox cleanup failed at terminal phase")
-				}
-			}
-			if r.Audit != nil {
-				r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
-				r.Audit.Cleanup(&run)
-			}
-			return ctrl.Result{}, nil
+			return r.handleTerminalCleanup(ctx, &run, phase)
 		}
 
 	case agenticv1alpha1.AgenticRunPhaseDenied,
 		agenticv1alpha1.AgenticRunPhaseEscalated,
 		agenticv1alpha1.AgenticRunPhaseEmergencyStopped:
-		if hasSandboxClaims(&run) {
-			if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
-				log.Error(err, "sandbox cleanup failed at terminal phase")
-			}
-		}
-		if r.Audit != nil {
-			r.Audit.EmitTerminalSpan(ctx, &run, string(phase), terminalReason(&run))
-			r.Audit.Cleanup(&run)
-		}
-		return ctrl.Result{}, nil
+		return r.handleTerminalCleanup(ctx, &run, phase)
 
 	case agenticv1alpha1.AgenticRunPhaseFailed:
 		if !(run.Spec.Execution.IsZero() && needsRevision(&run)) {
-			return r.handleFailed(ctx, &run)
+			if result, err := r.handleFailed(ctx, &run); err != nil {
+				return result, err
+			}
+			return r.handleTerminalCleanup(ctx, &run, phase)
 		}
 	}
 
@@ -286,9 +265,24 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if err := r.List(ctx, &runs); err != nil {
 			return nil
 		}
+		// Only re-enqueue terminal runs for a missing ttlAfterTerminal stamp
+		// when there's actually a cluster default to stamp -- otherwise
+		// every terminal run with no cluster TTL configured would be
+		// re-enqueued on every ApprovalPolicy/AgenticOLSConfig/ConfigMap
+		// change forever, for no effect.
+		clusterTTL, err := getTerminalTTL(ctx, r.Client)
+		if err != nil {
+			clusterTTL = nil
+		}
 		var reqs []ctrl.Request
 		for _, p := range runs.Items {
-			if !isTerminal(agenticv1alpha1.DerivePhase(p.Status.Conditions)) {
+			phase := agenticv1alpha1.DerivePhase(p.Status.Conditions)
+			// Enqueue non-terminal runs (normal workflow), terminal runs
+			// still missing terminalTime (stamped unconditionally), and
+			// terminal runs missing ttlAfterTerminal only when a cluster
+			// default currently exists to stamp.
+			needsTTLStamp := clusterTTL != nil && p.Spec.TTLAfterTerminal == nil
+			if !isTerminal(phase) || p.Status.TerminalTime == nil || needsTTLStamp {
 				reqs = append(reqs, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&p)})
 			}
 		}
@@ -315,6 +309,114 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("agenticrun").
 		WithOptions(controller.Options{MaxConcurrentReconciles: maxConcurrent}).
 		Complete(r)
+}
+
+// handleTerminalCleanup performs common cleanup for all terminal phases: releases
+// sandbox claims, emits audit spans, and delegates to TTL handling.
+func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+	if hasSandboxClaims(run) {
+		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
+			log.Error(err, "sandbox cleanup failed at terminal phase")
+		}
+	}
+	if r.Audit != nil {
+		r.Audit.EmitTerminalSpan(ctx, run, string(phase), terminalReason(run))
+		r.Audit.Cleanup(run)
+	}
+	if result, requeue, err := r.handleTerminalTTL(ctx, run); requeue || err != nil {
+		return result, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// handleTerminalTTL stamps terminalTime and ttlAfterTerminal on a terminal run,
+// then checks whether the TTL has expired. If expired, it deletes the AgenticRun
+// CR (Kubernetes GC cascades to owned resources). If not expired, it returns a
+// RequeueAfter for the remaining TTL. Returns (result, requeue, error) where
+// requeue=true means the caller should return the result instead of continuing.
+func (r *AgenticRunReconciler) handleTerminalTTL(ctx context.Context, run *agenticv1alpha1.AgenticRun) (ctrl.Result, bool, error) {
+	log := logf.FromContext(ctx)
+	now := metav1.Now()
+
+	// --- Stamp terminalTime if not yet set ---
+	if run.Status.TerminalTime == nil {
+		base := run.DeepCopy()
+		run.Status.TerminalTime = &now
+		if err := r.statusPatch(ctx, run, base); err != nil {
+			log.Error(err, "failed to stamp terminalTime")
+			return ctrl.Result{}, false, fmt.Errorf("%s: %w", ErrStampTerminalTTL, err)
+		}
+	}
+
+	// --- Stamp ttlAfterTerminal from cluster config if not already set ---
+	if run.Spec.TTLAfterTerminal == nil {
+		clusterTTL, err := getTerminalTTL(ctx, r.Client)
+		if err != nil {
+			return ctrl.Result{}, false, fmt.Errorf("%s: %w", ErrStampTerminalTTL, err)
+		}
+		if clusterTTL != nil {
+			// run already reflects the latest server state: Patch (like the
+			// statusPatch above) decodes the API server's response back into
+			// run, so there's no need to re-Get here. Re-Getting through the
+			// manager's cached client can race the informer cache and clobber
+			// the terminalTime just stamped above with a stale, pre-patch
+			// copy, leading to a nil Status.TerminalTime below.
+			original := run.DeepCopy()
+			run.Spec.TTLAfterTerminal = clusterTTL
+			if err := r.Patch(ctx, run, client.MergeFrom(original)); err != nil {
+				log.Error(err, "failed to stamp ttlAfterTerminal")
+				return ctrl.Result{}, false, fmt.Errorf("%s: %w", ErrStampTerminalTTL, err)
+			}
+		}
+	}
+
+	// --- Idempotent observedGeneration repair ---
+	// Patching spec.ttlAfterTerminal bumps metadata.generation. Advance
+	// the Analyzed condition's ObservedGeneration in lockstep so this
+	// operator-driven mutation isn't mistaken for a user-initiated
+	// revision request by needsRevision(). This runs unconditionally
+	// (outside the TTLAfterTerminal == nil block) so that a crash between
+	// the spec patch and this status patch is self-healing on the next
+	// reconcile.
+	if analyzed := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed != nil && analyzed.ObservedGeneration != run.Generation {
+		base := run.DeepCopy()
+		analyzed.ObservedGeneration = run.Generation
+		if err := r.statusPatch(ctx, run, base); err != nil {
+			log.Error(err, "failed to advance observedGeneration after ttlAfterTerminal stamp")
+			return ctrl.Result{}, false, fmt.Errorf("%s: %w", ErrStampTerminalTTL, err)
+		}
+	}
+
+	// --- Evaluate TTL ---
+	if run.Spec.TTLAfterTerminal == nil {
+		// No TTL configured — no auto-deletion.
+		return ctrl.Result{}, false, nil
+	}
+
+	ttlSeconds := *run.Spec.TTLAfterTerminal
+	if ttlSeconds == 0 {
+		// TTL=0 explicitly disables auto-deletion for this run.
+		return ctrl.Result{}, false, nil
+	}
+
+	terminalTime := run.Status.TerminalTime.Time
+	expiry := terminalTime.Add(time.Duration(ttlSeconds) * time.Second)
+	remaining := time.Until(expiry)
+
+	if remaining <= 0 {
+		log.Info("TTL expired, deleting AgenticRun", LogKeyName, run.Name)
+		if err := r.Delete(ctx, run); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				return ctrl.Result{}, true, nil
+			}
+			return ctrl.Result{}, false, fmt.Errorf("%s: %w", ErrDeleteExpiredRun, err)
+		}
+		return ctrl.Result{}, true, nil
+	}
+
+	log.V(1).Info("TTL not yet expired, requeueing", LogKeyName, run.Name, "remaining", remaining)
+	return ctrl.Result{RequeueAfter: remaining}, true, nil
 }
 
 // handleTemplogCleanup deletes audit logs from the Collector's Postgres store

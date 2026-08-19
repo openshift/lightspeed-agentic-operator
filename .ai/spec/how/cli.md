@@ -49,6 +49,7 @@ Audience: AI agents. Command behavior and user-facing rules belong in **what/** 
 | `delete.go` | `DeleteOptions` | `NewDeleteCmd`, `Complete`, `Run` |
 | `watch.go` | `WatchOptions`; package var `agenticRunGVR` | `NewWatchCmd`, `Complete`, `Run`, `doWatch`, `extractConditions` |
 | `logs.go` | `LogsOptions` | `NewLogsCmd`, `Complete`, `Validate`, `Run`, `resolveSandbox` |
+| `cleanup.go` | `CleanupOptions` | `NewCleanupCmd`, `Complete`, `Validate`, `Run`, `printRunsTable`, `parseDuration` |
 
 `*_test.go` files under `cli/` exercise commands (not fully enumerated here).
 
@@ -66,7 +67,8 @@ oc-agentic
 │   ├── deny NAME
 │   ├── watch NAME
 │   ├── logs NAME
-│   └── delete NAME
+│   ├── delete NAME
+│   └── cleanup
 ├── status
 ├── suspend
 ├── resume
@@ -103,7 +105,8 @@ There is **no** unstructured client for run CRUD in the main commands; only watc
 - **`approve`:** Loads `AgenticRun`; `getOrCreateApproval` (get or create `AgenticRunApproval` with owner ref — create path omits controller flags present in controller’s `ensureAgenticRunApproval`; operator reconciler may enrich). Builds `[]ApprovalStage` entries, `client.Patch(MergeFrom)` on approval. `--all` uses `pendingStages` derived from spec non-zero steps vs existing stage types. `--wait` delegates to `doWatch`.
 - **`deny`:** Requires existing `AgenticRunApproval`; appends denied stage with `ApprovalDecisionDenied`. `--stage` defaults via `nextPendingStage` walk order analysis → execution → verification.
 - **`delete`:** `client.Delete` minimal `AgenticRun` object keyed by name/namespace.
-- **`watch`:** Dynamic watch; `extractConditions` pulls `status.conditions` into `[]metav1.Condition`; phase from `DerivePhase`; prints only on phase change; stops when `IsTerminalPhase` (Completed, Failed, Escalated, Denied — note helpers.go set).
+- **`cleanup`:** `client.List` `AgenticRunList` (namespace or `-A` cluster-wide), client-side filters to terminal phases via `IsTerminalPhase` (Completed, Failed, Escalated, Denied, EmergencyStopped, NoActionRequired) matching optional `--state` and `--older-than` (against `status.terminalTime`; runs missing it are skipped with a warning when `--older-than` is set). `--dry-run` prints the match table and exits without prompting or deleting. Otherwise prints the match table and prompts for confirmation (`[y/N]`), skippable with `--yes`/`-y` (same pattern as `cli/system/suspend.go`), before calling `client.Delete` per run; per-run delete failures are reported but do not halt the batch. NotFound errors during delete are treated as success (handles race with TTL controller).
+- **`watch`:** Dynamic watch; `extractConditions` pulls `status.conditions` into `[]metav1.Condition`; phase from `DerivePhase`; prints only on phase change; stops when `IsTerminalPhase` (Completed, Failed, Escalated, Denied, EmergencyStopped, NoActionRequired).
 - **`logs`:** Loads run via controller-runtime client; `resolveSandbox` picks explicit `--step` (normalized via `NormalizeStep`) or prefers verification, then execution, then analysis sandbox info. Uses **`SandboxInfo.ClaimName` as pod name** and `SandboxInfo.Namespace` (fallback run namespace). Streams with optional `-f`.
 
 ---
@@ -161,4 +164,4 @@ User invokes oc-agentic run <cmd> [flags]
 ## Implementation notes
 
 - **`validAgenticRunPhases` in `helpers.go`** includes all terminal phases including `EmergencyStopped`. Still missing `Proposed` and `Escalating` relative to `AgenticRunPhase` in `api/v1alpha1/agenticrun_types.go`. `list --phase` validation (`IsValidPhase`) can reject phase strings that `DerivePhase` still produces; align the slice with API constants when fixing UX.
-- **`watch` terminal set:** `IsTerminalPhase` matches five phases (includes `Escalated` and `EmergencyStopped`); matches common completion paths; verify against **what/** if `Analyzing` as terminal edge cases matter.
+- **`watch` terminal set:** `IsTerminalPhase` matches six phases (Completed, Failed, Escalated, Denied, EmergencyStopped, NoActionRequired); matches all terminal phases defined in `run-lifecycle.md` rule 4.
