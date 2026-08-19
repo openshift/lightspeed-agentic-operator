@@ -6,13 +6,13 @@ Original request:
 
 Step results (use `oc get <kind> <name> -n {{.Namespace}} -o yaml` to inspect):
 {{- range .AnalysisResults}}
-  - AnalysisResult: {{.Name}} (success={{.Success}})
+  - AnalysisResult: {{.Name}} (outcome={{.Outcome}})
 {{- end}}
 {{- range .ExecutionResults}}
-  - ExecutionResult: {{.Name}} (success={{.Success}})
+  - ExecutionResult: {{.Name}} (outcome={{.Outcome}})
 {{- end}}
 {{- range .VerificationResults}}
-  - VerificationResult: {{.Name}} (success={{.Success}})
+  - VerificationResult: {{.Name}} (outcome={{.Outcome}})
 {{- end}}
 
 Review the failed step results, diagnose why remediation did not succeed,
