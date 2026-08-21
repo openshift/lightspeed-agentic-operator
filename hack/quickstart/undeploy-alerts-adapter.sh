@@ -19,10 +19,10 @@ step "Deleting alerts adapter resources"
 oc delete deployment "${ADAPTER_NAME}" -n "${NAMESPACE}" --ignore-not-found
 oc delete configmap alerts-adapter-config -n "${NAMESPACE}" --ignore-not-found
 oc delete sa "${ADAPTER_NAME}" -n "${NAMESPACE}" --ignore-not-found
-oc delete clusterrolebinding "${ADAPTER_NAME}-agenticruns" --ignore-not-found ||
-  echo "  ! Warning: could not delete ClusterRoleBinding (managed cluster?)"
-oc delete clusterrole "${ADAPTER_NAME}-agenticruns" --ignore-not-found ||
-  echo "  ! Warning: could not delete ClusterRole (managed cluster?)"
+oc delete rolebinding "${ADAPTER_NAME}-agenticruns" -n "${NAMESPACE}" --ignore-not-found ||
+  echo "  ! Warning: could not delete RoleBinding (managed cluster?)"
+oc delete role "${ADAPTER_NAME}-agenticruns" -n "${NAMESPACE}" --ignore-not-found ||
+  echo "  ! Warning: could not delete Role (managed cluster?)"
 oc delete rolebinding "${ADAPTER_NAME}-alertmanager" -n openshift-monitoring --ignore-not-found ||
   echo "  ! Warning: could not delete RoleBinding in openshift-monitoring (managed cluster?)"
 

@@ -83,9 +83,10 @@ metadata:
     app.kubernetes.io/component: alerts-adapter
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: ${ADAPTER_NAME}-agenticruns
+  namespace: ${NAMESPACE}
   labels:
     app: ${ADAPTER_NAME}
     app.kubernetes.io/name: ${ADAPTER_NAME}
@@ -96,16 +97,17 @@ rules:
   verbs: ["create", "list", "get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: ${ADAPTER_NAME}-agenticruns
+  namespace: ${NAMESPACE}
   labels:
     app: ${ADAPTER_NAME}
     app.kubernetes.io/name: ${ADAPTER_NAME}
     app.kubernetes.io/component: alerts-adapter
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: ${ADAPTER_NAME}-agenticruns
 subjects:
 - kind: ServiceAccount
