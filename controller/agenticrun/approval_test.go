@@ -123,6 +123,40 @@ func TestEnsureAgenticRunApproval_NoPolicy(t *testing.T) {
 	}
 }
 
+// Escalation is read-only, so it auto-approves by default (no policy / not
+// listed) and gates only when the policy lists it explicitly as Manual. The
+// mutating steps keep the default-Manual behavior (no policy => not approved).
+func TestIsStageApproved_EscalationDefaultsAutomatic(t *testing.T) {
+	esc := agenticv1alpha1.SandboxStepEscalation
+	exec := agenticv1alpha1.SandboxStepExecution
+
+	stage := func(name agenticv1alpha1.SandboxStep, mode agenticv1alpha1.ApprovalMode) *agenticv1alpha1.ApprovalPolicy {
+		return &agenticv1alpha1.ApprovalPolicy{Spec: agenticv1alpha1.ApprovalPolicySpec{
+			Stages: []agenticv1alpha1.ApprovalPolicyStage{{Name: name, Approval: mode}},
+		}}
+	}
+
+	tests := []struct {
+		name   string
+		policy *agenticv1alpha1.ApprovalPolicy
+		step   agenticv1alpha1.SandboxStep
+		want   bool
+	}{
+		{"escalation, no policy", nil, esc, true},
+		{"escalation, policy without escalation entry", stage(exec, agenticv1alpha1.ApprovalModeManual), esc, true},
+		{"escalation, policy gates it Manual", stage(esc, agenticv1alpha1.ApprovalModeManual), esc, false},
+		{"escalation, policy Automatic", stage(esc, agenticv1alpha1.ApprovalModeAutomatic), esc, true},
+		{"execution, no policy stays Manual", nil, exec, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isStageApproved(nil, tt.policy, tt.step); got != tt.want {
+				t.Errorf("isStageApproved(%s) = %v, want %v", tt.step, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGetStageOverrideAgent_OmittedMeansNoOverride(t *testing.T) {
 	approval := &agenticv1alpha1.AgenticRunApproval{
 		Spec: agenticv1alpha1.AgenticRunApprovalSpec{

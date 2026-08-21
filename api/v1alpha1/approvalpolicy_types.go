@@ -51,7 +51,8 @@ type ApprovalPolicyStage struct {
 // +kubebuilder:validation:MinProperties=1
 type ApprovalPolicySpec struct {
 	// stages configures the approval mode for each workflow step.
-	// Omitted steps default to Manual.
+	// Omitted steps default to Manual, except Escalation, which is read-only
+	// and defaults to Automatic (list it as Manual to gate it explicitly).
 	// +optional
 	// +listType=map
 	// +listMapKey=name
@@ -80,7 +81,8 @@ type ApprovalPolicySpec struct {
 // a single ApprovalPolicy named "cluster" to control which steps auto-approve.
 //
 // Steps not listed in the policy default to Manual (require explicit
-// user approval on the AgenticRunApproval resource).
+// user approval on the AgenticRunApproval resource) — except Escalation,
+// which defaults to Automatic (see below).
 //
 // Example:
 //
@@ -96,13 +98,12 @@ type ApprovalPolicySpec struct {
 //	      approval: Manual
 //	    - name: Verification
 //	      approval: Automatic
-//	    - name: Escalation
-//	      approval: Automatic
 //
-// Escalation runs only after a verification failure and produces a report for
-// a human. Leaving it unset (default Manual) strands every verification
-// failure at the escalation approval gate, so set it Automatic unless you
-// intend to gate the escalation agent itself.
+// Escalation runs only after a verification failure and is read-only — it
+// produces a report for a human, with no cluster mutations. It therefore
+// defaults to Automatic so verification failures are not stranded at the
+// escalation gate. List it as Escalation: Manual only if you intend to gate
+// the escalation agent itself (e.g. to cap its LLM token spend).
 type ApprovalPolicy struct {
 	metav1.TypeMeta `json:",inline"`
 

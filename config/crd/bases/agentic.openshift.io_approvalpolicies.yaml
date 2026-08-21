@@ -25,15 +25,16 @@ spec:
           default\napproval behavior for agentic run workflow steps. The cluster admin
           creates\na single ApprovalPolicy named \"cluster\" to control which steps
           auto-approve.\n\nSteps not listed in the policy default to Manual (require
-          explicit\nuser approval on the AgenticRunApproval resource).\n\nExample:\n\n\tapiVersion:
-          agentic.openshift.io/v1alpha1\n\tkind: ApprovalPolicy\n\tmetadata:\n\t  name:
-          cluster\n\tspec:\n\t  stages:\n\t    - name: Analysis\n\t      approval:
-          Automatic\n\t    - name: Execution\n\t      approval: Manual\n\t    - name:
-          Verification\n\t      approval: Automatic\n\t    - name: Escalation\n\t
-          \     approval: Automatic\n\nEscalation runs only after a verification failure
-          and produces a report for\na human. Leaving it unset (default Manual) strands
-          every verification\nfailure at the escalation approval gate, so set it Automatic
-          unless you\nintend to gate the escalation agent itself."
+          explicit\nuser approval on the AgenticRunApproval resource) — except Escalation,\nwhich
+          defaults to Automatic (see below).\n\nExample:\n\n\tapiVersion: agentic.openshift.io/v1alpha1\n\tkind:
+          ApprovalPolicy\n\tmetadata:\n\t  name: cluster\n\tspec:\n\t  stages:\n\t
+          \   - name: Analysis\n\t      approval: Automatic\n\t    - name: Execution\n\t
+          \     approval: Manual\n\t    - name: Verification\n\t      approval: Automatic\n\nEscalation
+          runs only after a verification failure and is read-only — it\nproduces a
+          report for a human, with no cluster mutations. It therefore\ndefaults to
+          Automatic so verification failures are not stranded at the\nescalation gate.
+          List it as Escalation: Manual only if you intend to gate\nthe escalation
+          agent itself (e.g. to cap its LLM token spend)."
         properties:
           apiVersion:
             description: |-
@@ -70,7 +71,8 @@ spec:
               stages:
                 description: |-
                   stages configures the approval mode for each workflow step.
-                  Omitted steps default to Manual.
+                  Omitted steps default to Manual, except Escalation, which is read-only
+                  and defaults to Automatic (list it as Manual to gate it explicitly).
                 items:
                   description: ApprovalPolicyStage configures the approval mode for
                     a single workflow step.

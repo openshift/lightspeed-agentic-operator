@@ -125,6 +125,27 @@ func isStageApproved(approval *agenticv1alpha1.AgenticRunApproval, policy *agent
 			}
 		}
 	}
+	// Escalation is read-only — it produces a human-readable summary of a failed
+	// run for an operator, with no cluster mutations or RBAC grants. It therefore
+	// auto-approves by default so a verification failure is never stranded at the
+	// Escalating phase on clusters with no ApprovalPolicy. An admin can still gate
+	// it (e.g. to cap LLM token spend) with an explicit Escalation: Manual policy
+	// stage, which falls through to the return below.
+	if stage == agenticv1alpha1.SandboxStepEscalation && !isStagePolicyManual(policy, stage) {
+		return true
+	}
+	return false
+}
+
+func isStagePolicyManual(policy *agenticv1alpha1.ApprovalPolicy, stage agenticv1alpha1.SandboxStep) bool {
+	if policy == nil {
+		return false
+	}
+	for _, ps := range policy.Spec.Stages {
+		if ps.Name == stage && ps.Approval == agenticv1alpha1.ApprovalModeManual {
+			return true
+		}
+	}
 	return false
 }
 

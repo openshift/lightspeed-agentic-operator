@@ -905,6 +905,11 @@ func TestEscalation_InProgressIsIdempotent(t *testing.T) {
 		Checks:  []agenticv1alpha1.VerifyCheck{{Name: "pod-running", Result: agenticv1alpha1.CheckResultFailed}},
 	}
 	policy := testPolicy(agenticv1alpha1.ApprovalModeManual, agenticv1alpha1.ApprovalModeManual, agenticv1alpha1.ApprovalModeManual)
+	// Escalation auto-approves by default; gate it Manual so the run parks at
+	// Escalating and re-reconciles stay a no-op until it is approved below.
+	policy.Spec.Stages = append(policy.Spec.Stages, agenticv1alpha1.ApprovalPolicyStage{
+		Name: agenticv1alpha1.SandboxStepEscalation, Approval: agenticv1alpha1.ApprovalModeManual,
+	})
 	r, fc := newReconcilerWithPolicy(t, run, agent, policy)
 
 	// Drive to Escalating phase
@@ -915,7 +920,7 @@ func TestEscalation_InProgressIsIdempotent(t *testing.T) {
 	approveVerification(t, fc, "fix-crash")
 	reconcileOnce(r, "fix-crash") // verify fails → escalate immediately
 	reconcileOnce(r, "fix-crash") // re-reconcile is idempotent
-	reconcileOnce(r, "fix-crash") // still Escalating
+	reconcileOnce(r, "fix-crash") // still Escalating (pending escalation approval)
 	assertPhase(t, r, "fix-crash", agenticv1alpha1.AgenticRunPhaseEscalating)
 
 	// Approve escalation and run it

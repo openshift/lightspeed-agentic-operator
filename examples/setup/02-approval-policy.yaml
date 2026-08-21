@@ -1,7 +1,8 @@
 # ApprovalPolicy — cluster-scoped singleton that configures default
 # approval behavior for proposal workflow steps.
 #
-# If no ApprovalPolicy exists, all approval steps default to Manual.
+# If no ApprovalPolicy exists, Analysis/Execution/Verification default to
+# Manual and the read-only Escalation step defaults to Automatic.
 ---
 apiVersion: agentic.openshift.io/v1alpha1
 kind: ApprovalPolicy
@@ -17,9 +18,6 @@ spec:
     - name: Verification
       approval: Manual
     # Escalation runs only after a verification failure and just produces an
-    # EscalationResult report for a human to read. Keep it Automatic — if it
-    # is omitted or Manual, every objective verification failure stalls at the
-    # escalation approval gate. Set it to Manual only if you want to gate the
-    # escalation agent itself.
-    - name: Escalation
-      approval: Automatic
+    # EscalationResult report for a human to read. It defaults to Automatic, so
+    # it need not be listed here. Add it as Manual only if you want to gate the
+    # read-only escalation agent itself (e.g. to cap its LLM token spend).
