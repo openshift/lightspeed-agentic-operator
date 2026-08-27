@@ -43,8 +43,10 @@ Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gat
 | `Unknown` | `WaitingForSandbox` | Pod/SandboxClaim created, waiting for pod to start |
 | `Unknown` | `Running` | Pod is running, agent is working |
 | `True` | `Succeeded` | Result CR exists with `success: true` |
-| `False` | `AgentFailed` | Result CR exists with `success: false` |
-| `False` | `SandboxTimeout` | Per-step timeout fired, pod killed (see `sandbox-execution.md` rule 40) |
+| `False` | `AgentFailed` | Result CR exists with `success: false` for a non-timeout agent failure |
+| `False` | `AgentTimeout` | [PLANNED: OLS-3743] Sandbox cooperatively stopped the agent at its configured execution budget and published a Result CR |
+| `False` | `SandboxStartupTimeout` | [PLANNED: OLS-3743] Sandbox container did not start within the fixed startup deadline |
+| `False` | `SandboxTimeout` | [PLANNED: OLS-3743] Running sandbox exceeded the operator hard deadline and was killed (see `sandbox-execution.md` rule 40) |
 | `False` | `SandboxFailed` | Pod exited without creating Result CR |
 | `False` | `ImagePullFailed` | Pod stuck in ImagePullBackOff |
 15. **Success**: `Verified=True` MUST yield `Completed` once rule 9 reaches the `Verified` branch, unless an earlier branch already returned `Escalated` or `Denied` per rules 9–10.
@@ -88,3 +90,4 @@ Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gat
 - [DONE: OLS-3295] Renamed `Proposal` CRD kind to `AgenticRun`, `ProposalApproval` to `AgenticRunApproval`, and updated all associated API surface (labels, RBAC resources, CLI commands, audit events, OTEL spans).
 - [DONE: OLS-3558] Execution outcome override — controller no longer hard-fails when `success=false` but all mutating actions succeeded; defers outcome to the verification step. See `sandbox-execution.md` rule 21b.
 - [DONE: OLS-3566] Terminal-run TTL / auto-deletion added (rules 23–24); `oc agentic run cleanup` CLI command added for manual batch cleanup (see `how/cli.md`).
+- [PLANNED: OLS-3743] Distinguish cooperative agent timeout, sandbox startup timeout, and hard sandbox runtime timeout; all are terminal without automatic retries.
