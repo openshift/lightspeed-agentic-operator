@@ -9,10 +9,9 @@
 | `api/v1alpha1/` | `AgenticRun`, `Agent`, `LLMProvider`, `ApprovalPolicy`, `AgenticRunApproval`, result types, `DerivePhase` | CRD type definitions, phase derivation, CEL markers, deepcopy |
 | `cmd/main.go` | `main`, `scheme` | Operator binary entry point |
 | `cmd/oc-agentic/main.go` | `main` | CLI binary entry point |
-| `controller/agenticrun/` | `AgenticRunReconciler`, `SandboxAgentCaller`, `SandboxManager`, `SandboxLifecycle`, `PodSpecBuilder`, `PodEventHandler` | AgenticRun reconciler, unified sandbox management (SA, RBAC, ConfigMap, pod), pod event handler, timeout loop, results |
-| `controller/console/` | `EnsureAgenticConsole`, `AgenticConsoleConfig` | Console plugin deployment (Deployment, Service, ConfigMap, ConsolePlugin CR) |
-| `controller/sandbox/` | Legacy bootstrap helpers | SA creation inlined into `cmd/main.go` |
-| `pkg/configuration/` | `Config`, `Cache`, `OnConfigMapChange` | ConfigMap-driven config cache (sandbox mode, PodSpec, OTEL, MCP) |
+| `controller/agenticrun/` | `AgenticRunReconciler`, `SandboxAgentCaller`, `SandboxManager`, `SandboxLifecycle`, `PodSpecBuilder`, `PodEventHandler`, `AuditLogger`, `AgenticRunApprovalMutator` | AgenticRun reconciler, unified sandbox management (SA, RBAC, ConfigMap, pod), pod event handler, timeout loop, results, audit logging, approval mutating webhook |
+| `controller/agenticolsconfig/` | `Reconciler` | `AgenticOLSConfig` reconciler — maintains the `Suspended` status condition (kill switch) |
+| `pkg/configuration/` | `Config`, `Cache`, `OnConfigMapChange`, OTel provider | ConfigMap-driven config cache (sandbox mode, PodSpec, OTEL, MCP) and OTLP/audit telemetry provider (`otel_provider.go`) |
 | `pkg/configwatch/` | `Watcher`, `TryLoad` | Generic ConfigMap watcher utility |
 | `cli/` | `NewRootCmd` | CLI root command |
 | `cli/run/` | `CreateOptions`, `ListOptions`, `GetOptions`, `ApproveOptions`, `DenyOptions`, `WatchOptions`, `LogsOptions`, `DeleteOptions` | CLI subcommands for run lifecycle operations |
@@ -29,11 +28,11 @@
 ## Key Entry Points
 
 **Operator binary** (`cmd/main.go`):
-- Parses flags (`--namespace`, `--metrics-bind-address`, `--health-probe-bind-address`, `--agentic-console-image`)
+- Parses flags (`--namespace`, `--metrics-bind-address`, `--health-probe-bind-address`)
 - Creates `configuration.Cache` and registers ConfigMap watcher for `lightspeed-agentic-configuration`
-- Wires `SandboxManager` → `SandboxAgentCaller` → `AgenticRunReconciler` directly (no `controller/setup.go`)
+- Wires `SandboxManager` → `SandboxAgentCaller` → `AgenticRunReconciler` directly (no `controller/setup.go`), plus the `agenticolsconfig.Reconciler`
 - Ensures `lightspeed-agent` ServiceAccount unconditionally (discovery seed for reader CRBs)
-- Registers console plugin, health/readiness probes, and webhook
+- Registers health/readiness probes and the `AgenticRunApproval` mutating webhook (`/mutate-agenticrunapproval`)
 - Starts manager with signal handler
 
 **CLI binary** (`cmd/oc-agentic/main.go`):
@@ -42,8 +41,7 @@
 
 **Controller setup** (inlined in `cmd/main.go`):
 - Creates `SandboxManager(client, cfgCache, namespace)` and `SandboxAgentCaller` with dependency injection
-- Registers `AgenticRunReconciler` via `SetupWithManager`
-- Registers `EnsureAgenticConsole` as a `RunnableFunc`
+- Registers `AgenticRunReconciler` and `agenticolsconfig.Reconciler` via `SetupWithManager`
 - Registers `lightspeed-agent` SA creation as a `RunnableFunc`
 
 ## Naming Conventions

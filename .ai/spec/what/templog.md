@@ -54,5 +54,6 @@ Implementation details for the agentic-operator's role in the templog feature.
 
 - `what/audit-logging.md` — Audit event catalog, structured JSON format, OTEL span hierarchy
 - `what/run-lifecycle.md` — AgenticRun CR lifecycle, phase transitions, finalizers
-- `pkg/telemetry/` — Provider implementation (ConfigMap reader, OTLP exporters, admin HTTP client)
+- `pkg/configuration/otel_provider.go` — OTLP exporter / telemetry provider (ConfigMap reader, OTLP exporters, admin HTTP client)
+- `controller/agenticrun/audit.go` — `AuditLogger` / `LogEmitter` (span + OTLP log emission)
 - `pkg/configwatch/` — Generic informer-based ConfigMap watcher
