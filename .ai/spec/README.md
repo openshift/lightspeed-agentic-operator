@@ -26,6 +26,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Look up a CRD field | `what/crd-api.md` |
 | Understand the approval system | `what/approval.md` |
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
+| Understand product e2e testing | `what/product-e2e-testing.md` |
 | Navigate the project layout | `how/project-structure.md` |
 | Understand the kill switch / system config | `what/system-config.md` |
 | Navigate the controller codebase | `how/reconciler.md` |
