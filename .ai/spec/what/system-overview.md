@@ -17,8 +17,8 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
    - **AgenticRun controller** — reconciles `AgenticRun` CRs through the workflow state machine.
    - **CLI plugin** (`oc-agentic`) — provides `oc agentic run` commands for run CRUD, approval, watch, and log streaming.
    - **API types** (`api/v1alpha1`) — CRD type definitions published as a separate Go module for downstream consumers.
-5a. [PLANNED: OLS-3236] The **console plugin** deployment is migrated to the lightspeed-operator for full reconciliation lifecycle management. The agentic-operator no longer deploys any console plugins. The **alerts adapter** deployment is also managed by the lightspeed-operator.
-6. The run controller runs in the operator binary via `controller.Setup()`. [PLANNED: OLS-3236] The console plugin `RunnableFunc` and `controller/console/` package are removed.
+5a. [DONE: OLS-3236/OLS-3350] The **console plugin** deployment is managed by the lightspeed-operator for full reconciliation lifecycle management. The agentic-operator does not deploy any console plugins. The **alerts adapter** deployment is also managed by the lightspeed-operator.
+6. The run controller runs in the operator binary, wired inline in `cmd/main.go` (no `controller/setup.go`). [DONE: OLS-3236/OLS-3350] The console plugin `RunnableFunc` and `controller/console/` package have been removed.
 7. The CLI is a separate binary (`cmd/oc-agentic`) that communicates directly with the Kubernetes API server.
 
 ### External Dependencies
@@ -27,7 +27,7 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 9. When `sandbox-mode=sandbox-claim` (from `lightspeed-agentic-configuration` ConfigMap), the operator MUST interact with the Sandbox API (`extensions.agents.x-k8s.io/v1alpha1` `SandboxClaim`, `agents.x-k8s.io/v1alpha1` `Sandbox`) to provision ephemeral agent workloads. In the default `bare-pod` mode, the operator creates Pods directly and does not depend on Sandbox API CRDs.
 10. The operator MUST resolve `Agent` CRs and their referenced `LLMProvider` CRs to determine model configuration and credentials for each workflow step.
 11. The operator MUST call the sandbox agent's `POST /v1/agent/run` HTTP endpoint for each workflow step (analysis, execution, verification, escalation).
-12. [PLANNED: OLS-3236] Console plugin deployment is migrated to the lightspeed-operator. The agentic-operator no longer interacts with OpenShift Console APIs for plugin deployment.
+12. [DONE: OLS-3236/OLS-3350] Console plugin deployment is managed by the lightspeed-operator. The agentic-operator does not interact with OpenShift Console APIs for plugin deployment (the manager scheme registers only client-go and `agenticv1alpha1` types).
 
 ### Dual-Module Structure
 
@@ -54,7 +54,6 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 - The operator assumes it is the sole controller for `agentic.openshift.io/v1alpha1` resources; running multiple replicas without leader election would cause conflicts.
 - Sandbox provisioning via `SandboxClaim` depends on the Sandbox API CRDs being installed in the cluster; this dependency only applies when `sandbox-mode=sandbox-claim` in the ConfigMap. The default `bare-pod` mode has no external CRD dependency.
 - The `lightspeed-agentic-configuration` ConfigMap must be created by lightspeed-operator before any AgenticRun can execute. The operator does not block startup on this ConfigMap — it starts normally and individual runs fail gracefully when the ConfigMap is missing.
-- The operator requires OpenShift APIs for console plugin deployment; running on vanilla Kubernetes skips console integration.
 
 ## Planned Changes
 
@@ -62,5 +61,5 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 |---|---|
 | OLS-2957 | Sandbox template management UX and CRD ergonomics may change operator/template coupling |
 | OLS-2940 | Autonomous workflow CRD migrations may rename or reshape `v1alpha1` fields |
-| OLS-3236 | Remove `controller/console/` package and `--agentic-console-image` flag. Console plugin and alerts adapter deployment moves to lightspeed-operator. |
+| OLS-3236/OLS-3350 | [DONE] Removed `controller/console/` package and `--agentic-console-image` flag. Console plugin and alerts adapter deployment moved to lightspeed-operator. |
 | OLS-3685/3686 | [DONE] Inter-operator config handoff: unified `SandboxManager` reads base PodSpec from `lightspeed-agentic-configuration` ConfigMap. Sandbox mode, image, and PodSpec all sourced from ConfigMap. CLI flags removed. No-blocking startup; graceful degradation. |

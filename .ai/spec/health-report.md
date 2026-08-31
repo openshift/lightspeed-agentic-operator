@@ -1,39 +1,47 @@
 # Spec health report
 
-Last evaluated: 2026-07-27
-Trigger: post OLS-3685/OLS-3686 implementation (SandboxManager unification, config cache)
+Last evaluated: 2026-08-31
+Trigger: post-milestone (console removal OLS-3350, TokenUsage OLS-3993) — staleness + accuracy check
 Layout: software (.ai/spec/)
 
 ## Stale
 
-1. **what/crd-api.md rule 18** — States "Agent — `status.conditions`: Observed readiness; `Ready` condition documents whether referenced provider resources are accessible (see operator reconcile behavior)." No Agent reconciler exists in the codebase; the operator only reconciles `AgenticRun` CRs. Rule 18 should be marked `[PLANNED]` or reworded to clarify this is aspirational rather than implemented behavior.
+1. **Console plugin removal shipped, still marked `[PLANNED: OLS-3236]`.** `controller/console/` is deleted (commit f88e0e1 "OLS-3350: Remove console plugin deployment from agentic-operator"). `cmd/main.go` no longer parses `--agentic-console-image`, registers no `EnsureAgenticConsole` RunnableFunc, and its scheme registers only `clientgoscheme` + `agenticv1alpha1` (no `consolev1` / `openshiftv1`). Affected:
+   - `what/system-overview.md` rules 5a, 6, 12 (marked `[PLANNED: OLS-3236]` — now DONE), Constraints line "requires OpenShift APIs for console plugin deployment" (no longer true), Planned Changes OLS-3236 row.
+   - `how/project-structure.md` module map row `controller/console/`; entry-point bullets listing `--agentic-console-image`, "Registers console plugin", "Registers `EnsureAgenticConsole` as a `RunnableFunc`".
+   - `how/reconciler.md` entire "Module map: `controller/console/`" section; scheme note claiming `consolev1` + `openshiftv1` registration.
+
+2. **`controller/sandbox/` deleted, still in module map.** `how/project-structure.md` lists `controller/sandbox/` ("Legacy bootstrap helpers"); the directory no longer exists (SA bootstrap is inline in `cmd/main.go`).
+
+3. **TokenUsage shipped, still marked `[PLANNED: OLS-3661]`.** `TokenUsage` (both `inputTokens`/`outputTokens` `+required`, `MinProperties=1`) exists in `api/v1alpha1` on all four Result types and `AgenticRunStatus`; aggregation is implemented in `controller/agenticrun/results.go` (shipped as OLS-3993, building on the OLS-3661 spec). All `[PLANNED: OLS-3661]` markers are stale:
+   - `what/crd-api.md` rules 6c, 6d, 6e, 31–34, config-surface lines, Planned Changes OLS-3661 row.
+   - `what/sandbox-execution.md` rule 43.1 and Planned Changes OLS-3661 row.
+
+4. **`how/reconciler.md` internal contradiction — `SandboxAgentCaller` fields.** DI wiring line lists `{Sandbox, K8sClient, ClientFactory, Namespace, Audit}`, but the actual struct is `{Sandbox, K8sClient, Namespace, Audit}` and the same doc later states `ClientFactory` was removed under OLS-3066. `ClientFactory` no longer exists anywhere in the code.
+
+5. **Moved function — `buildInputConfigMap`.** `how/reconciler.md` attributes `buildInputConfigMap` to `sandbox_manager.go`; it now lives in `controller/agenticrun/input_configmap.go`.
+
+6. **Stale cross-reference — `pkg/telemetry/`.** `what/templog.md` cross-references `pkg/telemetry/` for the provider implementation; telemetry/OTLP code lives in `pkg/configuration/otel_provider.go` and audit code in `controller/agenticrun/audit.go`. No `pkg/telemetry/` package exists.
 
 ## Missing
 
-1. **Console plugin behavioral rules** — `controller/console/` deploys a console plugin (Deployment, Service, ConfigMap, ConsolePlugin CR, Console activation), but no what/ file defines behavioral rules for this component. It is only documented in how/reconciler.md as implementation detail. Consider adding a `what/console-plugin.md` if the console deployment has rules worth specifying (idempotency, image absence handling, activation semantics).
+1. **`how/reconciler.md` module map omits shipped files.** `controller/agenticrun/audit.go` (AuditLogger, ProductionAuditLogger, LogEmitter), `approval_webhook.go` (AgenticRunApprovalMutator — the audit MutatingAdmissionWebhook of `audit-logging.md` rules 17–21), and `input_configmap.go` (buildInputConfigMap, buildResultTemplate) have no module-map entries, despite their behavior being specified in `what/audit-logging.md` and `what/sandbox-execution.md`.
 
-2. **`pkg/configuration/` spec** — The new configuration cache package (`Config`, `Cache`, `OnConfigMapChange`) has no dedicated spec file. Covered in `docs/inter-operator-handoff-design.md` but not in `.ai/spec/`. Consider adding `how/configuration.md` if the package grows.
+2. **`how/project-structure.md` omits `controller/agenticolsconfig/`** (the AgenticOLSConfig status reconciler), which is documented in `how/reconciler.md`. Also omits `cli/system/` and `cmd/check-isa-level/`. (Minor; agenticolsconfig added for parity with reconciler.md.)
 
 ## Structural concerns
 
-1. **how/reconciler.md size** — At 180 lines, this file covers both `controller/agenticrun/` (large) and `controller/console/` (small). This is acceptable given the console section is only ~10 lines, but if the console component grows it should be split into `how/console.md`.
-
-2. **how/reconciler.md entry point section** — The `cmd/main.go` description (lines 9-15) partially duplicates the new `how/project-structure.md` entry points section. The reconciler.md section should reference project-structure.md for the main binary and focus only on the controller setup flow.
+None new. `how/reconciler.md` remains large but cohesive now that the console section is removed.
 
 ## Findability issues
 
-None. The cross-reference table in README.md provides clear mapping between what/ and how/ files. The quick-start table covers all common entry points.
+The audit-logging / webhook implementation files were not discoverable from the how/ module maps (see Missing #1). Addressed by adding entries.
 
-## No issues
+## Accurate (verified current — no change)
 
-- All spec files have real content (no empty templates or placeholders).
-- All `controller/agenticrun/` source files listed in how/reconciler.md module map exist on disk. Deleted files (`sandbox.go`, `bare_pod_manager.go`, `sandbox_templates.go`) removed from map.
-- All `cli/run/` source files listed in how/cli.md module map exist on disk.
-- All template files (`*.tmpl`) listed in how/reconciler.md exist.
-- All CRD types in `api/v1alpha1/*_types.go` are covered by what/crd-api.md.
-- Behavioral rules are numbered sequentially in all what/ files.
-- `[PLANNED: OLS-XXXX]` markers are used consistently across all what/ files.
-- Constraints sections present in all what/ files.
-- `CLAUDE.md` has spec pointer.
-- `ARCHITECTURE.md` exists at project root.
-- Layer READMEs removed; content absorbed into main README.
+- `[PLANNED: OLS-3743]` layered-timeout markers: code still has `Agent.spec.timeouts.chatSeconds`, no `escalationSeconds`, and no `LIGHTSPEED_AGENT_TIMEOUT_SECONDS`/`LIGHTSPEED_AGENT_MAX_TURNS` env wiring — still planned. Left unchanged.
+- `[PLANNED: OLS-3491]` per-step `instructions`: no `Instructions` field on `AgenticRunStep` in `api/v1alpha1` — still planned. Left unchanged.
+- `[PLANNED -- spec.audit]` in `what/audit-logging.md` rules 23–24: no `Audit` field on `AgenticOLSConfig` — still planned. Left unchanged.
+- `[PLANNED: OLS-3594]` disableDefaultMCP / MCP auto-injection: not in API — still planned.
+- Kill switch (`AgenticOLSConfig`, VAP), templog finalizer, per-step SAs, reader multi-binding, execution outcome override: all match code.
+</content>

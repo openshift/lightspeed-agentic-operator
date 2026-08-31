@@ -11,7 +11,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 - Creates `configuration.Cache` (starts nil). Eagerly attempts `configwatch.TryLoad` for the `lightspeed-agentic-configuration` ConfigMap. Registers `configwatch.Watcher` for runtime changes.
 - Wires **dependency injection** directly (no `controller/setup.go`):
   - `agenticrun.NewSandboxManager(mgr.GetClient(), cfgCache, namespace, auditLogger)` → `SandboxLifecycle`.
-  - `&agenticrun.SandboxAgentCaller{Sandbox, K8sClient, ClientFactory, Namespace, Audit}` → satisfies `agenticrun.AgentCaller`.
+  - `&agenticrun.SandboxAgentCaller{Sandbox, K8sClient, Namespace, Audit}` → satisfies `agenticrun.AgentCaller`. (No `ClientFactory` — HTTP was removed under OLS-3066.)
   - `agenticrun.AgenticRunReconciler{Client, Agent, Config, Namespace, Audit, TempLog}` → `SetupWithManager(mgr)`.
   - `agenticolsconfig.Reconciler` → `SetupWithManager(mgr)` — maintains `AgenticOLSConfig` `Suspended` condition.
 - Ensures `lightspeed-agent` ServiceAccount unconditionally (idempotent create).
@@ -29,7 +29,10 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `approval.go` | — | `getApprovalPolicy`, `getAgenticRunApproval`, `ensureAgenticRunApproval`, `isStageApproved`, `isStageDenied`, `getStageOverrideAgent`, `getStageOption` |
 | `resolve.go` | `resolvedStep`, `resolvedWorkflow` | `resolveAgenticRun`, `stepAgentName` |
 | `agent.go` | `AgentCaller`, `StubAgentCaller`; `AnalysisOutput`, `ExecutionOutput`, `VerificationOutput`, `EscalationOutput` | Interface methods on `StubAgentCaller` |
-| `sandbox_manager.go` | `SandboxManager` | `NewSandboxManager`, `Create`, `Release`, `createBarePod`, `createSandboxClaim`, `releaseBarePod`, `releaseSandboxClaim`, `ensureSA`, `setSAOwner`, `buildInputConfigMap`, `createInputConfigMap`, `podSpecToUnstructured` |
+| `sandbox_manager.go` | `SandboxManager` | `NewSandboxManager`, `Create`, `Release`, `createBarePod`, `createSandboxClaim`, `releaseBarePod`, `releaseSandboxClaim`, `ensureSA`, `setSAOwner`, `createInputConfigMap`, `podSpecToUnstructured` |
+| `input_configmap.go` | — | `inputConfigMapName`, `buildInputConfigMap`, `buildResultTemplate`, `nextResultIndex` (builds the `/input/` ConfigMap payload and pre-filled Result CR template) |
+| `audit.go` | `AuditLogger`, `ProductionAuditLogger`, `NoOpAuditLogger`, `LogEmitter`, `NoOpLogEmitter`, `AgenticRunIDGenerator` | OTel audit span/event emission and templog OTLP log records (see `what/audit-logging.md`, `what/templog.md`) |
+| `approval_webhook.go` | `AgenticRunApprovalMutator` | Mutating admission webhook (`/mutate-agenticrunapproval`) — stamps `spec.approver` and emits the approval audit event (see `what/audit-logging.md` rules 17–21) |
 | `sandbox_agent.go` | `SandboxLifecycle` interface; `SandboxAgentCaller` | `Analyze`, `Execute`, `Verify`, `Escalate`, `ReleaseSandboxes`, `launchSandbox`, `patchSandboxInfo`, `buildAgentContext`, `collectFailedResults`, `stepString` |
 | `pod_handler.go` | Pod watch handler (methods on `AgenticRunReconciler`); timeout background goroutine | `handlePodEvent`, `completeStep`, `patchStepCondition`, `patchStepResult`, `releaseSandbox`, `runTimeoutLoop`, `handleTimeEvent`, `stepConditionType`, `fetchResultCR`, `podFailMessage` |
 | `podspec_builder.go` | `PodSpecBuilder`; label constants (`LabelManaged`, `LabelRun`, etc.); MCP env DTOs (`mcpServerEnvEntry`, `mcpHeaderEnvEntry`) | `Build`, `buildSkills`, `buildMCPServers`, `buildRequiredSecrets`, `addProviderSpecificEnv`, `credentialsSecretName`, `providerURL`, `providerTypeString` |
@@ -62,17 +65,6 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `reconciler_test.go` | — | Activation/deactivation, event emission, non-terminal run requeue |
 
 **Integration note:** Registered in `cmd/main.go`. Watches the cluster `AgenticOLSConfig` named `cluster` and **Watches** `AgenticRun` objects to requeue the config when run phases change.
-
----
-
-## Module map: `controller/console/`
-
-| File | Types | Key functions |
-|------|-------|----------------|
-| `reconciler.go` | `AgenticConsoleConfig` (Image, Namespace); constants for plugin name, cert, nginx config string | `EnsureAgenticConsole` (orchestrates ordered ensures), `labels`, `ensureConfigMap`, `ensureServiceAccount`, `ensureService`, `ensureDeployment`, `ensureConsolePlugin`, `ensureConsoleActivation` |
-| `reconciler_test.go` | — | Tests for idempotency, image updates, skip when no image |
-
-**Integration note:** `EnsureAgenticConsole` is registered in `cmd/main.go` as a `manager.RunnableFunc` — it runs once at manager start, not as a reconcile loop. It mutates OpenShift `Console` cluster CR `spec.plugins` via retry-on-conflict.
 
 ---
 
@@ -205,7 +197,7 @@ AgenticRunReconciler.Reconcile
 
 ## Implementation notes (gotchas)
 
-- **`cmd/main.go` scheme:** Registers core + `agenticv1alpha1` + `consolev1` + `openshiftv1`. No separate `controller/setup.go` — all wiring is inline in `main.go`. Watching or applying arbitrary CRDs from tests may need extended schemes (see `reconciler_test.go`).
+- **`cmd/main.go` scheme:** Registers client-go core + `agenticv1alpha1` only (the `consolev1` / `openshiftv1` schemes were removed with the console plugin — OLS-3236/OLS-3350). No separate `controller/setup.go` — all wiring is inline in `main.go`. Watching or applying arbitrary CRDs from tests may need extended schemes (see `reconciler_test.go`).
 - **Max concurrent reconciles:** `SetupWithManager` reads cluster `ApprovalPolicy` via API reader for `MaxConcurrentRuns`, else `DefaultMaxConcurrentRuns` from API package.
 - **Policy watch:** Enqueues **all** non-terminal runs on any `ApprovalPolicy` event — can be chatty.
 - **AgenticOLSConfig watch:** Same pattern as policy watch — enqueues all non-terminal runs on any `AgenticOLSConfig` change. When `suspended` flips to `true`, all re-queued runs hit the suspension guard and get terminated.
