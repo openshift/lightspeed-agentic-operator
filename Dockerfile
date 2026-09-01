@@ -30,7 +30,7 @@ RUN CGO_ENABLED=1 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -tags
 RUN go build -o check-isa-level ./cmd/check-isa-level && ./check-isa-level ./manager
 
 
-FROM registry.redhat.io/ubi9/ubi-minimal:9.8-1786380870
+FROM registry.redhat.io/ubi9/ubi-minimal:9.8-1788166357
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
