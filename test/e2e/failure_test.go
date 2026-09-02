@@ -116,7 +116,7 @@ func TestSandboxTimeout(t *testing.T) {
 	t.Logf("AgenticRun created: %s/%s", testNS, prop.Name)
 
 	t.Log("Waiting for phase: Failed (sandbox timeout — this takes ~11 minutes)")
-	updated := waitForPhaseWithTimeout(t, c, prop.Name, agenticv1alpha1.AgenticRunPhaseFailed, 12*time.Minute)
+	updated := waitForPhaseWithTimeout(t, c, prop.Name, agenticv1alpha1.AgenticRunPhaseFailed, 15*time.Minute)
 	t.Log("Phase reached: Failed")
 
 	assertStepCondition(t, updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed,

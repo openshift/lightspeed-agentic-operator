@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,42 +26,37 @@ var stepCondMu sync.Mutex
 // Pod event handler
 // ---------------------------------------------------------------------------
 
-// handlePodEvent is the Watches handler for sandbox pods. It evaluates
-// the step FSM on every pod event and acts on the outcome:
-//
-//	Completed → cleanup pod+CM, enqueue reconcile (phase routing picks up Result CR)
-//	Failed    → patch step condition, cleanup pod+CM
-//	Running   → patch step reason (WaitingForSandbox / Running)
+// handlePodEvent is the Watches handler for sandbox pods. It resolves
+// the owning AgenticRun using either labels (bare-pod) or the ownership
+// chain Pod → Sandbox → SandboxClaim (sandbox-claim mode).
 func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Object) []ctrl.Request {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil
 	}
 
-	// Not a sandbox pod — ignore.
-	step := pod.Labels[LabelStep]
-	runName := pod.Annotations[AnnotationRunName]
-	if pod.Labels[LabelRun] == "" || step == "" || runName == "" {
+	var step, runName string
+	if r.isSandboxClaimMode() {
+		step, runName, _ = resolveSandboxPodMetadata(ctx, r.Client, pod)
+	} else {
+		step, runName = resolveBarePodMetadata(pod)
+	}
+	if step == "" || runName == "" {
 		return nil
 	}
 
-	// Look up the owning AgenticRun. Gone → nothing to do.
 	var run agenticv1alpha1.AgenticRun
 	if err := r.Get(ctx, client.ObjectKey{Name: runName, Namespace: r.Namespace}, &run); err != nil {
 		return nil
 	}
 
-	// Resolve once: condition type, claim name, and enrich the logger.
 	condType := stepConditionType(step)
 	claimName := sandboxClaimName(&run, step)
-	runUID := string(run.UID)
 	ctx = logf.IntoContext(ctx, logf.FromContext(ctx).WithValues(
 		LogKeyName, pod.Name, LogKeyStep, step,
-		LogKeyClaim, claimName, "runUID", runUID, LogKeyCondition, condType,
+		LogKeyClaim, claimName, "runUID", string(run.UID), LogKeyCondition, condType,
 	))
 
-	// Pod still in progress — lightweight reason update, no FSM needed.
-	// Edge cases (node death, force delete) are caught by the timeout ticker.
 	if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodPending || pod.Status.Phase == corev1.PodUnknown {
 		reason := ReasonRunning
 		if pod.Status.Phase != corev1.PodRunning {
@@ -71,11 +66,47 @@ func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Ob
 		return nil
 	}
 
-	// Pod terminated — phase tells us the outcome.
 	if err := r.completeStep(ctx, &run, pod, step, condType, ""); err != nil {
 		return nil
 	}
 	return nil
+}
+
+// resolveBarePodMetadata reads step and run name from pod labels/annotations.
+func resolveBarePodMetadata(pod *corev1.Pod) (step, runName string) {
+	if pod.Labels[LabelRun] == "" {
+		return "", ""
+	}
+	return pod.Labels[LabelStep], pod.Annotations[AnnotationRunName]
+}
+
+// resolveSandboxPodMetadata follows the ownership chain:
+// Pod → Sandbox (ownerRef) → SandboxClaim (ownerRef) → our labels.
+func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1.Pod) (step, runName string, err error) {
+	for _, podRef := range pod.OwnerReferences {
+		if podRef.Kind != "Sandbox" {
+			continue
+		}
+		sb := &unstructured.Unstructured{}
+		sb.SetGroupVersionKind(smSandboxGVK)
+		if err := c.Get(ctx, client.ObjectKey{Name: podRef.Name, Namespace: pod.Namespace}, sb); err != nil {
+			return "", "", err
+		}
+		for _, sbRef := range sb.GetOwnerReferences() {
+			if sbRef.Kind != "SandboxClaim" {
+				continue
+			}
+			claim := &unstructured.Unstructured{}
+			claim.SetGroupVersionKind(smClaimGVK)
+			if err := c.Get(ctx, client.ObjectKey{Name: sbRef.Name, Namespace: pod.Namespace}, claim); err != nil {
+				return "", "", err
+			}
+			labels := claim.GetLabels()
+			annotations := claim.GetAnnotations()
+			return labels[LabelStep], annotations[AnnotationRunName], nil
+		}
+	}
+	return "", "", nil
 }
 
 // completeStep handles step completion: patches the step condition (and result ref
@@ -292,72 +323,7 @@ func appendResultRef(run *agenticv1alpha1.AgenticRun, step, name string, outcome
 
 func (r *AgenticRunReconciler) releaseSandbox(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string) {
 	if err := r.Agent.ReleaseSandbox(ctx, run, step); err != nil {
-		logf.FromContext(ctx).Error(err, "pod handler: failed to release sandbox", LogKeyStep, step)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Timeout ticker — background goroutine for time-driven timeout checks
-// ---------------------------------------------------------------------------
-
-const sandboxTimeoutCheckInterval = 1 * time.Minute
-
-// runTimeoutLoop runs handleTimeEvent in a loop.
-// Stopped when ctx is cancelled (manager shutdown).
-func (r *AgenticRunReconciler) runTimeoutLoop(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(sandboxTimeoutCheckInterval):
-			r.handleTimeEvent(ctx)
-		}
-	}
-}
-
-// handleTimeEvent checks all sandbox pods for start/overall timeouts.
-func (r *AgenticRunReconciler) handleTimeEvent(ctx context.Context) {
-	log := logf.FromContext(ctx).WithName("sandbox-timeout")
-	var pods corev1.PodList
-	if err := r.List(ctx, &pods, client.InNamespace(r.Namespace), client.HasLabels{LabelRun, LabelStep}); err != nil {
-		log.Error(err, "failed to list sandbox pods")
-		return
-	}
-
-	now := time.Now()
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		step := pod.Labels[LabelStep]
-		runName := pod.Annotations[AnnotationRunName]
-		condType := stepConditionType(step)
-		if runName == "" {
-			continue
-		}
-
-		var run agenticv1alpha1.AgenticRun
-		if err := r.Get(ctx, client.ObjectKey{Name: runName, Namespace: r.Namespace}, &run); err != nil {
-			continue
-		}
-
-		// Retry: pod already terminal but step condition still pending (patch failed earlier).
-		phase := pod.Status.Phase
-		if (phase == corev1.PodSucceeded || phase == corev1.PodFailed) && isStepInProgress(&run, condType) {
-			log.Info("retrying completion for terminal pod", LogKeyName, pod.Name, LogKeyStep, step)
-			_ = r.completeStep(ctx, &run, pod, step, condType, "")
-			continue
-		}
-
-		created := pod.CreationTimestamp.Time
-		var message string
-		if startTimedOut(phase, created, now, podStartTimeout) {
-			message = fmt.Sprintf("sandbox pod did not start within %s", podStartTimeout)
-		} else if overallTimedOut(created, now, stepTimeout(step)) {
-			message = fmt.Sprintf("sandbox exceeded timeout %s", stepTimeout(step))
-		} else {
-			continue
-		}
-
-		_ = r.completeStep(ctx, &run, pod, step, condType, message)
+		logf.FromContext(ctx).Error(err, "failed to release sandbox", LogKeyStep, step)
 	}
 }
 
@@ -500,19 +466,6 @@ func podFailMessage(pod *corev1.Pod) string {
 		return fmt.Sprintf("sandbox pod failed (exit %d)", *exitCode)
 	}
 	return "sandbox pod failed"
-}
-
-// startTimedOut returns true if the pod has not reached Running within the start deadline.
-func startTimedOut(phase corev1.PodPhase, created, now time.Time, timeout time.Duration) bool {
-	if phase == corev1.PodRunning || phase == corev1.PodSucceeded || phase == corev1.PodFailed {
-		return false
-	}
-	return now.Sub(created) > timeout
-}
-
-// overallTimedOut returns true if the pod has exceeded the step deadline.
-func overallTimedOut(created, now time.Time, timeout time.Duration) bool {
-	return now.Sub(created) > timeout
 }
 
 // podTerminatedInfo returns the first terminated container's message and exit code.

@@ -21,6 +21,10 @@ spec:
       description: 'Namespace to deploy the operator into'
       default: 'openshift-lightspeed'
       type: string
+    - name: sandbox-mode
+      description: 'Sandbox mode: bare-pod (default) or sandbox-claim'
+      default: 'bare-pod'
+      type: string
     - name: openshift-version-prefix
       description: 'Minor line prefix for eaas-get-latest-openshift-version-by-prefix (include trailing dot, e.g. 4.19.)'
       default: '4.19.'
@@ -97,6 +101,8 @@ spec:
             type: string
           - name: namespace
             type: string
+          - name: sandbox-mode
+            type: string
         results:
           - name: commit
             value: "$(steps.install-operator.results.commit)"
@@ -144,6 +150,8 @@ spec:
                 value: "$(params.namespace)"
               - name: SANDBOX_IMAGE
                 value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1"
+              - name: SANDBOX_MODE
+                value: "$(params.sandbox-mode)"
             image: registry.redhat.io/openshift4/ose-cli:latest
             script: |
               set -euo pipefail
@@ -169,6 +177,7 @@ spec:
               IMG="${OPERATOR_IMAGE}" \
               OPERATOR_NAMESPACE="${NAMESPACE}" \
               SANDBOX_IMAGE="${SANDBOX_IMAGE}" \
+              SANDBOX_MODE="${SANDBOX_MODE}" \
               bash .tekton/integration-tests/scripts/install-operator.sh
           - name: run-e2e-tests
             resources:
@@ -261,6 +270,8 @@ spec:
           value: $(params.SNAPSHOT)
         - name: namespace
           value: "$(params.namespace)"
+        - name: sandbox-mode
+          value: "$(params.sandbox-mode)"
   finally:
     - name: export-logs-for-retention
       taskRef:

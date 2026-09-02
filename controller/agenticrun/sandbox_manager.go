@@ -45,7 +45,11 @@ const (
 // +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch
 
 var smClaimGVK = schema.GroupVersionKind{
-	Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxClaim",
+	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxClaim",
+}
+
+var smSandboxGVK = schema.GroupVersionKind{
+	Group: "agents.x-k8s.io", Version: "v1beta1", Kind: "Sandbox",
 }
 
 // SandboxManager manages sandbox lifecycle: create, wait-ready, release.
@@ -404,7 +408,7 @@ func (m *SandboxManager) createSandboxClaim(
 
 	template := &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "extensions.agents.x-k8s.io/v1alpha1",
+			"apiVersion": "extensions.agents.x-k8s.io/v1beta1",
 			"kind":       "SandboxTemplate",
 			"metadata": map[string]any{
 				"name":      name,
@@ -413,21 +417,43 @@ func (m *SandboxManager) createSandboxClaim(
 					LabelRun:  string(run.UID),
 					LabelStep: step,
 				},
-				"annotations": map[string]any{
-					AnnotationRunName: run.Name,
-				},
 				"ownerReferences": []any{ownerRef},
 			},
 			"spec": map[string]any{
+				"networkPolicyManagement": "Unmanaged",
 				"podTemplate": map[string]any{
 					"spec": podSpecMap,
 				},
 			},
 		},
 	}
-
 	if err := m.client.Create(ctx, template); err != nil && !apierrors.IsAlreadyExists(err) {
 		return "", "", fmt.Errorf("%s: %w", errEnsureAgentTemplate, err)
+	}
+
+	pool := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "extensions.agents.x-k8s.io/v1beta1",
+			"kind":       "SandboxWarmPool",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": m.namespace,
+				"labels": map[string]any{
+					LabelRun:  string(run.UID),
+					LabelStep: step,
+				},
+				"ownerReferences": []any{ownerRef},
+			},
+			"spec": map[string]any{
+				"replicas": int64(0),
+				"sandboxTemplateRef": map[string]any{
+					"name": name,
+				},
+			},
+		},
+	}
+	if err := m.client.Create(ctx, pool); err != nil && !apierrors.IsAlreadyExists(err) {
+		return "", "", fmt.Errorf("create SandboxWarmPool for %s: %w", step, err)
 	}
 
 	claim := &unstructured.Unstructured{
@@ -447,7 +473,7 @@ func (m *SandboxManager) createSandboxClaim(
 				"ownerReferences": []any{ownerRef},
 			},
 			"spec": map[string]any{
-				"sandboxTemplateRef": map[string]any{
+				"warmPoolRef": map[string]any{
 					"name": name,
 				},
 				"lifecycle": map[string]any{
@@ -557,9 +583,20 @@ func (m *SandboxManager) releaseSandboxClaim(ctx context.Context, claimName stri
 		return fmt.Errorf("%s %q: %w", errDeleteSandboxClaim, claimName, err)
 	}
 
+	pool := &unstructured.Unstructured{}
+	pool.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxWarmPool",
+	})
+	pool.SetName(claimName)
+	pool.SetNamespace(m.namespace)
+
+	if err := m.client.Delete(ctx, pool); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete SandboxWarmPool %q: %w", claimName, err)
+	}
+
 	tmpl := &unstructured.Unstructured{}
 	tmpl.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxTemplate",
+		Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxTemplate",
 	})
 	tmpl.SetName(claimName)
 	tmpl.SetNamespace(m.namespace)
@@ -568,7 +605,7 @@ func (m *SandboxManager) releaseSandboxClaim(ctx context.Context, claimName stri
 		return fmt.Errorf("delete SandboxTemplate %q: %w", claimName, err)
 	}
 
-	log.Info("Released SandboxClaim and SandboxTemplate", LogKeyClaim, claimName)
+	log.Info("Released SandboxClaim, SandboxWarmPool, and SandboxTemplate", LogKeyClaim, claimName)
 	return nil
 }
 

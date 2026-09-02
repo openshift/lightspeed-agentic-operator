@@ -8,8 +8,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
@@ -43,17 +45,36 @@ func TestExecutionFlow_ProposedToVerifying(t *testing.T) {
 	waitForPhase(t, c, prop.Name, agenticv1alpha1.AgenticRunPhaseExecuting)
 	t.Log("Phase reached: Executing — checking RBAC")
 
-	// --- Verify: RBAC created ---
+	// --- Verify: RBAC created (poll — RBAC is created inside Execute which
+	// runs after the Executed=Unknown status patch) ---
 	roleName := "ls-exec-" + runUID
 	var role rbacv1.Role
-	if err := c.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "staging"}, &role); err != nil {
-		t.Fatalf("get Role %s in staging: %v", roleName, err)
+	if err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		err := c.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "staging"}, &role)
+		if err == nil {
+			return true, nil
+		}
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}); err != nil {
+		t.Fatalf("timed out waiting for Role %s in staging: %v", roleName, err)
 	}
 	t.Logf("RBAC Role %s exists in staging namespace", roleName)
 
 	var binding rbacv1.RoleBinding
-	if err := c.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "staging"}, &binding); err != nil {
-		t.Fatalf("get RoleBinding %s in staging: %v", roleName, err)
+	if err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		err := c.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "staging"}, &binding)
+		if err == nil {
+			return true, nil
+		}
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}); err != nil {
+		t.Fatalf("timed out waiting for RoleBinding %s in staging: %v", roleName, err)
 	}
 	t.Logf("Verified: RoleBinding %s exists in staging", roleName)
 

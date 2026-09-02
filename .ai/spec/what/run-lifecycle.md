@@ -42,8 +42,8 @@ Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gat
 
 | Status | Reason | Meaning |
 |---|---|---|
-| `Unknown` | `WaitingForSandbox` | Pod/SandboxClaim created, waiting for pod to start |
-| `Unknown` | `Running` | Pod is running, agent is working |
+| `Unknown` | `WaitingForSandbox` | Pod/SandboxClaim created, waiting for pod to start. In sandbox-claim mode, derived from absence of `Ready=True` on the `Sandbox` resource. |
+| `Unknown` | `Running` | Pod is running, agent is working. In sandbox-claim mode, derived from `Ready=True` on the `Sandbox` resource. |
 | `True` | `Succeeded` | Result CR exists with `success: true` |
 | `False` | `AgentFailed` | Result CR exists with `success: false` for a non-timeout agent failure |
 | `False` | `AgentTimeout` | [PLANNED: OLS-3743] Sandbox cooperatively stopped the agent at its configured execution budget and published a Result CR |

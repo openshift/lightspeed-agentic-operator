@@ -55,8 +55,9 @@ type Config struct {
 // Components that need to react to config changes (e.g. OTEL provider)
 // are registered via SetOTELProvider and invoked from OnConfigMapChange.
 type Cache struct {
-	config       atomic.Pointer[Config]
-	otelProvider *Provider
+	config        atomic.Pointer[Config]
+	otelProvider  *Provider
+	ForceBareMode bool
 }
 
 // Get returns the current config, or nil if the ConfigMap has not been seen.
@@ -104,6 +105,10 @@ func (c *Cache) update(cm *corev1.ConfigMap) error {
 	cfg, err := parseConfigMap(cm)
 	if err != nil {
 		return err
+	}
+	if c.ForceBareMode && cfg.Sandbox.Mode != "bare-pod" {
+		logf.Log.Info("Sandbox CRDs not installed, overriding sandbox-mode to bare-pod", "requested", cfg.Sandbox.Mode)
+		cfg.Sandbox.Mode = "bare-pod"
 	}
 	c.config.Store(cfg)
 	return nil

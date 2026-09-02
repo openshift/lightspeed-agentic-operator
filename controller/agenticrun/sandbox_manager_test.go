@@ -340,7 +340,7 @@ func TestCreate_OTELEnvVars_SandboxClaim(t *testing.T) {
 
 	tmpl := &unstructured.Unstructured{}
 	tmpl.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "extensions.agents.x-k8s.io", Version: "v1alpha1", Kind: "SandboxTemplate",
+		Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxTemplate",
 	})
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, tmpl); err != nil {
 		t.Fatalf("SandboxTemplate not found: %v", err)

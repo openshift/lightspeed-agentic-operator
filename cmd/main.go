@@ -13,11 +13,13 @@ import (
 
 	uberzap "go.uber.org/zap"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -95,7 +97,15 @@ func main() {
 		}
 	}()
 
-	cfgCache := &configuration.Cache{}
+	// --- Check for Sandbox CRDs (determines sandbox-claim mode availability) ---
+	sandboxCRDs := sandboxCRDInstalled(cfg)
+	if sandboxCRDs {
+		log.Info("Sandbox CRDs detected, sandbox-claim mode available")
+	} else {
+		log.Info("Sandbox CRDs not found, defaulting to bare-pod mode")
+	}
+
+	cfgCache := &configuration.Cache{ForceBareMode: !sandboxCRDs}
 	cfgCache.SetOTELProvider(telemetryProvider)
 
 	// Eagerly read ConfigMap if it already exists (operator restart).
@@ -195,4 +205,16 @@ func main() {
 		cancel()
 		os.Exit(1)
 	}
+}
+
+// sandboxCRDInstalled queries the apiextensions API directly to check
+// whether the Sandbox CRD exists, bypassing any cached REST mapper.
+func sandboxCRDInstalled(cfg *rest.Config) bool {
+	apiext, err := apiextensionsclient.NewForConfig(cfg)
+	if err != nil {
+		return false
+	}
+	_, err = apiext.ApiextensionsV1().CustomResourceDefinitions().Get(
+		context.Background(), "sandboxes.agents.x-k8s.io", metav1.GetOptions{})
+	return err == nil
 }

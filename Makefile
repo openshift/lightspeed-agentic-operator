@@ -118,7 +118,7 @@ SANDBOX_MODE ?= bare-pod
 AGENT_IMAGE ?= quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-agentic-sandbox:main
 
 # kubernetes-sigs/agent-sandbox release reference (used only for documentation links).
-AGENT_SANDBOX_VERSION ?= v0.4.5
+AGENT_SANDBOX_VERSION ?= v1.0.0
 AGENT_SANDBOX_RELEASE_BASE ?= https://github.com/kubernetes-sigs/agent-sandbox/releases/download
 
 # Image name under the current oc project for deploy-local (OpenShift integrated registry only).

@@ -37,6 +37,25 @@ oc create namespace "${OPERATOR_NAMESPACE}" --dry-run=client -o yaml | oc apply 
 echo "Installing CRDs..."
 make install
 
+# Install Agent Sandbox operator when sandbox-claim mode is requested.
+if [ "${SANDBOX_MODE}" = "sandbox-claim" ]; then
+  AGENT_SANDBOX_VERSION="${AGENT_SANDBOX_VERSION:-v1.0.0}"
+  AGENT_SANDBOX_RELEASE_BASE="https://github.com/kubernetes-sigs/agent-sandbox/releases/download"
+  echo "Installing Agent Sandbox operator ${AGENT_SANDBOX_VERSION}..."
+  oc apply -f "${AGENT_SANDBOX_RELEASE_BASE}/${AGENT_SANDBOX_VERSION}/sandbox.yaml"
+  oc apply -f "${AGENT_SANDBOX_RELEASE_BASE}/${AGENT_SANDBOX_VERSION}/extensions.yaml"
+  echo "Waiting for Sandbox CRDs to be established..."
+  oc wait --for=condition=Established crd/sandboxes.agents.x-k8s.io --timeout=60s
+  oc wait --for=condition=Established crd/sandboxclaims.extensions.agents.x-k8s.io --timeout=60s
+  oc wait --for=condition=Established crd/sandboxtemplates.extensions.agents.x-k8s.io --timeout=60s
+  oc wait --for=condition=Established crd/sandboxwarmpools.extensions.agents.x-k8s.io --timeout=60s
+  echo "Waiting for Agent Sandbox controller to be ready..."
+  oc rollout status deployment/agent-sandbox-controller -n agent-sandbox-system --timeout=120s
+  echo "Agent Sandbox operator installed"
+else
+  echo "Skipping Agent Sandbox operator install (SANDBOX_MODE=${SANDBOX_MODE})"
+fi
+
 # Deploy operator (kustomize-based).
 echo "Deploying operator..."
 make deploy IMG="${IMG}" OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE}" SANDBOX_MODE="${SANDBOX_MODE}"

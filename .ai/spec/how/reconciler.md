@@ -31,7 +31,8 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | `agent.go` | `AgentCaller`, `StubAgentCaller`; `AnalysisOutput`, `ExecutionOutput`, `VerificationOutput`, `EscalationOutput` | Interface methods on `StubAgentCaller` |
 | `sandbox_manager.go` | `SandboxManager` | `NewSandboxManager`, `Create`, `Release`, `createBarePod`, `createSandboxClaim`, `releaseBarePod`, `releaseSandboxClaim`, `ensureSA`, `setSAOwner`, `buildInputConfigMap`, `createInputConfigMap`, `podSpecToUnstructured` |
 | `sandbox_agent.go` | `SandboxLifecycle` interface; `SandboxAgentCaller` | `Analyze`, `Execute`, `Verify`, `Escalate`, `ReleaseSandboxes`, `launchSandbox`, `patchSandboxInfo`, `buildAgentContext`, `collectFailedResults`, `stepString` |
-| `pod_handler.go` | Pod watch handler (methods on `AgenticRunReconciler`); timeout background goroutine | `handlePodEvent`, `completeStep`, `patchStepCondition`, `patchStepResult`, `releaseSandbox`, `runTimeoutLoop`, `handleTimeEvent`, `stepConditionType`, `fetchResultCR`, `podFailMessage` |
+| `pod_handler.go` | Unified pod watch handler for both bare-pod and sandbox-claim modes; shared step helpers | `handlePodEvent`, `resolveBarePodMetadata`, `resolveSandboxPodMetadata`, `completeStep`, `patchStepCondition`, `patchStepResult`, `releaseSandbox`, `stepConditionType`, `validateResultCR`, `podFailMessage`, `podTerminatedInfo` |
+| `timeout_handler.go` | Mode-dispatching timeout background goroutine; shared timeout helpers | `runTimeoutLoop`, `handleTimeEvent`, `listBarePods`, `listSandboxPods`, `isSandboxClaimMode`, `startTimedOut`, `overallTimedOut` |
 | `podspec_builder.go` | `PodSpecBuilder`; label constants (`LabelManaged`, `LabelRun`, etc.); MCP env DTOs (`mcpServerEnvEntry`, `mcpHeaderEnvEntry`) | `Build`, `buildSkills`, `buildMCPServers`, `buildRequiredSecrets`, `addProviderSpecificEnv`, `credentialsSecretName`, `providerURL`, `providerTypeString` |
 | `schemas.go` | Package vars: default/minimal analysis schemas, execution/verification/escalation schemas; `defaultOutputSchemas`, `builtInPropertyJSON` | `init` (precompute property JSON), `injectBuiltInProperty`, `outputSchemaForStep` |
 | `rbac.go` | `readerBindings atomic.Value` (cached CRB names) | `ensureExecutionRBAC`, `cleanupExecutionRBAC`, `resolveReaderBindings`, `addReaderSubject`, `removeReaderSubject`, `addSubjectToBinding`, `removeSubjectFromBinding`, `annotatedRBACNamespaces`, `deleteIfExists`, `rbacTargetNamespaces`, `truncateK8sName`, `sandboxSAName`, `executionRoleName`, `clusterRoleName`, `rbacLabels`, `rbacRulesToPolicyRules`, `normalizeCoreAPIGroup` |
@@ -128,10 +129,12 @@ Unified sandbox lifecycle manager. Fully encapsulates SA, RBAC, ConfigMap, and p
 
 The `AgentHTTPClient`, `AgentHTTPClientInterface`, `agentRunRequest`, `agentRunResponse`, `ClientFactory`, and `client.go` are removed under OLS-3066. The operator no longer makes HTTP calls to sandbox pods. All I/O is via ConfigMap (input) and Result CR (output).
 
-## `PodEventHandler` and timeout loop [OLS-3794]
+## Event handlers and timeout loop [OLS-3794, OLS-4070]
 
-- **`PodEventHandler`:** Registered via `Watches(&Pod{}, handler.EnqueueRequestsFromMapFunc)` in `SetupWithManager`. When a sandbox pod terminates (Succeeded/Failed), it: (a) reads the Result CR to determine agent success/failure, (b) patches the step condition on the `AgenticRun`, (c) calls `releaseSandbox` for cleanup. This drives the async lifecycle without reconciler polling.
-- **`runTimeoutLoop`:** Background goroutine started by the reconciler via `mgr.Add`. Periodically lists in-progress runs and checks per-step sandbox timeouts. When a timeout is detected, patches the step condition to `False` with reason `SandboxTimeout` and releases the sandbox.
+Two handlers — a unified pod watcher and a timeout loop.
+
+- **`handlePodEvent` (pod_handler.go):** Registered via `Watches(&Pod{}, handler.EnqueueRequestsFromMapFunc)`. Handles both bare-pod and sandbox-claim modes. In bare-pod mode, `resolveBarePodMetadata` reads `LabelRun`/`LabelStep` labels directly from the pod. In sandbox-claim mode, `resolveSandboxPodMetadata` follows the pod's ownerRef chain (Pod → Sandbox → SandboxClaim) to find the SandboxClaim which carries operator labels and `AnnotationRunName`. Both paths feed into `completeStep` when the pod terminates (Succeeded/Failed): (a) reads the Result CR to determine agent success/failure, (b) patches the step condition on the `AgenticRun`, (c) calls `releaseSandbox` for cleanup. For in-progress pods, patches step reason (`Running` / `WaitingForSandbox`).
+- **`runTimeoutLoop` (timeout_handler.go):** Background goroutine started via `mgr.Add`. Calls `handleTimeEvent` on each tick, which dispatches to `listBarePods` (labels) or `listSandboxPods` (ownerRef chain resolution) based on `isSandboxClaimMode()`. Both paths check per-step timeouts via `startTimedOut` / `overallTimedOut` and retry completion for terminal pods whose step condition patch failed earlier.
 
 ---
 
@@ -196,8 +199,8 @@ AgenticRunReconciler.Reconcile
         │   └─ patchSandboxInfo → return (watch-driven re-entry)
         ├─ Re-entry: check Result CR (Completed condition) → process result
         │   └─ Update run conditions, append result ref
-        ├─ PodEventHandler: pod terminated → process result → patch condition → releaseSandbox
-        ├─ runTimeoutLoop: periodic check → timeout → patch condition → releaseSandbox
+        ├─ handlePodEvent (both modes): pod terminated → resolveBarePodMetadata or resolveSandboxPodMetadata → process result → patch condition → releaseSandbox
+        ├─ runTimeoutLoop → handleTimeEvent: dispatches to listBarePods or listSandboxPods based on mode
         └─ Sandbox.Release (terminal phases, deletion) → GC SA/CM + remove reader subjects + execution RBAC
 ```
 

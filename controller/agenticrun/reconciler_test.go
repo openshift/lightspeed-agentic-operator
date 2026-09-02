@@ -484,7 +484,7 @@ func approveAgenticRunWithOption(t *testing.T, fc client.WithWatch, name string,
 func fakeBaseTemplate() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
-			"apiVersion": "extensions.agents.x-k8s.io/v1alpha1",
+			"apiVersion": "extensions.agents.x-k8s.io/v1beta1",
 			"kind":       "SandboxTemplate",
 			"metadata": map[string]any{
 				"name":      "lightspeed-agent",
