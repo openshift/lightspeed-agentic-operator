@@ -13,7 +13,7 @@ The current agentic-operator architecture has structural limitations that constr
 2. **Brittle operator–sandbox contract** — HTTP 200 for all responses (including errors), no versioning, lockstep deployment required for any response shape change.
 3. **etcd pressure and processing gating** — No mechanism prevents a flood of proposals from overwhelming etcd, the operator, or cluster compute resources. Terminal proposals accumulate with no cleanup.
 4. **Proposal lifecycle management** — Failed proposals are dead-end states with no recovery path. No TTL-based cleanup.
-5. **Configuration sprawl** — Each proposal carries full configuration inline (provider, model, MCP, tools, timeout, budget). Repeated across proposals, inflates CR size, and makes changing defaults a per-proposal operation.
+5. **Configuration sprawl** — Each proposal carries full configuration inline (provider, model, MCP, tools, and timeout). Repeated across proposals, inflates CR size, and makes changing defaults a per-proposal operation.
 6. **RBAC accuracy** — Analysis predicts execution permissions; predictions can be wrong, causing 403 failures during execution.
 7. **Multi-SDK complexity** — Three divergent provider adapters with inconsistent tool calling, MCP integration, structured output handling, and disk write behavior. N×M maintenance burden grows with every new provider or capability.
 
@@ -162,7 +162,6 @@ With HTTP eliminated, the contract is a JSON document format with explicit versi
     "approvedOption": null
   },
   "timeout_ms": 300000,
-  "budget_usd": 5.0,
   "allowed_tools": ["Bash", "Read", "Glob", "Grep"]
 }
 ```
@@ -178,7 +177,6 @@ With HTTP eliminated, the contract is a JSON document format with explicit versi
     "latency_ms": 45000,
     "input_tokens": 12000,
     "output_tokens": 3500,
-    "cost_usd": "0.15",
     "model": "claude-sonnet-4-20250514",
     "provider": "anthropic",
     "tool_calls_count": 8
@@ -200,7 +198,7 @@ With HTTP eliminated, the contract is a JSON document format with explicit versi
 |----------|--------------------|-----------|
 | Credentials (API keys, tokens) | Secret volume mount | SDKs read from env/files. Sensitive. |
 | Provider identity | Pod env vars (LIGHTSPEED_PROVIDER) | SDK initialization reads env directly |
-| Task parameters (query, schema, context, timeout, budget, tools) | task.json via ConfigMap volume | Single versioned document. Operator controls format. |
+| Task parameters (query, schema, context, timeout, tools) | task.json via ConfigMap volume | Single versioned document. Operator controls format. |
 
 ### 3. Proposal Gateway
 
@@ -419,7 +417,7 @@ Failed proposals don't need a "restart" feature. The user (or alert pipeline) re
 
 #### The problem
 
-Currently, each Proposal carries full configuration inline: LLM provider, model, MCP servers, skills, tools, timeout, budget. This makes proposals unnecessarily large (~5-10 KB of repeated configuration per proposal) and creates maintenance overhead — changing a default (e.g., switching model) requires updating every proposal template.
+Currently, each Proposal carries full configuration inline: LLM provider, model, MCP servers, skills, tools, and timeout. This makes proposals unnecessarily large (~5-10 KB of repeated configuration per proposal) and creates maintenance overhead — changing a default (e.g., switching model) requires updating every proposal template.
 
 #### Solution: cluster-level defaults with proposal-level overrides
 
@@ -436,7 +434,6 @@ spec:
     provider: anthropic
     model: claude-sonnet-4-20250514
     timeout: 300s
-    budget: 5.0
     mcpServers:
       - name: openshift
         url: http://openshift-mcp-server.openshift-lightspeed.svc:8080/mcp
@@ -530,7 +527,6 @@ The current sandbox maintains three separate provider adapters (Claude/Anthropic
 - Provider-specific MCP integration (or lack thereof)
 - Inconsistent skills loading
 - Different RAG integration paths
-- Varying cost/budget enforcement (only Claude reports real cost)
 - Different working directory and disk write locations per SDK
 - Monkey-patches and workarounds for SDK limitations
 
@@ -538,7 +534,7 @@ This is N×M complexity (N providers × M features) that grows with every new pr
 
 #### Target direction
 
-A single framework-owned agent runtime that treats LLM providers as completion endpoints. Rather than delegating agent behavior (tool loops, structured output, retries, budget) to vendor SDKs, the runtime handles these concerns consistently at its own layer:
+A single framework-owned agent runtime that treats LLM providers as completion endpoints. Rather than delegating agent behavior (tool loops, structured output, retries) to vendor SDKs, the runtime handles these concerns consistently at its own layer:
 
 | Concern | Per-SDK approach (current) | Unified runtime (target) |
 |---------|---------------------------|--------------------------|
@@ -547,7 +543,6 @@ A single framework-owned agent runtime that treats LLM providers as completion e
 | MCP integration | Each SDK handles differently (or doesn't) | Framework owns MCP client, consistent across providers |
 | RAG / context | Per-provider retrieval mechanisms | Framework owns retrieval, injects context before LLM call |
 | Skills | Symlinks, ADK loading, capabilities — all different | Framework loads skills uniformly, presents to LLM as tool definitions |
-| Budget enforcement | Only Claude SDK enforces | Framework tracks token usage and cost across all providers |
 | Retries / error handling | SDK-specific | Framework-owned retry logic |
 
 Provider integration reduces to: HTTP client configuration (auth mechanism, endpoint URL, model name, request/response format mapping). Everything else lives in the framework.
