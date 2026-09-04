@@ -333,7 +333,7 @@ func TestBuild_NilBase(t *testing.T) {
 	b := &PodSpecBuilder{}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
-	_, err := b.Build(nil, agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	_, err := b.Build(nil, agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err == nil {
 		t.Fatal("expected error for nil base")
 	}
@@ -342,7 +342,7 @@ func TestBuild_NilBase(t *testing.T) {
 func TestBuild_NilAgent(t *testing.T) {
 	b := &PodSpecBuilder{}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
-	_, err := b.Build(testBasePodSpec(), nil, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	_, err := b.Build(testBasePodSpec(), nil, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err == nil {
 		t.Fatal("expected error for nil agent")
 	}
@@ -351,7 +351,7 @@ func TestBuild_NilAgent(t *testing.T) {
 func TestBuild_NilLLM(t *testing.T) {
 	b := &PodSpecBuilder{}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
-	_, err := b.Build(testBasePodSpec(), agent, nil, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	_, err := b.Build(testBasePodSpec(), agent, nil, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err == nil {
 		t.Fatal("expected error for nil LLM")
 	}
@@ -361,7 +361,7 @@ func TestBuild_EmptySA(t *testing.T) {
 	b := &PodSpecBuilder{}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
-	_, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "", "uid-test-run", "")
+	_, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "", "uid-test-run", "", 0)
 	if err == nil {
 		t.Fatal("expected error for empty serviceAccount")
 	}
@@ -372,7 +372,7 @@ func TestBuild_Anthropic(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-opus-4-6"}}
 	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderAnthropic, "https://custom.api")
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid-123", "my-sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid-123", "my-sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestBuild_RequiresInputConfigMapName(t *testing.T) {
 	b := &PodSpecBuilder{}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
-	_, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "", "")
+	_, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "", "", 0)
 	if err == nil {
 		t.Fatal("expected error for empty inputConfigMapName")
 	}
@@ -411,7 +411,7 @@ func TestBuild_InputConfigMapMount(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 	const cmName = "uid-my-run"
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", cmName, "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", cmName, "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -427,7 +427,7 @@ func TestBuild_Traceparent(t *testing.T) {
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 	const tp = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", tp)
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", tp, 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -436,7 +436,7 @@ func TestBuild_Traceparent(t *testing.T) {
 		t.Fatalf("TRACEPARENT = %q, want %q", env["TRACEPARENT"], tp)
 	}
 
-	ps, err = b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err = b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestBuild_Vertex(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "gemini-2.0"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderGoogleCloudVertex)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestBuild_Azure(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "gpt-4o"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAzureOpenAI)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestBuild_Bedrock(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "claude-v3"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAWSBedrock)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -547,7 +547,7 @@ func TestBuild_OpenAI(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "gpt-4o"}}
 	llm := testLLMProviderWithURL(agenticv1alpha1.LLMProviderOpenAI, "https://api.example.com")
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -573,7 +573,7 @@ func TestBuild_ReasoningConfig(t *testing.T) {
 	}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -596,7 +596,7 @@ func TestBuild_NoReasoningConfig(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -611,7 +611,7 @@ func TestBuild_CredentialsSecretMounted(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -648,7 +648,7 @@ func TestBuild_RHOKPEndpointAndCA(t *testing.T) {
 		CASecretName: "lightspeed-agentic-rhokp-ca",
 	}
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, rhokp, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, rhokp, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -696,7 +696,7 @@ func TestBuild_RHOKPOmitted(t *testing.T) {
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
 	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
 
-	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -739,7 +739,7 @@ func TestBuild_DeduplicatesVolumes(t *testing.T) {
 		}},
 	}
 
-	ps, err := b.Build(base, agent, llm, tools, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(base, agent, llm, tools, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestBuild_GeneratedVolumeOverridesBase(t *testing.T) {
 		Skills: []agenticv1alpha1.SkillsSource{{Image: "quay.io/real/skills:v1"}},
 	}
 
-	ps, err := b.Build(base, agent, llm, tools, nil, nil, "analysis", "uid", "sa", "uid-test-run", "")
+	ps, err := b.Build(base, agent, llm, tools, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -860,5 +860,65 @@ func TestTraceparentFromContext_WithSpan(t *testing.T) {
 	want := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 	if got := traceparentFromContext(ctx); got != want {
 		t.Fatalf("traceparent = %q, want %q", got, want)
+	}
+}
+
+func TestBuild_AgentTimeoutSeconds(t *testing.T) {
+	b := &PodSpecBuilder{}
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 1800)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	env := envToMap(ps.Containers[0].Env)
+	if env["LIGHTSPEED_AGENT_TIMEOUT_SECONDS"] != "1800" {
+		t.Errorf("LIGHTSPEED_AGENT_TIMEOUT_SECONDS = %q, want %q", env["LIGHTSPEED_AGENT_TIMEOUT_SECONDS"], "1800")
+	}
+}
+
+func TestBuild_AgentTimeoutSecondsOmittedWhenZero(t *testing.T) {
+	b := &PodSpecBuilder{}
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	env := envToMap(ps.Containers[0].Env)
+	if _, ok := env["LIGHTSPEED_AGENT_TIMEOUT_SECONDS"]; ok {
+		t.Error("LIGHTSPEED_AGENT_TIMEOUT_SECONDS should be omitted when agentTimeoutSeconds is 0")
+	}
+}
+
+func TestBuild_MaxTurns(t *testing.T) {
+	b := &PodSpecBuilder{}
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m", MaxTurns: 200}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 600)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	env := envToMap(ps.Containers[0].Env)
+	if env["LIGHTSPEED_AGENT_MAX_TURNS"] != "200" {
+		t.Errorf("LIGHTSPEED_AGENT_MAX_TURNS = %q, want %q", env["LIGHTSPEED_AGENT_MAX_TURNS"], "200")
+	}
+}
+
+func TestBuild_MaxTurnsOmittedWhenZero(t *testing.T) {
+	b := &PodSpecBuilder{}
+	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+	llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+
+	ps, err := b.Build(testBasePodSpec(), agent, llm, nil, nil, nil, "analysis", "uid", "sa", "uid-test-run", "", 0)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	env := envToMap(ps.Containers[0].Env)
+	if _, ok := env["LIGHTSPEED_AGENT_MAX_TURNS"]; ok {
+		t.Error("LIGHTSPEED_AGENT_MAX_TURNS should be omitted when maxTurns is 0")
 	}
 }

@@ -83,6 +83,23 @@ spec:
                     - message: 'must be a valid DNS subdomain: lowercase alphanumeric
                         characters, hyphens, and dots'
                       rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  timeoutMinutes:
+                    description: |-
+                      timeoutMinutes overrides the agent-level and built-in default timeout
+                      for this step's sandbox agent call. This controls how long the operator
+                      allows the agent to run; pod startup uses a separate fixed ceiling.
+                      Increase this for long-running tools (e.g., IntelliAide RCA takes
+                      10-30 minutes). When omitted, the effective timeout is resolved from
+                      Agent.spec.timeouts for the selected agent, falling back to built-in
+                      defaults (10m analysis/execution, 30m verification).
+
+                      Precedence: timeoutMinutes (this field) > Agent.spec.timeouts > built-in default.
+
+                      Mutable: can be adjusted at any time; the value is read when the step starts.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
                   tools:
                     description: |-
                       tools provides per-step tools that replace the shared spec.tools
@@ -500,6 +517,23 @@ spec:
                     - message: 'must be a valid DNS subdomain: lowercase alphanumeric
                         characters, hyphens, and dots'
                       rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  timeoutMinutes:
+                    description: |-
+                      timeoutMinutes overrides the agent-level and built-in default timeout
+                      for this step's sandbox agent call. This controls how long the operator
+                      allows the agent to run; pod startup uses a separate fixed ceiling.
+                      Increase this for long-running tools (e.g., IntelliAide RCA takes
+                      10-30 minutes). When omitted, the effective timeout is resolved from
+                      Agent.spec.timeouts for the selected agent, falling back to built-in
+                      defaults (10m analysis/execution, 30m verification).
+
+                      Precedence: timeoutMinutes (this field) > Agent.spec.timeouts > built-in default.
+
+                      Mutable: can be adjusted at any time; the value is read when the step starts.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
                   tools:
                     description: |-
                       tools provides per-step tools that replace the shared spec.tools
@@ -1319,6 +1353,23 @@ spec:
                     - message: 'must be a valid DNS subdomain: lowercase alphanumeric
                         characters, hyphens, and dots'
                       rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  timeoutMinutes:
+                    description: |-
+                      timeoutMinutes overrides the agent-level and built-in default timeout
+                      for this step's sandbox agent call. This controls how long the operator
+                      allows the agent to run; pod startup uses a separate fixed ceiling.
+                      Increase this for long-running tools (e.g., IntelliAide RCA takes
+                      10-30 minutes). When omitted, the effective timeout is resolved from
+                      Agent.spec.timeouts for the selected agent, falling back to built-in
+                      defaults (10m analysis/execution, 30m verification).
+
+                      Precedence: timeoutMinutes (this field) > Agent.spec.timeouts > built-in default.
+
+                      Mutable: can be adjusted at any time; the value is read when the step starts.
+                    format: int32
+                    maximum: 60
+                    minimum: 1
+                    type: integer
                   tools:
                     description: |-
                       tools provides per-step tools that replace the shared spec.tools

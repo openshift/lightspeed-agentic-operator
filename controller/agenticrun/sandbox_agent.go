@@ -15,9 +15,9 @@ import (
 const (
 	defaultSandboxTimeout = 5 * time.Minute
 
-	analysisStepTimeout     = 10 * time.Minute
-	executionStepTimeout    = 10 * time.Minute
-	verificationStepTimeout = 30 * time.Minute
+	defaultAnalysisTimeout     = 10 * time.Minute
+	defaultExecutionTimeout    = 10 * time.Minute
+	defaultVerificationTimeout = 30 * time.Minute
 
 	ErrClaimSandbox = "claim sandbox"
 
@@ -61,18 +61,55 @@ const (
 	maxLenRBACJustification        = 1024
 )
 
-// stepTimeout returns the hard deadline for a sandbox step (OLS-3781 / PR 423).
-func stepTimeout(step string) time.Duration {
+// builtinStepTimeout returns the built-in default for a step when neither
+// the run nor the Agent provides a timeout.
+func builtinStepTimeout(step string) time.Duration {
 	switch step {
 	case "analysis", "escalation":
-		return analysisStepTimeout
+		return defaultAnalysisTimeout
 	case "execution":
-		return executionStepTimeout
+		return defaultExecutionTimeout
 	case "verification":
-		return verificationStepTimeout
+		return defaultVerificationTimeout
 	default:
-		return analysisStepTimeout
+		return defaultAnalysisTimeout
 	}
+}
+
+// agentStepTimeout returns the Agent-level timeout for a step, or 0 if unset.
+func agentStepTimeout(agent *agenticv1alpha1.Agent, step string) time.Duration {
+	if agent == nil {
+		return 0
+	}
+	var seconds int32
+	switch step {
+	case "analysis", "escalation":
+		seconds = agent.Spec.Timeouts.AnalysisSeconds
+	case "execution":
+		seconds = agent.Spec.Timeouts.ExecutionSeconds
+	case "verification":
+		seconds = agent.Spec.Timeouts.VerificationSeconds
+	}
+	if seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return 0
+}
+
+// effectiveStepTimeout resolves the layered timeout for a sandbox step.
+//
+// Precedence (highest → lowest):
+//  1. Per-run override: AgenticRunStep.timeoutMinutes
+//  2. Agent-level default: Agent.spec.timeouts.<step>Seconds
+//  3. Built-in default: 10m analysis/execution, 30m verification
+func effectiveStepTimeout(stepName string, step resolvedStep) time.Duration {
+	if step.TimeoutMinutes > 0 {
+		return time.Duration(step.TimeoutMinutes) * time.Minute
+	}
+	if d := agentStepTimeout(step.Agent, stepName); d > 0 {
+		return d
+	}
+	return builtinStepTimeout(stepName)
 }
 
 // Agent context types — shared by input ConfigMap builder and helpers.
@@ -165,7 +202,7 @@ func (s *SandboxAgentCaller) launchSandbox(
 	query string,
 	agentCtx *agentContext,
 ) error {
-	podDeadline := stepTimeout(stepName) + defaultSandboxTimeout
+	podDeadline := effectiveStepTimeout(stepName, step) + defaultSandboxTimeout
 	var name string
 	if err := retryOnTransient(ctx, func() error {
 		var createErr error

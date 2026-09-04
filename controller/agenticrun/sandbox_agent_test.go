@@ -253,15 +253,15 @@ func TestBuildAgentContext_PreviousAttempts(t *testing.T) {
 	}
 }
 
-func TestStepTimeout_Values(t *testing.T) {
-	if got := stepTimeout("analysis"); got != analysisStepTimeout {
-		t.Errorf("analysis timeout = %v, want %v", got, analysisStepTimeout)
+func TestBuiltinStepTimeout_Values(t *testing.T) {
+	if got := builtinStepTimeout("analysis"); got != defaultAnalysisTimeout {
+		t.Errorf("analysis timeout = %v, want %v", got, defaultAnalysisTimeout)
 	}
-	if got := stepTimeout("execution"); got != executionStepTimeout {
-		t.Errorf("execution timeout = %v, want %v", got, executionStepTimeout)
+	if got := builtinStepTimeout("execution"); got != defaultExecutionTimeout {
+		t.Errorf("execution timeout = %v, want %v", got, defaultExecutionTimeout)
 	}
-	if got := stepTimeout("verification"); got != verificationStepTimeout {
-		t.Errorf("verification timeout = %v, want %v", got, verificationStepTimeout)
+	if got := builtinStepTimeout("verification"); got != defaultVerificationTimeout {
+		t.Errorf("verification timeout = %v, want %v", got, defaultVerificationTimeout)
 	}
 }
 
@@ -336,5 +336,82 @@ func TestSandboxAgentCaller_TransientExhaustsRetries(t *testing.T) {
 	}
 	if sandbox.claimCalls != maxCreateRetries {
 		t.Errorf("expected %d Create calls, got %d", maxCreateRetries, sandbox.claimCalls)
+	}
+}
+
+// --- Layered timeout tests ---
+
+func TestEffectiveStepTimeout_RunOverrideTakesPrecedence(t *testing.T) {
+	step := resolvedStep{
+		Agent:          &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Timeouts: agenticv1alpha1.AgentTimeouts{AnalysisSeconds: 300}}},
+		TimeoutMinutes: 45,
+	}
+	got := effectiveStepTimeout("analysis", step)
+	want := 45 * time.Minute
+	if got != want {
+		t.Errorf("effectiveStepTimeout() = %v, want %v (run override should take precedence)", got, want)
+	}
+}
+
+func TestEffectiveStepTimeout_AgentTimeoutUsedWhenNoRunOverride(t *testing.T) {
+	step := resolvedStep{
+		Agent: &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Timeouts: agenticv1alpha1.AgentTimeouts{AnalysisSeconds: 900}}},
+	}
+	got := effectiveStepTimeout("analysis", step)
+	want := 900 * time.Second
+	if got != want {
+		t.Errorf("effectiveStepTimeout() = %v, want %v (Agent timeout should be used)", got, want)
+	}
+}
+
+func TestEffectiveStepTimeout_BuiltinDefaultWhenBothUnset(t *testing.T) {
+	step := resolvedStep{
+		Agent: &agenticv1alpha1.Agent{},
+	}
+	tests := []struct {
+		stepName string
+		want     time.Duration
+	}{
+		{"analysis", defaultAnalysisTimeout},
+		{"execution", defaultExecutionTimeout},
+		{"verification", defaultVerificationTimeout},
+		{"escalation", defaultAnalysisTimeout},
+	}
+	for _, tt := range tests {
+		got := effectiveStepTimeout(tt.stepName, step)
+		if got != tt.want {
+			t.Errorf("effectiveStepTimeout(%q) = %v, want %v", tt.stepName, got, tt.want)
+		}
+	}
+}
+
+func TestEffectiveStepTimeout_NilAgent(t *testing.T) {
+	step := resolvedStep{Agent: nil, TimeoutMinutes: 0}
+	got := effectiveStepTimeout("analysis", step)
+	if got != defaultAnalysisTimeout {
+		t.Errorf("effectiveStepTimeout() = %v, want %v (nil agent should use built-in default)", got, defaultAnalysisTimeout)
+	}
+}
+
+func TestEffectiveStepTimeout_ExecutionAgentTimeout(t *testing.T) {
+	step := resolvedStep{
+		Agent: &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Timeouts: agenticv1alpha1.AgentTimeouts{ExecutionSeconds: 1800}}},
+	}
+	got := effectiveStepTimeout("execution", step)
+	want := 1800 * time.Second
+	if got != want {
+		t.Errorf("effectiveStepTimeout(execution) = %v, want %v", got, want)
+	}
+}
+
+func TestEffectiveStepTimeout_VerificationRunOverride(t *testing.T) {
+	step := resolvedStep{
+		Agent:          &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Timeouts: agenticv1alpha1.AgentTimeouts{VerificationSeconds: 600}}},
+		TimeoutMinutes: 60,
+	}
+	got := effectiveStepTimeout("verification", step)
+	want := 60 * time.Minute
+	if got != want {
+		t.Errorf("effectiveStepTimeout(verification) = %v, want %v", got, want)
 	}
 }

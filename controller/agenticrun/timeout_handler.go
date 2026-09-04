@@ -75,12 +75,13 @@ func (r *AgenticRunReconciler) handleTimeEvent(ctx context.Context) {
 			continue
 		}
 
+		timeout := resolveOverallTimeout(ctx, r.Client, &run, e.step)
 		var message string
 		created := e.pod.CreationTimestamp.Time
 		if startTimedOut(phase, created, now, podStartTimeout) {
 			message = fmt.Sprintf("sandbox pod did not start within %s", podStartTimeout)
-		} else if overallTimedOut(created, now, stepTimeout(e.step)) {
-			message = fmt.Sprintf("sandbox exceeded timeout %s", stepTimeout(e.step))
+		} else if overallTimedOut(created, now, timeout) {
+			message = fmt.Sprintf("sandbox exceeded timeout %s", timeout)
 		} else {
 			continue
 		}
@@ -127,6 +128,35 @@ func (r *AgenticRunReconciler) listSandboxPods(ctx context.Context, log logr.Log
 		entries = append(entries, podEntry{pod, step, runName})
 	}
 	return entries
+}
+
+// resolveOverallTimeout computes the effective overall timeout (agent budget +
+// startup padding) for a step of a given run. It reads the per-run override
+// and the Agent CR to apply the layered precedence logic.
+func resolveOverallTimeout(ctx context.Context, c client.Reader, run *agenticv1alpha1.AgenticRun, step string) time.Duration {
+	runStep := runStepForName(run, step)
+	var agent *agenticv1alpha1.Agent
+	agentName := stepAgentName(runStep)
+	a := &agenticv1alpha1.Agent{}
+	if err := c.Get(ctx, client.ObjectKey{Name: agentName}, a); err == nil {
+		agent = a
+	}
+	resolved := resolvedStep{Agent: agent, TimeoutMinutes: runStep.TimeoutMinutes}
+	return effectiveStepTimeout(step, resolved) + defaultSandboxTimeout
+}
+
+// runStepForName returns the AgenticRunStep for a given step name.
+func runStepForName(run *agenticv1alpha1.AgenticRun, step string) agenticv1alpha1.AgenticRunStep {
+	switch step {
+	case "analysis", "escalation":
+		return run.Spec.Analysis
+	case "execution":
+		return run.Spec.Execution
+	case "verification":
+		return run.Spec.Verification
+	default:
+		return run.Spec.Analysis
+	}
 }
 
 // ---------------------------------------------------------------------------

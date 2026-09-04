@@ -157,6 +157,11 @@ func (m *SandboxManager) Create(
 	}
 	span.AddEvent("sandbox.rbac.created")
 
+	agentBudget := deadline - defaultSandboxTimeout
+	if agentBudget < 0 {
+		agentBudget = deadline
+	}
+
 	podSpec, err := m.builder.Build(
 		cfg.Sandbox.PodSpec,
 		agent,
@@ -169,6 +174,7 @@ func (m *SandboxManager) Create(
 		serviceAccount,
 		inputCM.Name,
 		traceparentFromContext(ctx),
+		int64(agentBudget.Seconds()),
 	)
 	if err != nil {
 		createErr = fmt.Errorf("%s: %w", errBuildPodSpec, err)
