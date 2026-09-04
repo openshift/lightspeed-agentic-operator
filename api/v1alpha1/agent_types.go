@@ -51,6 +51,47 @@ type AgentTimeouts struct {
 	ChatSeconds int32 `json:"chatSeconds,omitempty"`
 }
 
+// StepInstructions holds the system and user prompt instructions for a single step.
+type StepInstructions struct {
+	// systemPrompt is the LLM system message for this step.
+	// Replaces the product built-in system prompt when non-empty.
+	// Written to /input/system-prompt in the sandbox.
+	// Default (when empty): "You are an AI agent." (sandbox built-in).
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=32768
+	SystemPrompt string `json:"systemPrompt,omitempty"`
+
+	// userPrompt is a Go template that replaces the product built-in query
+	// template for this step when non-empty. Supports the same template
+	// variables as the built-in (e.g. {{.Request}}, {{.HasExecution}}).
+	// Written to /input/query in the sandbox after rendering.
+	// Default (when empty): built-in templates in controller/agenticrun/templates/*.tmpl.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=32768
+	UserPrompt string `json:"userPrompt,omitempty"`
+}
+
+// AgentInstructions provides optional per-step system and user instructions.
+type AgentInstructions struct {
+	// analysis instructions for the analysis step.
+	// +optional
+	Analysis *StepInstructions `json:"analysis,omitzero"` //nolint:kubeapilinter // all fields optional; empty means use defaults
+
+	// execution instructions for the execution step.
+	// +optional
+	Execution *StepInstructions `json:"execution,omitzero"` //nolint:kubeapilinter // all fields optional; empty means use defaults
+
+	// verification instructions for the verification step.
+	// +optional
+	Verification *StepInstructions `json:"verification,omitzero"` //nolint:kubeapilinter // all fields optional; empty means use defaults
+
+	// escalation instructions for the escalation step.
+	// +optional
+	Escalation *StepInstructions `json:"escalation,omitzero"` //nolint:kubeapilinter // all fields optional; empty means use defaults
+}
+
 // AgentSpec defines the desired state of Agent.
 type AgentSpec struct {
 	// llmProvider references a cluster-scoped LLMProvider CR that supplies the
@@ -82,6 +123,13 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=500
 	MaxTurns int32 `json:"maxTurns,omitempty"`
+
+	// instructions provides optional per-step system and user instructions.
+	// When a field is non-empty it fully replaces the product built-in
+	// instructions for that step. Omitted or empty fields fall back to
+	// built-in defaults.
+	// +optional
+	Instructions *AgentInstructions `json:"instructions,omitzero"` //nolint:kubeapilinter // all fields optional; empty means use defaults
 
 	// reasoningConfig is a freeform map of provider- and model-specific
 	// reasoning parameters. The exact keys and values depend on the provider

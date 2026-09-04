@@ -35,11 +35,12 @@ const (
 	podStartTimeout = 5 * time.Minute
 
 	// Input ConfigMap (sandbox-execution.md rule 7).
-	inputConfigMapMountPath = "/input"
-	inputConfigMapKeyQuery  = "query"
-	inputConfigMapKeySchema = "output-schema"
-	inputConfigMapKeyCtx    = "context"
-	inputConfigMapKeyTmpl   = "result-template"
+	inputConfigMapMountPath       = "/input"
+	inputConfigMapKeyQuery        = "query"
+	inputConfigMapKeySystemPrompt = "system-prompt"
+	inputConfigMapKeySchema       = "output-schema"
+	inputConfigMapKeyCtx          = "context"
+	inputConfigMapKeyTmpl         = "result-template"
 
 	// CRD maxLength limits for analysis option fields, injected into
 	// the LLM output schema so the model respects CRD constraints.
@@ -109,7 +110,7 @@ type agentPreviousAttempt struct {
 // Release handles all cleanup: pod deletion (GC handles children) plus
 // explicit cross-namespace/cluster-scoped RBAC teardown.
 type SandboxLifecycle interface {
-	Create(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, deadline time.Duration, query string, agentCtx *agentContext) (string, error)
+	Create(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, deadline time.Duration, agentCtx *agentContext) (string, error)
 	Release(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string) error
 }
 
@@ -127,9 +128,8 @@ func stepString(step agenticv1alpha1.SandboxStep) string {
 	return strings.ToLower(string(step))
 }
 
-func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string) error {
-	query := buildAnalysisQuery(requestText, run)
-	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepAnalysis), step, query, buildAgentContext(run))
+func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error {
+	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepAnalysis), step, buildAgentContext(run))
 }
 
 func (s *SandboxAgentCaller) Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption) error {
@@ -137,8 +137,7 @@ func (s *SandboxAgentCaller) Execute(ctx context.Context, run *agenticv1alpha1.A
 	if option != nil {
 		agentCtx.ApprovedOption = option
 	}
-	query := buildExecutionQuery(option)
-	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepExecution), step, query, agentCtx)
+	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepExecution), step, agentCtx)
 }
 
 func (s *SandboxAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) error {
@@ -147,12 +146,11 @@ func (s *SandboxAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.Ag
 		agentCtx.ApprovedOption = option
 	}
 	agentCtx.ExecutionResult = executionOutputToAgentResult(exec)
-	query := buildVerificationQuery(option, exec)
-	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepVerification), step, query, agentCtx)
+	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepVerification), step, agentCtx)
 }
 
-func (s *SandboxAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string) error {
-	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepEscalation), step, requestText, buildAgentContext(run))
+func (s *SandboxAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error {
+	return s.launchSandbox(ctx, run, stepString(agenticv1alpha1.SandboxStepEscalation), step, buildAgentContext(run))
 }
 
 // launchSandbox delegates to SandboxLifecycle.Create which handles all setup
@@ -162,14 +160,13 @@ func (s *SandboxAgentCaller) launchSandbox(
 	run *agenticv1alpha1.AgenticRun,
 	stepName string,
 	step resolvedStep,
-	query string,
 	agentCtx *agentContext,
 ) error {
 	podDeadline := stepTimeout(stepName) + defaultSandboxTimeout
 	var name string
 	if err := retryOnTransient(ctx, func() error {
 		var createErr error
-		name, createErr = s.Sandbox.Create(ctx, run, stepName, step.Agent, step.LLM, step.Tools, podDeadline, query, agentCtx)
+		name, createErr = s.Sandbox.Create(ctx, run, stepName, step.Agent, step.LLM, step.Tools, podDeadline, agentCtx)
 		return createErr
 	}); err != nil {
 		return fmt.Errorf("%s: %w", ErrClaimSandbox, err)

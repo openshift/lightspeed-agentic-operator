@@ -87,7 +87,6 @@ func (m *SandboxManager) Create(
 	llm *agenticv1alpha1.LLMProvider,
 	tools *agenticv1alpha1.ToolsSpec,
 	deadline time.Duration,
-	query string,
 	agentCtx *agentContext,
 ) (name string, retErr error) {
 	if m.audit != nil {
@@ -140,7 +139,7 @@ func (m *SandboxManager) Create(
 	}
 
 	schema := outputSchemaForStep(step, run)
-	inputCM, err := buildInputConfigMap(m.namespace, run, step, query, schema, agentCtx)
+	inputCM, err := buildInputConfigMap(m.namespace, run, step, agent, schema, agentCtx)
 	if err != nil {
 		createErr = err
 		return "", err

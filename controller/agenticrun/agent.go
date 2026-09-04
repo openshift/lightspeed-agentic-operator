@@ -49,10 +49,10 @@ type EscalationOutput struct {
 // runs autonomously, creates the Result CR, and exits. The pod
 // handler watches for completion and patches the step condition.
 type AgentCaller interface {
-	Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string) error
+	Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error
 	Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption) error
 	Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) error
-	Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, requestText string) error
+	Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error
 	ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error
 	ReleaseSandbox(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string) error
 }
@@ -60,7 +60,7 @@ type AgentCaller interface {
 // StubAgentCaller is a no-op implementation for testing.
 type StubAgentCaller struct{}
 
-func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string) error {
+func (s *StubAgentCaller) Analyze(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep) error {
 	return nil
 }
 
@@ -72,7 +72,7 @@ func (s *StubAgentCaller) Verify(_ context.Context, _ *agenticv1alpha1.AgenticRu
 	return nil
 }
 
-func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string) error {
+func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ resolvedStep) error {
 	return nil
 }
 

@@ -38,10 +38,9 @@ func TestBuildEscalationRequest_UsesOutcome(t *testing.T) {
 		},
 	}
 
-	result := buildEscalationRequest(run, "openshift-lightspeed")
-
-	if strings.Contains(result, "template") && strings.Contains(result, "error") {
-		t.Fatalf("template rendering failed: %s", result)
+	result, err := buildEscalationRequest(run, "openshift-lightspeed")
+	if err != nil {
+		t.Fatalf("template rendering failed: %v", err)
 	}
 
 	if !strings.Contains(result, "AnalysisResult: analysis-1 (outcome=Succeeded)") {

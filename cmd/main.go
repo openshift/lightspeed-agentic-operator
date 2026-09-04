@@ -184,6 +184,9 @@ func main() {
 	mgr.GetWebhookServer().Register("/mutate-agenticrunapproval", &admission.Webhook{
 		Handler: &agenticrun.AgenticRunApprovalMutator{},
 	})
+	mgr.GetWebhookServer().Register("/validate-agent", &admission.Webhook{
+		Handler: &agenticrun.AgentValidator{},
+	})
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		log.Error(err, "unable to set up health check")

@@ -101,7 +101,7 @@ func (ta *testAgentCaller) withClient(t *testing.T, fc client.Client, ns string)
 	return ta
 }
 
-func (ta *testAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string) error {
+func (ta *testAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, _ resolvedStep) error {
 	if ta.analyzeErr != nil {
 		return ta.analyzeErr
 	}
@@ -125,7 +125,7 @@ func (ta *testAgentCaller) Verify(ctx context.Context, run *agenticv1alpha1.Agen
 	return nil
 }
 
-func (ta *testAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, _ resolvedStep, _ string) error {
+func (ta *testAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, _ resolvedStep) error {
 	if ta.escalateErr != nil {
 		return ta.escalateErr
 	}

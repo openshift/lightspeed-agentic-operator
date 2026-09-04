@@ -18,6 +18,98 @@ const (
 	ErrUnknownStep           = "unknown step"
 )
 
+// resolvePrompts returns the system prompt and rendered query for the step.
+// For each step: system prompt comes from Agent CR or empty (sandbox default).
+// Query is rendered from Agent CR's custom template or the built-in template.
+// Returns an error if template resolution or rendering fails.
+func resolvePrompts(agent *agenticv1alpha1.Agent, step, operatorNamespace string, run *agenticv1alpha1.AgenticRun, agentCtx *agentContext) (systemPrompt, query string, err error) {
+	var tmpl string
+	switch step {
+	case "analysis":
+		systemPrompt, tmpl, err = resolveStepPrompts(agent, step, "templates/analysis_query.tmpl")
+		if err != nil {
+			return "", "", err
+		}
+		request := run.Spec.Request
+		if run.Spec.RevisionFeedback != "" {
+			revCtx, revErr := buildRevisionContext(run)
+			if revErr != nil {
+				return "", "", revErr
+			}
+			request += "\n\n" + revCtx
+		}
+		query, err = renderTemplate(tmpl, analysisQuery{
+			Request:         request,
+			HasExecution:    !run.Spec.Execution.IsZero(),
+			HasVerification: !run.Spec.Verification.IsZero(),
+		})
+	case "execution":
+		systemPrompt, tmpl, err = resolveStepPrompts(agent, step, "templates/execution_query.tmpl")
+		if err != nil {
+			return "", "", err
+		}
+		query, err = renderTemplate(tmpl, executionQuery{
+			OptionJSON: prettyJSON(agentCtx.ApprovedOption),
+		})
+	case "verification":
+		systemPrompt, tmpl, err = resolveStepPrompts(agent, step, "templates/verification_query.tmpl")
+		if err != nil {
+			return "", "", err
+		}
+		query, err = renderTemplate(tmpl, verificationQuery{
+			OptionJSON:    prettyJSON(agentCtx.ApprovedOption),
+			ExecutionJSON: prettyJSON(agentCtx.ExecutionResult),
+		})
+	case "escalation":
+		systemPrompt, tmpl, err = resolveStepPrompts(agent, step, "templates/escalation_request.tmpl")
+		if err != nil {
+			return "", "", err
+		}
+		query, err = renderTemplate(tmpl, escalationData{
+			Name:                run.Name,
+			Namespace:           run.Namespace,
+			ResultNamespace:     operatorNamespace,
+			Request:             run.Spec.Request,
+			AnalysisResults:     run.Status.Steps.Analysis.Results,
+			ExecutionResults:    run.Status.Steps.Execution.Results,
+			VerificationResults: run.Status.Steps.Verification.Results,
+		})
+	}
+	return
+}
+
+// resolveStepPrompts returns the system prompt and user prompt template
+// for the step. System prompt is from Agent CR or empty. User prompt
+// template is from Agent CR or the built-in default.
+func resolveStepPrompts(agent *agenticv1alpha1.Agent, step, builtinTemplate string) (systemPrompt, userPromptTemplate string, err error) {
+	var si *agenticv1alpha1.StepInstructions
+	if agent != nil && agent.Spec.Instructions != nil {
+		switch step {
+		case "analysis":
+			si = agent.Spec.Instructions.Analysis
+		case "execution":
+			si = agent.Spec.Instructions.Execution
+		case "verification":
+			si = agent.Spec.Instructions.Verification
+		case "escalation":
+			si = agent.Spec.Instructions.Escalation
+		}
+	}
+
+	if si != nil {
+		systemPrompt = si.SystemPrompt
+		if si.UserPrompt != "" {
+			return systemPrompt, si.UserPrompt, nil
+		}
+	}
+
+	tmpl, err := readBuiltinTemplate(builtinTemplate)
+	if err != nil {
+		return "", "", err
+	}
+	return systemPrompt, tmpl, nil
+}
+
 // inputConfigMapName returns the per-step ConfigMap name: ls-{step}-{uid}.
 func inputConfigMapName(step string, uid string) string {
 	return fmt.Sprintf("ls-%s-%s", step, uid)
@@ -25,11 +117,13 @@ func inputConfigMapName(step string, uid string) string {
 
 // buildInputConfigMap builds the batch input ConfigMap for a step (rule 7).
 // Name is ls-{step}-{uid}, unique per step to prevent GC conflicts.
+// Resolves both system-prompt and query internally from the Agent CR
+// (custom templates) or built-in defaults.
 func buildInputConfigMap(
 	operatorNamespace string,
 	run *agenticv1alpha1.AgenticRun,
 	step string,
-	query string,
+	agent *agenticv1alpha1.Agent,
 	schema json.RawMessage,
 	agentCtx *agentContext,
 ) (*corev1.ConfigMap, error) {
@@ -44,7 +138,13 @@ func buildInputConfigMap(
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrBuildInputConfigMap, err)
 	}
-	return &corev1.ConfigMap{
+
+	systemPrompt, query, err := resolvePrompts(agent, step, operatorNamespace, run, agentCtx)
+	if err != nil {
+		return nil, fmt.Errorf("resolve prompts for step %s: %w", step, err)
+	}
+
+	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      inputConfigMapName(step, string(run.UID)),
 			Namespace: operatorNamespace,
@@ -60,7 +160,11 @@ func buildInputConfigMap(
 			inputConfigMapKeyCtx:    string(ctxJSON),
 			inputConfigMapKeyTmpl:   tmpl,
 		},
-	}, nil
+	}
+	if systemPrompt != "" {
+		cm.Data[inputConfigMapKeySystemPrompt] = systemPrompt
+	}
+	return cm, nil
 }
 
 // buildResultTemplate returns JSON for result-template (rule 7a): apiVersion,

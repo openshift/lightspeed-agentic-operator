@@ -55,7 +55,10 @@ func TestBuildRevisionContext_WithFeedback(t *testing.T) {
 			RevisionFeedback: "Please focus on the memory issue, not CPU",
 		},
 	}
-	result := buildRevisionContext(run)
+	result, err := buildRevisionContext(run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !strings.Contains(result, "Please focus on the memory issue, not CPU") {
 		t.Errorf("expected feedback in revision context, got: %s", result)
 	}
@@ -69,7 +72,10 @@ func TestBuildRevisionContext_WithoutFeedback(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-run", Namespace: "default", Generation: 2},
 		Spec:       agenticv1alpha1.AgenticRunSpec{},
 	}
-	result := buildRevisionContext(run)
+	result, err := buildRevisionContext(run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if strings.Contains(result, "## User Feedback") {
 		t.Errorf("expected no User Feedback header when feedback is empty, got: %s", result)
 	}
@@ -85,7 +91,10 @@ func TestBuildAnalysisQuery_FullAgenticRun(t *testing.T) {
 			Verification: agenticv1alpha1.AgenticRunStep{Agent: "default"},
 		},
 	}
-	result := buildAnalysisQuery("Fix the crash", run)
+	result, err := buildAnalysisQuery("Fix the crash", run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !strings.Contains(result, "Derive RBAC") {
 		t.Error("full run should mention RBAC derivation")
 	}
@@ -118,7 +127,10 @@ func TestBuildAnalysisQuery_TrustMode(t *testing.T) {
 			Execution: agenticv1alpha1.AgenticRunStep{Agent: "default"},
 		},
 	}
-	result := buildAnalysisQuery("Fix the crash", run)
+	result, err := buildAnalysisQuery("Fix the crash", run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if !strings.Contains(result, "Derive RBAC") {
 		t.Error("execution run should mention RBAC derivation")
 	}
@@ -129,7 +141,10 @@ func TestBuildAnalysisQuery_TrustMode(t *testing.T) {
 
 func TestBuildAnalysisQuery_Advisory(t *testing.T) {
 	run := &agenticv1alpha1.AgenticRun{}
-	result := buildAnalysisQuery("What is 2+2?", run)
+	result, err := buildAnalysisQuery("What is 2+2?", run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if strings.Contains(result, "Derive RBAC") {
 		t.Error("advisory run should NOT mention RBAC derivation")
 	}

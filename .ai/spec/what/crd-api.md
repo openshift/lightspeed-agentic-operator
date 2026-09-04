@@ -21,11 +21,11 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 9. **AgenticRun — `spec.tools`**: Default `ToolsSpec` for all steps; immutable once set. Per-step `tools` on `spec.analysis` / `spec.execution` / `spec.verification` replaces the default for that step only when non-zero.
 10. **AgenticRun — `spec.analysis|execution|verification`**: Immutable `AgenticRunStep` records after set. Each non-zero step MAY name `agent` (DNS subdomain) defaulting to `default` when empty; MAY carry per-step `tools`.
 10a–10g. ~~[SUPERSEDED by OLS-3491 redesign]~~ Rules 10a–10g removed and replaced. Per-step instructions now live on the `Agent` CR, not on `AgenticRunStep` or `OLSConfig`. See rules 10h–10l below.
-10h. [PLANNED: OLS-3491] **Agent — `spec.instructions`**: Optional `AgentInstructions` struct with per-step string fields: `analysis`, `execution`, `verification`, `escalation`. Each field is optional (MaxLength=32768). When a field is non-empty, it is a **full replacement** of the product built-in system instructions for that step. When absent or empty, the product built-in is used. The Agent becomes a complete "compute + behavior" entity.
-10i. [PLANNED: OLS-3491] **Instruction resolution at sandbox setup**: For each step, the operator resolves the step's Agent CR and reads `Agent.spec.instructions.<step>`. If non-empty, use it; otherwise render the product built-in Go template. The resolved instructions are written to the input ConfigMap `system-prompt` key. There is no create-time materialization on the AgenticRun and no per-run instruction override.
-10j. [PLANNED: OLS-3491] **Channel split**: Step **system instructions** travel on the system channel (`/input/system-prompt`). Step **input** travels on the query channel (`/input/query`): analysis uses `spec.request` (plus existing revision suffix); execution uses approved option JSON; verification uses option + execution output JSON; escalation uses its dynamic payload (run metadata, request, result refs). Role text MUST NOT be embedded in `query`.
-10k. [PLANNED: OLS-3491] **Revision feedback**: `spec.revisionFeedback` / revision context template remain query-side append behavior; not part of `instructions`.
-10l. [PLANNED: OLS-3491] **Precedence**: `Agent.spec.instructions.<step>` (when non-empty) > product built-in. Two layers only. Different Agents carry different instructions for different use cases (alerts remediation, security audit, etc.); the adapter selects the appropriate Agent when creating an AgenticRun.
+10h. [DONE: OLS-4098] **Agent — `spec.instructions`**: Optional `AgentInstructions` struct with per-step `StepInstructions` fields: `analysis`, `execution`, `verification`, `escalation`. Each `StepInstructions` has two optional strings (MaxLength=32768): `systemPrompt` (LLM system message → `/input/system-prompt`; default when empty: sandbox built-in `"You are an AI agent."`) and `userPrompt` (Go template replacing built-in query template → `/input/query`; supports the same template variables as the built-in templates, e.g. `{{.Request}}`, `{{.HasExecution}}`, `{{.HasVerification}}` for analysis, `{{.OptionJSON}}` for execution, `{{.OptionJSON}}`/`{{.ExecutionJSON}}` for verification; default when empty: built-in templates in `controller/agenticrun/templates/*.tmpl`). When absent or empty, product built-in defaults are used. The Agent becomes a complete "compute + behavior" entity.
+10i. [DONE: OLS-4098] **Instruction resolution at sandbox setup**: `buildInputConfigMap` resolves both prompts via `resolvePrompts`. For `systemPrompt`: Agent CR value or empty (sandbox defaults to `"You are an AI agent."`). For `userPrompt`: Agent CR Go template or built-in template file (`templates/*.tmpl`). Both rendered with the same template data as built-in templates (e.g. `{{.Request}}`, `{{.HasExecution}}`). The `system-prompt` key is only included in the ConfigMap when non-empty.
+10j. [DONE: OLS-4098] **Channel split**: `systemPrompt` travels on `/input/system-prompt`. `userPrompt` (rendered) travels on `/input/query`. Analysis query uses `spec.request`; execution uses approved option JSON; verification uses option + execution output JSON; escalation uses run metadata, request, and result refs. Revision feedback appends to query-side via `buildRevisionContext`.
+10k. [DONE: OLS-4098] **Revision feedback**: `spec.revisionFeedback` / revision context template remain query-side append behavior; not part of `instructions`.
+10l. [DONE: OLS-4098] **Precedence**: `Agent.spec.instructions.<step>.{systemPrompt,userPrompt}` (when non-empty) > product built-in. Two layers only. Different Agents carry different instructions for different use cases.
 11. **AgenticRun — `status`**: Observed-only. `status.conditions` holds map-merge conditions (types include `Analyzed`, `Executed`, `Verified`, `Denied`, `Escalated`, `EmergencyStopped`). `status.steps` holds per-step sandbox info and result refs.
 12. **Phase display types**: `AgenticRunPhase` and `StepPhase` string enums in the API describe display labels only; they are not stored fields on `AgenticRun` (phase is derived — see `run-lifecycle.md`). `AgenticRunPhase` values include `EmergencyStopped` (terminal, set by kill switch — see `system-config.md`). When analysis determines no remediation is needed, the run derives as `Completed` with `Analyzed` condition reason `NoActionRequired`. `StepPhase` values include `PendingApproval`, `Running`, `Completed`, `Failed`, `Skipped`.
 13. **Sandbox step enum**: `SandboxStep` values `Analysis`, `Execution`, `Verification`, `Escalation` identify workflow steps for approvals, sandbox labels, and policies.
@@ -77,7 +77,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 - `status.conditions`, `status.steps.analysis|execution|verification|escalation.*`, `status.terminalTime`, `status.tokenUsage` [PLANNED: OLS-3661]
 
 ### Agent
-- `metadata.name`, `spec.llmProvider.name`, `spec.model`, `spec.reasoningConfig`, `spec.timeouts.*`, `spec.maxTurns`, `spec.instructions.*` [PLANNED: OLS-3491], `status.conditions`
+- `metadata.name`, `spec.llmProvider.name`, `spec.model`, `spec.reasoningConfig`, `spec.timeouts.*`, `spec.maxTurns`, `spec.instructions.{analysis,execution,verification,escalation}.{systemPrompt,userPrompt}` [OLS-4098], `status.conditions`
 
 ### LLMProvider
 - `metadata.name`, `spec.type`, `spec.anthropic.*`, `spec.googleCloudVertex.*`, `spec.openAI.*`, `spec.azureOpenAI.*`, `spec.awsBedrock.*`
@@ -100,7 +100,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 
 ### Shared / embedded types
 - `AgenticRunStep`: `agent`, `tools`
-- `AgentInstructions`: `analysis`, `execution`, `verification`, `escalation` [PLANNED: OLS-3491]
+- `AgentInstructions`: `analysis`, `execution`, `verification`, `escalation` (each with `systemPrompt`, `userPrompt`) [DONE: OLS-4098]
 - `ToolsSpec`: `skills[]`, `mcpServers[]`, `requiredSecrets[]` (`disableDefaultMCP` deferred — see rule 37a / OLS-3594)
 - `SkillsSource`: `image`, `paths[]`
 - `SecretRequirement`: `name`, `description`, `mountAs.*`
@@ -116,7 +116,7 @@ Kubernetes API surface for the agentic operator. **Lifecycle and gates** are in 
 ## Planned Changes
 
 - [PLANNED: OLS-2940] Autonomous workflow CRD migrations may rename or reshape fields; specs MUST be updated when `v1alpha1` changes.
-- [PLANNED: OLS-3491] Configurable per-step `instructions` on `Agent` CR (`spec.instructions.analysis|execution|verification|escalation`). Two-layer precedence: Agent instructions > product built-in. No per-run overrides, no `OLSConfig` involvement. See rules 10h–10l and `sandbox-execution.md`. Design spec: `docs/superpowers/specs/2026-09-01-configurable-instructions-design.md`.
+- [DONE: OLS-4098] Configurable per-step `instructions` on `Agent` CR with `systemPrompt` and `userPrompt` per step. Two-layer precedence: Agent instructions > product built-in. `systemPrompt` → `/input/system-prompt`; `userPrompt` (Go template) → `/input/query`. See rules 10h–10l.
 - [OLS-3328] Add `spec.templog` to `AgenticOLSConfig` CRD for temporary audit log storage.
 - [DONE: OLS-3295] Renamed `Proposal` → `AgenticRun`, `ProposalApproval` → `AgenticRunApproval` CRD kinds and all associated field names, RBAC resources, and label keys.
 - [PLANNED: OLS-3594] Optional `disableDefaultMCP` (and related auto-injection) — deferred; blocked by OLS-3526 and OLS-3572. Not near-term.

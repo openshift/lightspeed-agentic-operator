@@ -26,14 +26,25 @@ import (
 //go:embed templates/*.tmpl
 var templateFS embed.FS
 
-var templates = template.Must(template.ParseFS(templateFS, "templates/*.tmpl"))
-
-func renderTemplate(name string, data any) string {
+func renderTemplate(tmpl string, data any) (string, error) {
 	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, name, data); err != nil {
-		return fmt.Sprintf("(template %q error: %v)", name, err)
+	t, err := template.New("custom").Parse(tmpl)
+	if err != nil {
+		return "", fmt.Errorf("template parse: %w", err)
 	}
-	return buf.String()
+	if err := t.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("template exec: %w", err)
+	}
+	return buf.String(), nil
+}
+
+// readBuiltinTemplate reads a built-in template file from the embedded FS.
+func readBuiltinTemplate(name string) (string, error) {
+	content, err := templateFS.ReadFile(name)
+	if err != nil {
+		return "", fmt.Errorf("read built-in template %s: %w", name, err)
+	}
+	return string(content), nil
 }
 
 const (
@@ -310,7 +321,11 @@ type escalationData struct {
 	VerificationResults []agenticv1alpha1.StepResultRef
 }
 
-func buildEscalationRequest(run *agenticv1alpha1.AgenticRun, resultNamespace string) string {
+func buildEscalationRequest(run *agenticv1alpha1.AgenticRun, resultNamespace string) (string, error) {
+	tmpl, err := readBuiltinTemplate("templates/escalation_request.tmpl")
+	if err != nil {
+		return "", err
+	}
 	data := escalationData{
 		Name:                run.Name,
 		Namespace:           run.Namespace,
@@ -320,7 +335,7 @@ func buildEscalationRequest(run *agenticv1alpha1.AgenticRun, resultNamespace str
 		ExecutionResults:    run.Status.Steps.Execution.Results,
 		VerificationResults: run.Status.Steps.Verification.Results,
 	}
-	return renderTemplate("escalation_request.tmpl", data)
+	return renderTemplate(tmpl, data)
 }
 
 func needsRevision(run *agenticv1alpha1.AgenticRun) bool {
@@ -341,14 +356,18 @@ type revisionData struct {
 	Feedback       string
 }
 
-func buildRevisionContext(run *agenticv1alpha1.AgenticRun) string {
+func buildRevisionContext(run *agenticv1alpha1.AgenticRun) (string, error) {
+	tmpl, err := readBuiltinTemplate("templates/revision_context.tmpl")
+	if err != nil {
+		return "", err
+	}
 	data := revisionData{
 		Generation:     run.Generation,
 		AgenticRunName: run.Name,
 		Namespace:      run.Namespace,
 		Feedback:       run.Spec.RevisionFeedback,
 	}
-	return renderTemplate("revision_context.tmpl", data)
+	return renderTemplate(tmpl, data)
 }
 
 func prettyJSON(v interface{}) string {
@@ -372,8 +391,12 @@ type analysisQuery struct {
 	HasVerification bool
 }
 
-func buildAnalysisQuery(requestText string, run *agenticv1alpha1.AgenticRun) string {
-	return renderTemplate("analysis_query.tmpl", analysisQuery{
+func buildAnalysisQuery(requestText string, run *agenticv1alpha1.AgenticRun) (string, error) {
+	tmpl, err := readBuiltinTemplate("templates/analysis_query.tmpl")
+	if err != nil {
+		return "", err
+	}
+	return renderTemplate(tmpl, analysisQuery{
 		Request:         requestText,
 		HasExecution:    !run.Spec.Execution.IsZero(),
 		HasVerification: !run.Spec.Verification.IsZero(),
@@ -384,18 +407,7 @@ type executionQuery struct {
 	OptionJSON string
 }
 
-func buildExecutionQuery(option *agenticv1alpha1.RemediationOption) string {
-	return renderTemplate("execution_query.tmpl", executionQuery{OptionJSON: prettyJSON(option)})
-}
-
 type verificationQuery struct {
 	OptionJSON    string
 	ExecutionJSON string
-}
-
-func buildVerificationQuery(option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) string {
-	return renderTemplate("verification_query.tmpl", verificationQuery{
-		OptionJSON:    prettyJSON(option),
-		ExecutionJSON: prettyJSON(executionOutputToAgentResult(exec)),
-	})
 }

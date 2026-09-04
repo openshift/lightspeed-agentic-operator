@@ -26,7 +26,7 @@ type mockSandboxProvider struct {
 	releaseCalls int
 }
 
-func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ time.Duration, _ string, _ *agentContext) (string, error) {
+func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ time.Duration, _ *agentContext) (string, error) {
 	m.claimCalls++
 	if len(m.claimErrors) > 0 {
 		idx := m.claimCalls - 1
@@ -82,7 +82,7 @@ func TestSandboxAgentCaller_Analyze_CreatesSandbox(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash"}
 	caller := newTestSandboxAgentCaller(sandbox)
 
-	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "Pod crashing")
+	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestSandboxAgentCaller_Escalate_CreatesSandbox(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-escalation-fix-crash"}
 	caller := newTestSandboxAgentCaller(sandbox)
 
-	err := caller.Escalate(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "Pod crashing")
+	err := caller.Escalate(context.Background(), testSandboxAgenticRun(), testSandboxStep())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestSandboxAgentCaller_Analyze_CreateError(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimErr: fmt.Errorf("sandbox unavailable")}
 	caller := newTestSandboxAgentCaller(sandbox)
 
-	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "Pod crashing")
+	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep())
 	if err == nil {
 		t.Fatal("expected error on sandbox create failure")
 	}
@@ -162,7 +162,7 @@ func TestSandboxAgentCaller_PatchesSandboxInfo(t *testing.T) {
 	run := testSandboxAgenticRun()
 	caller := newTestSandboxAgentCallerWithAgenticRun(sandbox, run)
 
-	err := caller.Analyze(context.Background(), run, testSandboxStep(), "Pod crashing")
+	err := caller.Analyze(context.Background(), run, testSandboxStep())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -270,7 +270,7 @@ type trackingMockSandbox struct {
 	errOnClaim string
 }
 
-func (m *trackingMockSandbox) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ time.Duration, _ string, _ *agentContext) (string, error) {
+func (m *trackingMockSandbox) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ time.Duration, _ *agentContext) (string, error) {
 	return "", nil
 }
 func (m *trackingMockSandbox) Release(_ context.Context, run *agenticv1alpha1.AgenticRun, step string) error {
@@ -297,7 +297,7 @@ func TestSandboxAgentCaller_TransientRetryThenSuccess(t *testing.T) {
 	run := testSandboxAgenticRun()
 	caller := newTestSandboxAgentCallerWithAgenticRun(sandbox, run)
 
-	err := caller.Analyze(context.Background(), run, testSandboxStep(), "Pod crashing")
+	err := caller.Analyze(context.Background(), run, testSandboxStep())
 	if err != nil {
 		t.Fatalf("expected success after transient retry, got: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestSandboxAgentCaller_PermanentErrorNoRetry(t *testing.T) {
 	}
 	caller := newTestSandboxAgentCaller(sandbox)
 
-	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "Pod crashing")
+	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep())
 	if err == nil {
 		t.Fatal("expected error for permanent failure")
 	}
@@ -330,7 +330,7 @@ func TestSandboxAgentCaller_TransientExhaustsRetries(t *testing.T) {
 	}
 	caller := newTestSandboxAgentCaller(sandbox)
 
-	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep(), "Pod crashing")
+	err := caller.Analyze(context.Background(), testSandboxAgenticRun(), testSandboxStep())
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}

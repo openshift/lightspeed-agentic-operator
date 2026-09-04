@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,7 +115,7 @@ func TestCreate_BarePod(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -147,8 +148,8 @@ func TestCreate_BarePod(t *testing.T) {
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: inputConfigMapName("analysis", string(run.UID)), Namespace: "test-ns"}, &cm); err != nil {
 		t.Fatalf("input ConfigMap not found: %v", err)
 	}
-	if cm.Data[inputConfigMapKeyQuery] != "test query" {
-		t.Errorf("ConfigMap query = %q", cm.Data[inputConfigMapKeyQuery])
+	if !strings.Contains(cm.Data[inputConfigMapKeyQuery], "fix it") {
+		t.Errorf("ConfigMap query should contain request text, got %q", cm.Data[inputConfigMapKeyQuery])
 	}
 	if len(cm.OwnerReferences) == 0 {
 		t.Fatal("expected OwnerReferences on input ConfigMap")
@@ -173,7 +174,7 @@ func TestCreate_SandboxClaim(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -202,7 +203,7 @@ func TestCreate_ConfigNotAvailable(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	_, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	_, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err == nil {
 		t.Fatal("expected error when config is not available")
 	}
@@ -213,11 +214,11 @@ func TestCreate_Idempotent_BarePod(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name1, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name1, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("first Create failed: %v", err)
 	}
-	name2, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name2, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("second Create failed: %v", err)
 	}
@@ -231,11 +232,11 @@ func TestCreate_Idempotent_SandboxClaim(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name1, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name1, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("first Create failed: %v", err)
 	}
-	name2, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name2, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("second Create failed: %v", err)
 	}
@@ -250,7 +251,7 @@ func TestCreate_OTELEnvVars(t *testing.T) {
 	mgr := newTestSandboxManager(fc, cache)
 
 	run := testSMRun()
-	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -307,7 +308,7 @@ func TestCreate_NoOTEL_NoEnvVars(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -330,7 +331,7 @@ func TestCreate_OTELEnvVars_SandboxClaim(t *testing.T) {
 	mgr := newTestSandboxManager(fc, cache)
 
 	run := testSMRun()
-	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -436,7 +437,7 @@ func TestNamePrefix_LSPrefix(t *testing.T) {
 			fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 			mgr := newTestSandboxManager(fc, cache)
 
-			name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+			name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -455,7 +456,7 @@ func TestNamePrefix_LongNameTruncated(t *testing.T) {
 	longRun := testSMRun()
 	longRun.Name = "a-very-long-run-name-that-exceeds-sixty-three-characters-in-total-length"
 
-	name, err := mgr.Create(context.Background(), longRun, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, "test query", nil)
+	name, err := mgr.Create(context.Background(), longRun, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}

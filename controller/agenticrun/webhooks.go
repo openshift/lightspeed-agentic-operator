@@ -3,8 +3,11 @@ package agenticrun
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"text/template"
 	"time"
+	"unicode/utf8"
 
 	"gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -12,6 +15,8 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
+
+// --- AgenticRunApproval mutating webhook ---
 
 // AgenticRunApprovalMutator is a MutatingAdmissionWebhook handler that injects
 // the authenticated user's identity into spec.approver on every UPDATE to a
@@ -72,4 +77,54 @@ func (m *AgenticRunApprovalMutator) Handle(_ context.Context, req admission.Requ
 	}
 
 	return admission.Patched("injected spec.approver", patches...)
+}
+
+// --- Agent validating webhook ---
+
+const maxPromptLength = 32768
+
+// AgentValidator is a ValidatingAdmissionWebhook handler that rejects
+// Agent create/update when any prompt is too long or contains invalid Go
+// template syntax.
+type AgentValidator struct{}
+
+func (v *AgentValidator) Handle(_ context.Context, req admission.Request) admission.Response {
+	var agent agenticv1alpha1.Agent
+	if err := json.Unmarshal(req.Object.Raw, &agent); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	if agent.Spec.Instructions == nil {
+		return admission.Allowed("no instructions configured")
+	}
+
+	steps := map[string]*agenticv1alpha1.StepInstructions{
+		"analysis":     agent.Spec.Instructions.Analysis,
+		"execution":    agent.Spec.Instructions.Execution,
+		"verification": agent.Spec.Instructions.Verification,
+		"escalation":   agent.Spec.Instructions.Escalation,
+	}
+
+	for step, si := range steps {
+		if si == nil {
+			continue
+		}
+		if utf8.RuneCountInString(si.SystemPrompt) > maxPromptLength {
+			return admission.Denied(fmt.Sprintf(
+				"spec.instructions.%s.systemPrompt: must not exceed %d characters", step, maxPromptLength))
+		}
+		if si.UserPrompt == "" {
+			continue
+		}
+		if utf8.RuneCountInString(si.UserPrompt) > maxPromptLength {
+			return admission.Denied(fmt.Sprintf(
+				"spec.instructions.%s.userPrompt: must not exceed %d characters", step, maxPromptLength))
+		}
+		if _, err := template.New(step).Parse(si.UserPrompt); err != nil {
+			return admission.Denied(fmt.Sprintf(
+				"spec.instructions.%s.userPrompt: invalid Go template: %v", step, err))
+		}
+	}
+
+	return admission.Allowed("templates valid")
 }

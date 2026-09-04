@@ -74,7 +74,7 @@ func (r *AgenticRunReconciler) handleAnalysis(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToAnalyzing, err)
 	}
 
-	if err := r.Agent.Analyze(ctx, run, resolved.Analysis, run.Spec.Request); err != nil {
+	if err := r.Agent.Analyze(ctx, run, resolved.Analysis); err != nil {
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
 
@@ -120,10 +120,7 @@ func (r *AgenticRunReconciler) handleRevision(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToAnalyzingRevision, err)
 	}
 
-	revisionSuffix := buildRevisionContext(run)
-	requestWithRevision := run.Spec.Request + "\n\n" + revisionSuffix
-
-	if err := r.Agent.Analyze(ctx, run, resolved.Analysis, requestWithRevision); err != nil {
+	if err := r.Agent.Analyze(ctx, run, resolved.Analysis); err != nil {
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
 
@@ -413,8 +410,7 @@ func (r *AgenticRunReconciler) handleEscalation(
 		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrUpdateToEscalating, err)
 	}
 
-	escalationText := buildEscalationRequest(run, r.Namespace)
-	if err := r.Agent.Escalate(ctx, run, step, escalationText); err != nil {
+	if err := r.Agent.Escalate(ctx, run, step); err != nil {
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionEscalated, err)
 	}
 
