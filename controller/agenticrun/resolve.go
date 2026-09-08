@@ -19,9 +19,10 @@ const (
 )
 
 type resolvedStep struct {
-	Agent *agenticv1alpha1.Agent
-	LLM   *agenticv1alpha1.LLMProvider
-	Tools *agenticv1alpha1.ToolsSpec
+	Agent          *agenticv1alpha1.Agent
+	LLM            *agenticv1alpha1.LLMProvider
+	Tools          *agenticv1alpha1.ToolsSpec
+	TimeoutMinutes int32
 }
 
 type resolvedWorkflow struct {
@@ -80,14 +81,14 @@ func resolveAgenticRun(ctx context.Context, c client.Client, run *agenticv1alpha
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ErrResolveAnalysisStep, err)
 	}
-	resolved.Analysis = resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(run.Spec.Analysis)}
+	resolved.Analysis = resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(run.Spec.Analysis), TimeoutMinutes: run.Spec.Analysis.TimeoutMinutes}
 
 	if !run.Spec.Execution.IsZero() {
 		agent, llm, err := resolveAgent(effectiveAgent(agenticv1alpha1.SandboxStepExecution, run.Spec.Execution))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", ErrResolveExecutionStep, err)
 		}
-		resolved.Execution = &resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(run.Spec.Execution)}
+		resolved.Execution = &resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(run.Spec.Execution), TimeoutMinutes: run.Spec.Execution.TimeoutMinutes}
 	}
 
 	if !run.Spec.Verification.IsZero() {
@@ -95,7 +96,7 @@ func resolveAgenticRun(ctx context.Context, c client.Client, run *agenticv1alpha
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", ErrResolveVerificationStep, err)
 		}
-		resolved.Verification = &resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(run.Spec.Verification)}
+		resolved.Verification = &resolvedStep{Agent: agent, LLM: llm, Tools: toolsForStep(run.Spec.Verification), TimeoutMinutes: run.Spec.Verification.TimeoutMinutes}
 	}
 
 	return resolved, nil

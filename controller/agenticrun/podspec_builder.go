@@ -71,6 +71,7 @@ func (b *PodSpecBuilder) Build(
 	serviceAccount string,
 	inputConfigMapName string,
 	traceparent string,
+	agentTimeoutSeconds int64,
 ) (*corev1.PodSpec, error) {
 	if base == nil || len(base.Containers) == 0 {
 		return nil, fmt.Errorf("%s", ErrBuildBasePodSpec)
@@ -111,6 +112,19 @@ func (b *PodSpecBuilder) Build(
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "LIGHTSPEED_REASONING_CONFIG",
 			Value: string(rcJSON),
+		})
+	}
+
+	if agentTimeoutSeconds > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "LIGHTSPEED_AGENT_TIMEOUT_SECONDS",
+			Value: fmt.Sprintf("%d", agentTimeoutSeconds),
+		})
+	}
+	if agent.Spec.MaxTurns > 0 {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "LIGHTSPEED_AGENT_MAX_TURNS",
+			Value: fmt.Sprintf("%d", agent.Spec.MaxTurns),
 		})
 	}
 
