@@ -22,6 +22,9 @@
 #   E2E_MODEL                — override default model for the provider
 #   ARTIFACT_DIR             — directory for test artifacts
 #   KONFLUX_COMPONENT_NAME   — component name for SNAPSHOT parsing
+#   E2E_OTEL_ENABLED         — deploy persistent OTEL/Postgres collector for
+#                              sandbox-log artifacts (default: true)
+#   E2E_OTEL_IMAGE           — override the OTEL collector image
 
 set -euo pipefail
 
@@ -34,6 +37,19 @@ source "$SCRIPT_DIR/e2e-lib.sh"
 PROVIDERS="${*:-claude gemini openai}"
 NAMESPACE="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
 export OPERATOR_NAMESPACE="$NAMESPACE"
+SCENARIOS_TMPDIR=""
+
+# shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
+_cleanup_on_exit() {
+    log_info "Running cleanup..."
+    cleanup_e2e_otel "$NAMESPACE"
+    cleanup_operator
+    if [[ -n "${SCENARIOS_TMPDIR:-}" && -d "$SCENARIOS_TMPDIR" ]]; then
+        log_info "Removing scenarios clone: $SCENARIOS_TMPDIR"
+        rm -rf "$SCENARIOS_TMPDIR"
+    fi
+}
+trap _cleanup_on_exit EXIT
 
 log_info "=== e2e-cluster.sh ==="
 log_info "Providers: $PROVIDERS"
@@ -45,6 +61,13 @@ parse_snapshot
 cd "$REPO_ROOT"
 
 deploy_operator
+ensure_e2e_otel "$NAMESPACE"
+
+# Clone troubleshooting scenarios from rhobs for product_e2e tests.
+SCENARIOS_TMPDIR="$(mktemp -d)"
+log_info "Cloning rhobs/troubleshooting-scenarios → $SCENARIOS_TMPDIR"
+git clone --depth 1 https://github.com/rhobs/troubleshooting-scenarios.git "$SCENARIOS_TMPDIR"
+export E2E_SCENARIOS_DIR="$SCENARIOS_TMPDIR"
 
 declare -A results
 overall_rc=0
@@ -70,39 +93,37 @@ run_provider() {
 
     log_info "--- Running e2e for provider=$provider model=$model ---"
 
+    local e2e_env=(
+        E2E_PROVIDER="$provider"
+        E2E_MODEL="$model"
+        E2E_PROVIDER_KEY_PATH="$key_path"
+        E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}"
+        VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}"
+        VERTEX_REGION="${VERTEX_REGION:-global}"
+        TEST_NAMESPACE="$NAMESPACE"
+    )
+
     local test_rc=0
 
-    if [[ -n "${ARTIFACT_DIR:-}" ]]; then
-        mkdir -p "$ARTIFACT_DIR/$provider"
-        E2E_PROVIDER="$provider" \
-        E2E_MODEL="$model" \
-        E2E_PROVIDER_KEY_PATH="$key_path" \
-        E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}" \
-        VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}" \
-        VERTEX_REGION="${VERTEX_REGION:-global}" \
-        TEST_NAMESPACE="$NAMESPACE" \
-        make test-e2e 2>&1 | tee "$ARTIFACT_DIR/$provider/test-output.log" || test_rc=$?
-    else
-        E2E_PROVIDER="$provider" \
-        E2E_MODEL="$model" \
-        E2E_PROVIDER_KEY_PATH="$key_path" \
-        E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}" \
-        VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}" \
-        VERTEX_REGION="${VERTEX_REGION:-global}" \
-        TEST_NAMESPACE="$NAMESPACE" \
-        make test-e2e || test_rc=$?
+    # Product e2e (troubleshooting scenarios against real LLMs).
+    # Mock-only tests (failure_test.go etc.) run in precommit CI via `make test-e2e`.
+    if [[ -n "${E2E_SCENARIOS_DIR:-}" ]]; then
+        log_info "--- Running product e2e for provider=$provider ---"
+        if [[ -n "${ARTIFACT_DIR:-}" ]]; then
+            mkdir -p "$ARTIFACT_DIR/$provider"
+            env "${e2e_env[@]}" E2E_SCENARIOS_DIR="$E2E_SCENARIOS_DIR" \
+                go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout 120m \
+                2>&1 | tee "$ARTIFACT_DIR/$provider/product-e2e-output.log" || test_rc=$?
+        else
+            env "${e2e_env[@]}" E2E_SCENARIOS_DIR="$E2E_SCENARIOS_DIR" \
+                go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout 120m || test_rc=$?
+        fi
     fi
 
     collect_artifacts "$provider"
 
     return "$test_rc"
 }
-
-_cleanup_on_exit() {
-    log_info "Running cleanup..."
-    cleanup_operator
-}
-trap _cleanup_on_exit EXIT
 
 for provider in $PROVIDERS; do
     set +e

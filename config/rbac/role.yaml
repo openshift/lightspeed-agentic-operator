@@ -8,10 +8,12 @@ rules:
   - ""
   resources:
   - configmaps
-  - secrets
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - ""
@@ -27,6 +29,14 @@ rules:
   verbs:
   - create
   - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
   - get
   - list
   - watch
@@ -140,6 +150,15 @@ rules:
   - get
   - list
   - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resourceNames:
+  - cluster-reader
+  resources:
+  - clusterroles
+  verbs:
+  - bind
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:

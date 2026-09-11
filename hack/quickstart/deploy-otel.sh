@@ -7,9 +7,10 @@
 # With --postgres, deploys a Postgres instance and routes agentic logs
 # to it for the console audit UI.
 #
-# The Service uses service-ca for TLS. The generated cert secret
-# (lightspeed-otel-collector-cert) is referenced in the agentic
-# configuration ConfigMap as otel-ca-secret.
+# The Service uses service-ca for TLS. Its generated serving-cert secret
+# (lightspeed-otel-collector-cert) is mounted by the collector only. Clients
+# must instead trust the service CA via lightspeed-agentic-otel-ca (key:
+# otel-ca.crt), which deploy-configmap.sh references as otel-ca-secret.
 #
 # Usage:
 #   bash hack/quickstart/deploy-otel.sh

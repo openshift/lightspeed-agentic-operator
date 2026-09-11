@@ -181,10 +181,14 @@ spec:
                 value: "/var/run/credentials/vertex/token"
               - name: VERTEX_PROJECT_ID
                 value: "openshift-lightspeed-tests"
+              - name: VERTEX_REGION
+                value: "global"
               - name: OPENAI_PROVIDER_KEY_PATH
                 value: "/var/run/credentials/openai/token"
               - name: ARTIFACT_DIR
                 value: "/workspace/konflux-artifacts"
+              - name: E2E_SCENARIO_TAGS
+                value: "alert"
             image: registry.redhat.io/openshift4/ose-cli:latest
             script: |
               set -euo pipefail

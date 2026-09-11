@@ -216,9 +216,9 @@ func (m *SandboxManager) Create(
 
 	span.AddEvent("sandbox.pod.created")
 
-	if err := m.setInputConfigMapOwner(ctx, inputConfigMapName(step, string(run.UID)), ownerRef); err != nil {
-		return "", err
-	}
+	// Input ConfigMap keeps the AgenticRun as owner (set at creation time).
+	// Transferring ownership to the pod caused a race: GC could delete the
+	// ConfigMap between steps when the previous step's pod was released.
 	if err := setResultRBACOwner(ctx, m.client, string(run.UID), step, ownerRef, m.namespace); err != nil {
 		return "", err
 	}
@@ -294,29 +294,27 @@ func (m *SandboxManager) cleanupOnCreateFailure(ctx context.Context, run *agenti
 		}
 	}
 }
-
-// setInputConfigMapOwner replaces the owner refs on the input ConfigMap with
-// the pod/claim owner so Kubernetes GC cleans it up when the pod is deleted.
-func (m *SandboxManager) setInputConfigMapOwner(ctx context.Context, cmName string, owner metav1.OwnerReference) error {
-	cm := &corev1.ConfigMap{}
-	if err := m.client.Get(ctx, client.ObjectKey{Name: cmName, Namespace: m.namespace}, cm); err != nil {
-		return fmt.Errorf("get input ConfigMap: %w", err)
-	}
-	base := cm.DeepCopy()
-	cm.OwnerReferences = []metav1.OwnerReference{owner}
-	if err := m.client.Patch(ctx, cm, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("set owner on input ConfigMap: %w", err)
-	}
-	return nil
-}
-
 func (m *SandboxManager) createInputConfigMap(ctx context.Context, cm *corev1.ConfigMap) error {
 	log := logf.FromContext(ctx)
 	if err := m.client.Create(ctx, cm); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("%s %q: %w", errCreateInputConfigMap, cm.Name, err)
 		}
-		return fmt.Errorf("%s %q: %w", errCreateInputConfigMap, cm.Name, err)
+
+		existing := &corev1.ConfigMap{}
+		key := client.ObjectKey{Name: cm.Name, Namespace: cm.Namespace}
+		if getErr := m.client.Get(ctx, key, existing); getErr != nil {
+			return fmt.Errorf("get existing input ConfigMap %q: %w", cm.Name, getErr)
+		}
+		base := existing.DeepCopy()
+		existing.Labels = cm.Labels
+		existing.OwnerReferences = cm.OwnerReferences
+		existing.Data = cm.Data
+		if patchErr := m.client.Patch(ctx, existing, client.MergeFrom(base)); patchErr != nil {
+			return fmt.Errorf("refresh input ConfigMap %q: %w", cm.Name, patchErr)
+		}
+		log.Info("Refreshed input ConfigMap", LogKeyName, cm.Name)
+		return nil
 	}
 	log.Info("Created input ConfigMap", LogKeyName, cm.Name)
 	return nil

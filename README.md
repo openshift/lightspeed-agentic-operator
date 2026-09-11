@@ -139,6 +139,43 @@ make api-lint       # Kube API linter on api/ (golangci-lint custom + plugin; se
 
 **`make test-e2e`** runs **`go test -tags=e2e ./test/e2e/...`** against a live cluster with the operator running. Prerequisites: **`make run TEMPLATE_NAME=lightspeed-agent-mock`** (or deployed operator with **`--template-name=lightspeed-agent-mock`**) and mock agent SandboxTemplate applied (**`kubectl apply -k test/agent/sandboxtemplate`**). See `test/e2e/` package doc for details.
 
+### Product E2E (real providers)
+
+Product E2E runs the troubleshooting scenarios against a real LLM provider. It deploys (or reuses) the operator, clones `rhobs/troubleshooting-scenarios`, and runs the `product_e2e`-tagged tests. For example, to run Claude scenarios:
+
+```bash
+IMG=quay.io/.../lightspeed-agentic-operator@sha256:<digest> \
+VERTEX_PROVIDER_KEY_PATH=/path/to/service-account.json \
+VERTEX_PROJECT_ID=my-gcp-project \
+ARTIFACT_DIR="$PWD/artifacts" \
+bash scripts/e2e-cluster.sh claude
+```
+
+`claude` and `gemini` require `VERTEX_PROVIDER_KEY_PATH` and `VERTEX_PROJECT_ID`; `openai` requires `OPENAI_PROVIDER_KEY_PATH`. The runner accepts one or more providers (`claude`, `gemini`, and/or `openai`).
+
+| Variable | Purpose |
+|---|---|
+| `E2E_SCENARIO_TAGS=alert` | Run scenarios carrying the `alert` tag instead of the default `core` tag. Multiple tags are an **AND** filter: `core,alert` requires both. |
+| `E2E_SKIP_SCENARIOS=pending_pvc_alert` | Skip comma-separated scenario directory names. |
+| `E2E_SCENARIO_TIMEOUT=20m` | Per-scenario deadline (default: `20m`). |
+| `E2E_OTEL_ENABLED=false` | Disable the persistent OTEL/Postgres collector used for product-E2E artifacts. It is enabled by default. |
+| `E2E_OTEL_IMAGE=quay.io/.../collector:tag` | Override the OTEL collector image. |
+| `ARTIFACT_DIR=/path/to/artifacts` | Directory where test and diagnostic artifacts are written. |
+
+With `ARTIFACT_DIR` set, artifacts are arranged per provider:
+
+```text
+artifacts/<provider>/
+├── product-e2e-output.log       # Go test output
+├── operator-logs.txt             # controller-manager logs
+├── pods.yaml                     # remaining operator-namespace pods
+├── podlogs/                      # best-effort direct sandbox-pod log backup
+└── runs/<run-name>/
+    └── otel-sandbox.json         # persisted OTEL collector records for the run
+```
+
+The runner configures the collector with its Postgres backend, because the default `nop` pipeline drops records and does not expose the admin API used to export per-run records. Direct pod-log capture is best effort: sandbox pods may be removed immediately after completion, so persisted OTEL records are the primary diagnostic source.
+
 For noisy debugging: **`go test ./controller/agenticrun/... -v`**, **`go test ./api/... -v`**, **`go test ./cli/... -v`**.
 
 ### API lint (Kube API linter)

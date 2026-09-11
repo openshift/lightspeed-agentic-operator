@@ -60,23 +60,6 @@ fi
 echo "Deploying operator..."
 make deploy IMG="${IMG}" OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE}" SANDBOX_MODE="${SANDBOX_MODE}"
 
-# Grant cluster-admin to operator SA (same as quickstart — covers escalation + SCC).
-echo "Granting cluster-admin to operator SA..."
-oc apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: lightspeed-agentic-operator-admin
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cluster-admin
-subjects:
-- kind: ServiceAccount
-  name: controller-manager
-  namespace: ${OPERATOR_NAMESPACE}
-EOF
-
 # Grant cluster-reader to agent SA (required by execution RBAC discovery).
 echo "Granting cluster-reader to agent SA..."
 oc apply -f - <<EOF

@@ -154,8 +154,8 @@ func TestCreate_BarePod(t *testing.T) {
 	if len(cm.OwnerReferences) == 0 {
 		t.Fatal("expected OwnerReferences on input ConfigMap")
 	}
-	if cm.OwnerReferences[0].Kind != "Pod" || cm.OwnerReferences[0].Name != name {
-		t.Fatalf("expected ConfigMap owned by Pod %q, got %s/%s", name, cm.OwnerReferences[0].Kind, cm.OwnerReferences[0].Name)
+	if cm.OwnerReferences[0].Kind != "AgenticRun" || cm.OwnerReferences[0].Name != run.Name {
+		t.Fatalf("expected ConfigMap owned by AgenticRun %q, got %s/%s", run.Name, cm.OwnerReferences[0].Kind, cm.OwnerReferences[0].Name)
 	}
 	foundMount := false
 	for _, m := range pod.Spec.Containers[0].VolumeMounts {
@@ -224,6 +224,33 @@ func TestCreate_Idempotent_BarePod(t *testing.T) {
 	}
 	if name1 != name2 {
 		t.Fatalf("expected same name on idempotent create, got %q and %q", name1, name2)
+	}
+}
+
+func TestCreate_RefreshesExistingInputConfigMap(t *testing.T) {
+	cache := testCache(t, "bare-pod")
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
+	mgr := newTestSandboxManager(fc, cache)
+	run := testSMRun()
+
+	if _, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil); err != nil {
+		t.Fatalf("first Create failed: %v", err)
+	}
+
+	run.Spec.RevisionFeedback = "please use the current revision feedback"
+	if _, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil); err != nil {
+		t.Fatalf("second Create failed: %v", err)
+	}
+
+	var cm corev1.ConfigMap
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: inputConfigMapName("analysis", string(run.UID)), Namespace: "test-ns"}, &cm); err != nil {
+		t.Fatalf("input ConfigMap not found: %v", err)
+	}
+	if !strings.Contains(cm.Data[inputConfigMapKeyQuery], run.Spec.RevisionFeedback) {
+		t.Fatalf("expected refreshed ConfigMap query to contain revision feedback, got %q", cm.Data[inputConfigMapKeyQuery])
+	}
+	if cm.OwnerReferences[0].Kind != "AgenticRun" || cm.OwnerReferences[0].Name != run.Name {
+		t.Fatalf("expected ConfigMap to remain owned by AgenticRun %q, got %s/%s", run.Name, cm.OwnerReferences[0].Kind, cm.OwnerReferences[0].Name)
 	}
 }
 

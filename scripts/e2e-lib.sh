@@ -9,7 +9,7 @@ log_error() { echo "[ERROR] $(date -u '+%Y-%m-%dT%H:%M:%SZ') $*" >&2; }
 
 check_prerequisites() {
     local missing=()
-    for cmd in oc make go jq; do
+    for cmd in oc make go jq git; do
         if ! command -v "$cmd" &>/dev/null; then
             missing+=("$cmd")
         fi
@@ -53,6 +53,136 @@ parse_snapshot() {
 }
 
 _OPERATOR_DEPLOYED_BY_SCRIPT=0
+_E2E_OTEL_DEPLOYED_BY_SCRIPT=0
+_E2E_MANAGER_ROLE_CREATED_BY_SCRIPT=0
+_E2E_MANAGER_RB_CREATED_BY_SCRIPT=0
+_E2E_READER_RBAC_CREATED_BY_SCRIPT=0
+
+ensure_operator_rbac() {
+    local namespace="$1"
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+    log_info "Ensuring operator manager RBAC in $namespace"
+    if ! oc get clusterrole agentic-operator-manager-role &>/dev/null; then
+        _E2E_MANAGER_ROLE_CREATED_BY_SCRIPT=1
+    fi
+    if ! oc get clusterrolebinding agentic-operator-manager-rolebinding &>/dev/null; then
+        _E2E_MANAGER_RB_CREATED_BY_SCRIPT=1
+    fi
+    oc apply -f "$repo_root/config/rbac/role.yaml"
+    sed "s|__OPERATOR_NAMESPACE__|${namespace}|g" "$repo_root/config/rbac/role_binding.yaml" | oc apply -f -
+
+    log_info "Ensuring lightspeed-agent-cluster-reader ClusterRoleBinding in $namespace"
+    if ! oc get clusterrolebinding lightspeed-agent-cluster-reader &>/dev/null; then
+        _E2E_READER_RBAC_CREATED_BY_SCRIPT=1
+    fi
+    oc apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lightspeed-agent-cluster-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-reader
+subjects:
+- kind: ServiceAccount
+  name: lightspeed-agent
+  namespace: ${namespace}
+EOF
+}
+
+ensure_config_configmap() {
+    local namespace="$1"
+    local sandbox_mode="${SANDBOX_MODE:-bare-pod}"
+    local sandbox_image="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent}"
+
+    if oc get configmap lightspeed-agentic-configuration -n "$namespace" &>/dev/null; then
+        return 0
+    fi
+
+    log_info "Creating lightspeed-agentic-configuration ConfigMap in $namespace"
+    oc apply -f - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lightspeed-agentic-configuration
+  namespace: ${namespace}
+data:
+  sandbox-mode: "${sandbox_mode}"
+  sandbox-pod-spec: |
+    {
+      "containers": [{
+        "name": "agent",
+        "image": "${sandbox_image}",
+        "ports": [{"containerPort": 8080}],
+        "securityContext": {
+          "allowPrivilegeEscalation": false,
+          "runAsNonRoot": true,
+          "capabilities": {"drop": ["ALL"]},
+          "seccompProfile": {"type": "RuntimeDefault"}
+        }
+      }],
+      "securityContext": {
+        "runAsNonRoot": true,
+        "seccompProfile": {"type": "RuntimeDefault"}
+      }
+    }
+EOF
+}
+
+# ensure_e2e_otel deploys the persistent OTEL collector used to retain sandbox
+# logs, then adds its connection details to the existing handoff ConfigMap.  It
+# deliberately patches only OTEL keys: the classic operator (or
+# ensure_config_configmap) remains the owner of the sandbox configuration.
+# Set E2E_OTEL_ENABLED=false to opt out, or E2E_OTEL_IMAGE to override the
+# collector image used by hack/quickstart/deploy-otel.sh.
+ensure_e2e_otel() {
+    local namespace="$1"
+    if [[ "${E2E_OTEL_ENABLED:-true}" == "false" ]]; then
+        log_info "E2E OTEL collection disabled (E2E_OTEL_ENABLED=false)"
+        return 0
+    fi
+
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    local deploy_args=(--postgres)
+    if [[ -n "${E2E_OTEL_IMAGE:-}" ]]; then
+        deploy_args+=("--image=${E2E_OTEL_IMAGE}")
+    fi
+
+    log_info "Deploying persistent OTEL collector for E2E artifact collection"
+    _E2E_OTEL_DEPLOYED_BY_SCRIPT=1
+    NAMESPACE="$namespace" bash "$repo_root/hack/quickstart/deploy-otel.sh" "${deploy_args[@]}"
+
+    # The serving CA is asynchronously injected by OpenShift.  Do not write a
+    # partial OTEL configuration: sandbox pods would then fail TLS validation.
+    local ca_bundle=""
+    for _ in $(seq 1 60); do
+        ca_bundle="$(oc get configmap openshift-service-ca.crt -n "$namespace" \
+            -o jsonpath='{.data.service-ca\.crt}' 2>/dev/null || true)"
+        [[ -n "$ca_bundle" ]] && break
+        sleep 1
+    done
+    if [[ -z "$ca_bundle" ]]; then
+        log_error "OTEL collector is deployed but openshift-service-ca.crt is unavailable in $namespace"
+        return 1
+    fi
+
+    printf '%s' "$ca_bundle" | oc create secret generic lightspeed-agentic-otel-ca \
+        -n "$namespace" --from-file=otel-ca.crt=/dev/stdin \
+        --dry-run=client -o yaml | oc apply -f -
+
+    local otel_patch
+    otel_patch="$(jq -cn --arg endpoint "lightspeed-otel-collector.${namespace}.svc:4317" \
+        --arg admin "https://lightspeed-otel-collector.${namespace}.svc:8080" \
+        --arg ca "lightspeed-agentic-otel-ca" \
+        '{data:{"otel-collector-endpoint":$endpoint,"otel-admin-endpoint":$admin,"otel-ca-secret":$ca}}')"
+    oc patch configmap lightspeed-agentic-configuration -n "$namespace" \
+        --type=merge -p "$otel_patch"
+    log_info "OTEL artifact collection configured (collector + admin API)"
+}
 
 deploy_operator() {
     local namespace="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
@@ -63,6 +193,8 @@ deploy_operator() {
             -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || true)"
         if [[ "$available" == "True" ]]; then
             log_info "Operator already deployed and available in $namespace — skipping install"
+            ensure_operator_rbac "$namespace"
+            ensure_config_configmap "$namespace"
             return 0
         fi
         log_warn "Operator deployment exists but not Available — reinstalling"
@@ -73,13 +205,14 @@ deploy_operator() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+    _OPERATOR_DEPLOYED_BY_SCRIPT=1
+    _E2E_READER_RBAC_CREATED_BY_SCRIPT=1
     IMG="$IMG" \
     KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}" \
     OPERATOR_NAMESPACE="$namespace" \
     SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent}" \
     bash "${script_dir}/.tekton/integration-tests/scripts/install-operator.sh"
 
-    _OPERATOR_DEPLOYED_BY_SCRIPT=1
     wait_for_deployment "$namespace"
 }
 
@@ -96,11 +229,35 @@ wait_for_deployment() {
 }
 
 cleanup_operator() {
+    oc delete clusterrolebinding lightspeed-agentic-operator-admin --ignore-not-found 2>/dev/null || true
+
+    if [[ "$_E2E_READER_RBAC_CREATED_BY_SCRIPT" -eq 1 ]]; then
+        oc delete clusterrolebinding lightspeed-agent-cluster-reader --ignore-not-found 2>/dev/null || true
+    fi
+    if [[ "$_E2E_MANAGER_RB_CREATED_BY_SCRIPT" -eq 1 ]]; then
+        oc delete clusterrolebinding agentic-operator-manager-rolebinding --ignore-not-found 2>/dev/null || true
+    fi
+    if [[ "$_E2E_MANAGER_ROLE_CREATED_BY_SCRIPT" -eq 1 ]]; then
+        oc delete clusterrole agentic-operator-manager-role --ignore-not-found 2>/dev/null || true
+    fi
+
     if [[ "$_OPERATOR_DEPLOYED_BY_SCRIPT" -eq 1 ]]; then
         log_info "Cleaning up operator (deployed by this script)..."
         make undeploy ignore-not-found=true 2>/dev/null || true
     else
         log_info "Skipping operator cleanup (was pre-existing)"
+    fi
+}
+
+cleanup_e2e_otel() {
+    local namespace="$1"
+    if [[ "$_E2E_OTEL_DEPLOYED_BY_SCRIPT" -eq 1 ]]; then
+        local repo_root
+        repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        log_info "Cleaning up E2E OTEL/Postgres resources..."
+        NAMESPACE="$namespace" bash "$repo_root/hack/quickstart/undeploy-otel.sh" 2>/dev/null || true
+    else
+        log_info "Skipping E2E OTEL cleanup (not deployed by this script)"
     fi
 }
 
@@ -149,5 +306,11 @@ collect_artifacts() {
     oc get pods -n "$namespace" -o yaml \
         > "$artifact_dir/pods.yaml" 2>/dev/null || true
 
-    log_info "Artifacts collected for $provider: $(ls "$artifact_dir" | wc -l) files"
+    # Collect sandbox pod logs (pods named ls-analysis-*, ls-execution-*, ls-verification-*)
+    for pod in $(oc get pods -n "$namespace" -o name 2>/dev/null | grep -E '^pod/ls-' | sed 's|^pod/||'); do
+        oc logs -n "$namespace" "$pod" --all-containers \
+            > "$artifact_dir/sandbox-${pod}.log" 2>/dev/null || true
+    done
+
+    log_info "Artifacts collected for $provider: $(find "$artifact_dir" -maxdepth 1 -type f | wc -l) files"
 }
