@@ -892,6 +892,21 @@ spec:
                 maxLength: 32768
                 minLength: 1
                 type: string
+              targetCluster:
+                description: |-
+                  targetCluster optionally references a spoke cluster by name.
+                  When set, the operator creates ephemeral service accounts and
+                  RBAC on the spoke cluster via the standing kubeconfig Secret
+                  (spoke-kubeconfig-{targetCluster}). When empty, the run
+                  targets the local (hub) cluster.
+
+                  Immutable: RBAC scoping is fixed at creation.
+                maxLength: 236
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: targetCluster must be a valid DNS subdomain
+                  rule: '!format.dns1123Subdomain().validate(self).hasValue()'
               targetNamespaces:
                 description: |-
                   targetNamespaces are the Kubernetes namespace(s) this agentic run
@@ -1691,6 +1706,9 @@ spec:
             - message: targetNamespaces is immutable once set
               rule: '!has(oldSelf.targetNamespaces) || (has(self.targetNamespaces)
                 && self.targetNamespaces == oldSelf.targetNamespaces)'
+            - message: targetCluster is immutable once set
+              rule: '!has(oldSelf.targetCluster) || (has(self.targetCluster) && self.targetCluster
+                == oldSelf.targetCluster)'
             - message: analysisOutput is immutable once set
               rule: '!has(oldSelf.analysisOutput) || (has(self.analysisOutput) &&
                 self.analysisOutput == oldSelf.analysisOutput)'

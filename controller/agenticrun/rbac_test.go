@@ -1196,6 +1196,128 @@ func TestResolveReaderBindings_Cached(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// addReaderSubjectOnSpoke / removeReaderSubjectOnSpoke
+// ---------------------------------------------------------------------------
+
+func spokeReaderBindings() []*rbacv1.ClusterRoleBinding {
+	return []*rbacv1.ClusterRoleBinding{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-hub:cluster-reader"},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-reader"},
+			Subjects: []rbacv1.Subject{{
+				Kind: rbacv1.ServiceAccountKind, Name: "lightspeed-agent", Namespace: "openshift-lightspeed-managed",
+			}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-hub:cluster-monitoring-view"},
+			RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-monitoring-view"},
+			Subjects: []rbacv1.Subject{{
+				Kind: rbacv1.ServiceAccountKind, Name: "lightspeed-agent", Namespace: "openshift-lightspeed-managed",
+			}},
+		},
+	}
+}
+
+func TestAddReaderSubjectOnSpoke(t *testing.T) {
+	ctx := context.Background()
+	bindings := spokeReaderBindings()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
+
+	if err := addReaderSubjectOnSpoke(ctx, fc, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+		t.Fatalf("addReaderSubjectOnSpoke: %v", err)
+	}
+
+	// Verify both CRBs have the new subject.
+	for _, name := range spokeReaderBindingNames {
+		var crb rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		found := false
+		for _, s := range crb.Subjects {
+			if s.Name == "ls-anl-uid1" && s.Namespace == "openshift-lightspeed-managed" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("subject ls-anl-uid1 not added to spoke CRB %s", name)
+		}
+	}
+}
+
+func TestAddReaderSubjectOnSpoke_DoesNotPollutHubCache(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+
+	// Set up a hub client with hub CRBs.
+	hubFC := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding()).Build()
+	_, err := resolveReaderBindings(ctx, hubFC, "default")
+	if err != nil {
+		t.Fatalf("hub resolve: %v", err)
+	}
+	cachedBefore := readerBindings.Load().([]string)
+
+	// Set up a spoke client with spoke CRBs.
+	bindings := spokeReaderBindings()
+	spokeFC := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
+	if err := addReaderSubjectOnSpoke(ctx, spokeFC, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+		t.Fatalf("spoke add: %v", err)
+	}
+
+	// Verify hub cache was not changed.
+	cachedAfter := readerBindings.Load().([]string)
+	if len(cachedBefore) != len(cachedAfter) {
+		t.Fatalf("hub cache was modified: before=%v after=%v", cachedBefore, cachedAfter)
+	}
+	for i := range cachedBefore {
+		if cachedBefore[i] != cachedAfter[i] {
+			t.Fatalf("hub cache entry changed: %q → %q", cachedBefore[i], cachedAfter[i])
+		}
+	}
+}
+
+func TestRemoveReaderSubjectOnSpoke(t *testing.T) {
+	ctx := context.Background()
+	bindings := spokeReaderBindings()
+	// Pre-add the subject to both bindings.
+	for _, b := range bindings {
+		b.Subjects = append(b.Subjects, rbacv1.Subject{
+			Kind: rbacv1.ServiceAccountKind, Name: "ls-anl-uid1", Namespace: "openshift-lightspeed-managed",
+		})
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
+
+	if err := removeReaderSubjectOnSpoke(ctx, fc, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+		t.Fatalf("removeReaderSubjectOnSpoke: %v", err)
+	}
+
+	for _, name := range spokeReaderBindingNames {
+		var crb rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		for _, s := range crb.Subjects {
+			if s.Name == "ls-anl-uid1" {
+				t.Fatalf("subject ls-anl-uid1 should have been removed from %s", name)
+			}
+		}
+	}
+}
+
+func TestRemoveReaderSubjectOnSpoke_BindingGone(t *testing.T) {
+	ctx := context.Background()
+	// Only one of the two CRBs exists — the other was already deleted.
+	bindings := spokeReaderBindings()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0]).Build()
+
+	// Should not error — missing CRB is tolerated by removeSubjectFromBinding.
+	if err := removeReaderSubjectOnSpoke(ctx, fc, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+		t.Fatalf("expected no error when CRB is gone, got: %v", err)
+	}
+}
+
 func TestAddReaderSubject_ConflictRetryExhaustion(t *testing.T) {
 	ctx := context.Background()
 	resetReaderBindings()
