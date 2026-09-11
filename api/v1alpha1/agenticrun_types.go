@@ -285,6 +285,7 @@ func (s AgenticRunStep) IsZero() bool {
 //
 // +kubebuilder:validation:XValidation:rule="has(self.analysis)",message="analysis must be provided"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.targetNamespaces) || (has(self.targetNamespaces) && self.targetNamespaces == oldSelf.targetNamespaces)",message="targetNamespaces is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.targetCluster) || (has(self.targetCluster) && self.targetCluster == oldSelf.targetCluster)",message="targetCluster is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.analysisOutput) || (has(self.analysisOutput) && self.analysisOutput == oldSelf.analysisOutput)",message="analysisOutput is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(self.analysisOutput) || self.analysisOutput.mode != 'Minimal' || (!has(self.execution) && !has(self.verification))",message="analysisOutput mode Minimal is only allowed for analysis-only runs (no execution or verification steps)"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.tools) || (has(self.tools) && self.tools == oldSelf.tools)",message="tools is immutable once set"
@@ -324,6 +325,19 @@ type AgenticRunSpec struct {
 	// +kubebuilder:validation:items:MinLength=1
 	// +kubebuilder:validation:items:MaxLength=63
 	TargetNamespaces []string `json:"targetNamespaces,omitempty"`
+
+	// targetCluster optionally references a spoke cluster by name.
+	// When set, the operator creates ephemeral service accounts and
+	// RBAC on the spoke cluster via the standing kubeconfig Secret
+	// (spoke-kubeconfig-{targetCluster}). When empty, the run
+	// targets the local (hub) cluster.
+	//
+	// Immutable: RBAC scoping is fixed at creation.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=236
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="targetCluster must be a valid DNS subdomain"
+	TargetCluster string `json:"targetCluster,omitempty"`
 
 	// analysisOutput configures the analysis step's structured output.
 	// The mode field controls which built-in properties are included

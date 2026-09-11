@@ -39,6 +39,47 @@ func init() {
 	readerBindings.Store([]string(nil))
 }
 
+// Spoke reader CRB names — created by the hub operator's provisioner during
+// spoke registration (lightspeed-hub/internal/provisioner/spoke.go). Known
+// and stable, so we hardcode them instead of using the process-global
+// discovery cache (which is hub-only). If the hub operator renames these,
+// this must be updated to match.
+var spokeReaderBindingNames = []string{
+	"lightspeed-hub:cluster-reader",
+	"lightspeed-hub:cluster-monitoring-view",
+}
+
+// addReaderSubjectOnSpoke adds the SA to the known spoke reader
+// ClusterRoleBindings. Uses hardcoded CRB names (no global cache).
+func addReaderSubjectOnSpoke(ctx context.Context, spokeClient client.Client, saName, spokeNS string) error {
+	subject := rbacv1.Subject{
+		Kind:      rbacv1.ServiceAccountKind,
+		Name:      saName,
+		Namespace: spokeNS,
+	}
+	for _, name := range spokeReaderBindingNames {
+		if err := addSubjectToBinding(ctx, spokeClient, name, subject); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeReaderSubjectOnSpoke removes the SA from the known spoke reader
+// ClusterRoleBindings. Processes all bindings even if one fails (best-effort
+// cleanup). Uses hardcoded CRB names (no global cache).
+func removeReaderSubjectOnSpoke(ctx context.Context, spokeClient client.Client, saName, spokeNS string) error {
+	var firstErr error
+	for _, name := range spokeReaderBindingNames {
+		if err := removeSubjectFromBinding(ctx, spokeClient, name, saName, spokeNS); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
 // resolveReaderBindings returns all ClusterRoleBindings that list the
 // lightspeed-agent SA as a subject.  Results are discovered once and cached
 // for the lifetime of the process (CRBs are static infrastructure).

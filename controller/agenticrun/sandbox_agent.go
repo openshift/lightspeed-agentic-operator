@@ -221,10 +221,23 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 	// failed (no claim name), Release("execution") was skipped above. Clean up
 	// the RBAC unconditionally to prevent leaks.
 	if !executionReleased && len(annotatedRBACNamespaces(run)) > 0 {
-		if err := cleanupExecutionRBAC(ctx, s.K8sClient, run); err != nil {
-			log.Error(err, "failed to clean up orphaned execution RBAC")
-			if firstErr == nil {
-				firstErr = err
+		// Execution RBAC lives on spoke when targetCluster is set.
+		spoke, spokeErr := spokeAccessForRun(ctx, s.K8sClient, run, s.Namespace)
+		if spokeErr != nil {
+			log.Error(spokeErr, "orphaned RBAC cleanup: spoke unreachable")
+		} else if spoke != nil {
+			if err := cleanupExecutionRBAC(ctx, spoke.Client, run); err != nil {
+				log.Error(err, "failed to clean up orphaned spoke execution RBAC")
+				if firstErr == nil {
+					firstErr = err
+				}
+			}
+		} else {
+			if err := cleanupExecutionRBAC(ctx, s.K8sClient, run); err != nil {
+				log.Error(err, "failed to clean up orphaned execution RBAC")
+				if firstErr == nil {
+					firstErr = err
+				}
 			}
 		}
 	}

@@ -308,8 +308,18 @@ func (r *AgenticRunReconciler) handleFailed(
 	log.Info("handling system failure (terminal)")
 
 	if run.Annotations[rbacNamespacesAnnotation] != "" {
-		if err := cleanupExecutionRBAC(ctx, r.Client, run); err != nil {
-			log.Error(err, "RBAC cleanup on failure")
+		// Execution RBAC lives on spoke when targetCluster is set.
+		spoke, spokeErr := spokeAccessForRun(ctx, r.Client, run, r.Namespace)
+		if spokeErr != nil {
+			log.Error(spokeErr, "RBAC cleanup: spoke unreachable")
+		} else if spoke != nil {
+			if err := cleanupExecutionRBAC(ctx, spoke.Client, run); err != nil {
+				log.Error(err, "spoke RBAC cleanup on failure")
+			}
+		} else {
+			if err := cleanupExecutionRBAC(ctx, r.Client, run); err != nil {
+				log.Error(err, "RBAC cleanup on failure")
+			}
 		}
 	}
 	return ctrl.Result{}, nil
