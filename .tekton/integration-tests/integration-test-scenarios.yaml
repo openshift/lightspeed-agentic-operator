@@ -13,8 +13,6 @@ kind: IntegrationTestScenario
 metadata:
   name: agentic-operator-e2e-tests
   namespace: crt-nshift-lightspeed-tenant
-  labels:
-    test.appstudio.openshift.io/optional: "true"
 spec:
   application: ols
   contexts:
@@ -28,7 +26,7 @@ spec:
     - name: sandbox-mode
       value: bare-pod
     - name: openshift-version-prefix
-      value: "4.19."
+      value: "4.22."
   resolverRef:
     resolver: git
     resourceKind: pipeline
@@ -45,8 +43,6 @@ kind: IntegrationTestScenario
 metadata:
   name: agentic-operator-e2e-sandbox-claim
   namespace: crt-nshift-lightspeed-tenant
-  labels:
-    test.appstudio.openshift.io/optional: "true"
 spec:
   application: ols
   contexts:
@@ -60,7 +56,7 @@ spec:
     - name: sandbox-mode
       value: sandbox-claim
     - name: openshift-version-prefix
-      value: "4.19."
+      value: "4.22."
   resolverRef:
     resolver: git
     resourceKind: pipeline

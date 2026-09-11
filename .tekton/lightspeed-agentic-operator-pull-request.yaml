@@ -12,7 +12,8 @@ metadata:
       == "main" && ("Dockerfile".pathChanged() || "go.mod".pathChanged() || "go.sum".pathChanged()
       || "api/**".pathChanged() || "cmd/**".pathChanged() || "controller/**".pathChanged()
       || "test/**".pathChanged() || "LICENSE".pathChanged()
-      || ".tekton/lightspeed-agentic-operator-pull-request.yaml".pathChanged())
+      || ".tekton/lightspeed-agentic-operator-pull-request.yaml".pathChanged()
+      || ".tekton/integration-tests/**".pathChanged())
   labels:
     appstudio.openshift.io/application: ols
     appstudio.openshift.io/component: lightspeed-agentic-operator

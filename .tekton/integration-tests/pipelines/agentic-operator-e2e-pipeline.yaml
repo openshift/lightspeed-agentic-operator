@@ -26,8 +26,8 @@ spec:
       default: 'bare-pod'
       type: string
     - name: openshift-version-prefix
-      description: 'Minor line prefix for eaas-get-latest-openshift-version-by-prefix (include trailing dot, e.g. 4.19.)'
-      default: '4.19.'
+      description: 'Minor line prefix for eaas-get-latest-openshift-version-by-prefix (include trailing dot, e.g. 4.22.)'
+      default: '4.22.'
       type: string
   tasks:
     - name: eaas-provision-space
