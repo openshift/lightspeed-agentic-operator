@@ -219,6 +219,24 @@ func newResultCR(step string, tmplRaw []byte) client.Object {
 	}
 }
 
+// mockTokenUsage returns deterministic values for the operator E2E tests.
+// These values model non-zero usage from a sandbox without depending on an LLM.
+func mockTokenUsage(step string) agenticv1alpha1.TokenUsage {
+	var input, output int64
+	switch step {
+	case "analysis":
+		input, output = 100, 200
+	case "execution":
+		input, output = 110, 210
+	case "verification":
+		input, output = 120, 220
+	case "escalation":
+		input, output = 130, 230
+	}
+	return agenticv1alpha1.TokenUsage{InputTokens: &input, OutputTokens: &output}
+}
+
+// setStatus fills a Result CR with the canned outcome for its workflow step.
 func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 	now := metav1.Now()
 	completed := []metav1.Condition{{
@@ -230,6 +248,7 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 
 	switch cr := obj.(type) {
 	case *agenticv1alpha1.AnalysisResult:
+		cr.Status.TokenUsage = mockTokenUsage("analysis")
 		cr.Status.Conditions = completed
 		cr.Status.ActionRequired = agenticv1alpha1.ActionRequiredTrue
 		cr.Status.Diagnosis = agenticv1alpha1.DiagnosisResult{
@@ -277,6 +296,7 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 		}}
 
 	case *agenticv1alpha1.ExecutionResult:
+		cr.Status.TokenUsage = mockTokenUsage("execution")
 		cr.Status.Conditions = completed
 		cr.Status.ActionsTaken = []agenticv1alpha1.ExecutionAction{{
 			Type:        "mock",
@@ -285,6 +305,7 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 		}}
 
 	case *agenticv1alpha1.VerificationResult:
+		cr.Status.TokenUsage = mockTokenUsage("verification")
 		if verifyFail {
 			// Objective verification failure (OLS-3817): the agent ran and
 			// reports the remediation did not work. Signal it via the
@@ -314,6 +335,7 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 		cr.Status.Summary = "mock verification summary"
 
 	case *agenticv1alpha1.EscalationResult:
+		cr.Status.TokenUsage = mockTokenUsage("escalation")
 		cr.Status.Conditions = completed
 		cr.Status.Summary = "mock escalation summary"
 		cr.Status.Content = "mock escalation content"
