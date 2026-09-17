@@ -45,11 +45,13 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 
     | CRD `spec.type` | `LIGHTSPEED_PROVIDER` value |
     |---|---|
-    | `anthropic` | `anthropic` |
-    | `googleCloudVertex` | `vertex` |
-    | `openAI` | `openai` |
-    | `azureOpenAI` | `azure` |
-    | `awsBedrock` | `bedrock` |
+    | `Anthropic` | `anthropic` |
+    | `GoogleCloudVertex` | `vertex` |
+    | `OpenAI` | `openai` |
+    | `AzureOpenAI` | `azure` |
+    | `AWSBedrock` | `bedrock` |
+
+16b. [PLANNED: OLS-3472] **Gemma 4 / RHOAI mapping**: For a Gemma 4 `Agent` referencing an `LLMProvider` with `spec.type=OpenAI`, `PodSpecBuilder` MUST use the existing mapping from rule 16a: set `LIGHTSPEED_PROVIDER=openai`, pass `Agent.spec.model` unchanged as `LIGHTSPEED_MODEL`, and pass the provider's cluster-internal vLLM OpenAI API root (ending in `/v1`) as `LIGHTSPEED_PROVIDER_URL`. Credentials continue through the existing Secret mounts from rule 16. The operator MUST NOT add Gemma-specific sandbox environment variables.
 17. **Secrets — MCP headers**: When an MCP header sources a Secret, the template MUST mount that secret on a dedicated read-only path suitable for header injection configuration.
 18. **Skills volumes**: Skills MUST be conveyed as OCI image volume(s) on the sandbox pod template; when `SkillsSource.paths` is set, the controller MUST mount each path as a `subPath` under the configured skills mount root using stable mount naming derived from the path’s final segment. When multiple `skills` entries exist in `ToolsSpec`, template derivation MUST apply image/path patching based on the **first** non-empty skills source (current behavior).
 19. **MCP servers**: MCP configuration from the effective `ToolsSpec.mcpServers` MUST be serialized to an environment variable payload (`LIGHTSPEED_MCP_SERVERS`) listing servers, URLs, timeouts, and header sources so the agent runtime can open MCP connections without CR-specific code in the agent. Only explicitly declared `mcpServers` are wired today — there is no default OpenShift MCP auto-injection.
@@ -152,3 +154,4 @@ Behavioral specification for how workflow steps run inside ephemeral **sandboxes
 - [PLANNED: OLS-3743] Layer Agent-configured cooperative execution budgets under fixed operator sandbox startup and hard running deadlines; wire `maxTurns`; distinguish timeout sources in status.
 - [PLANNED: OLS-3298, OLS-4018] Shared hard-stop cleanup: zero-grace Pod deletion, SandboxClaim/backing-workload deletion, sandbox access revocation, dual resource discovery, idempotency, and retries after terminal status. See `agentic-run-termination.md`.
 - [DONE: OLS-4070] Dual-mode pod handler — `pod_handler.go` handles both bare-pod and sandbox-claim modes via a single `handlePodEvent` watcher. Bare-pod mode reads labels directly (`resolveBarePodMetadata`); sandbox-claim mode resolves Pod → Sandbox → SandboxClaim ownerRef chain (`resolveSandboxPodMetadata`). Both paths feed into `completeStep`. `timeout_handler.go` provides a mode-dispatching timeout loop with `listBarePods` / `listSandboxPods` helpers. See rules 9, 33, 33a, 40.
+- [PLANNED: OLS-3472] Exercise the existing `OpenAI` CRD discriminator → `LIGHTSPEED_PROVIDER=openai` mapping with Gemma 4 on an internal RHOAI/vLLM endpoint in disconnected product-e2e. See `../how/disconnected-product-e2e.md`.
