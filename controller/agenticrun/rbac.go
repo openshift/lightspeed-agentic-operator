@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,7 @@ import (
 )
 
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;delete;get
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get
 
 const (
 	rbacNamespacesAnnotation = "agentic.openshift.io/rbac-namespaces"
@@ -272,6 +274,8 @@ func ensureExecutionRBAC(
 		Namespace: operatorNS,
 	}}
 
+	clusterRules := rbacRulesToPolicyRules(rbacResult.ClusterScoped)
+
 	if len(rbacResult.NamespaceScoped) > 0 {
 		nsRules := rbacRulesToPolicyRules(rbacResult.NamespaceScoped)
 		targetNS := rbacTargetNamespaces(run, rbacResult)
@@ -283,28 +287,36 @@ func ensureExecutionRBAC(
 			run.Annotations[rbacNamespacesAnnotation] = strings.Join(targetNS, ",")
 		}
 
+		liftNSRules := false
 		for _, ns := range targetNS {
-			role := &rbacv1.Role{
-				ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns, Labels: labels},
-				Rules:      nsRules,
+			terminating, err := namespaceIsTerminating(ctx, c, ns)
+			if err != nil {
+				return err
 			}
-			if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("%s %s: %w", ErrCreateRole, ns, err)
+			if terminating {
+				logf.FromContext(ctx).Info("skipping Role create in Terminating namespace; lifting rules to ClusterRole",
+					"namespace", ns, "run", run.Name)
+				liftNSRules = true
+				continue
 			}
-			binding := &rbacv1.RoleBinding{
-				ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns, Labels: labels},
-				RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: roleName},
-				Subjects:   subjects,
+
+			if err := createExecutionRoleInNamespace(ctx, c, ns, roleName, labels, nsRules, subjects); err != nil {
+				if isNamespaceTerminatingCreateError(err) {
+					logf.FromContext(ctx).Info("Role create forbidden because namespace is terminating; lifting rules to ClusterRole",
+						"namespace", ns, "run", run.Name)
+					liftNSRules = true
+					continue
+				}
+				return err
 			}
-			if err := c.Create(ctx, binding); err != nil && !apierrors.IsAlreadyExists(err) {
-				return fmt.Errorf("%s %s: %w", ErrCreateRoleBinding, ns, err)
-			}
+		}
+		if liftNSRules {
+			clusterRules = append(clusterRules, nsRules...)
 		}
 	}
 
-	if len(rbacResult.ClusterScoped) > 0 {
+	if len(clusterRules) > 0 {
 		crName := clusterRoleName(string(run.UID))
-		clusterRules := rbacRulesToPolicyRules(rbacResult.ClusterScoped)
 		cr := &rbacv1.ClusterRole{
 			ObjectMeta: metav1.ObjectMeta{Name: crName, Labels: labels},
 			Rules:      clusterRules,
@@ -323,6 +335,58 @@ func ensureExecutionRBAC(
 	}
 
 	return nil
+}
+
+func createExecutionRoleInNamespace(
+	ctx context.Context,
+	c client.Client,
+	ns, roleName string,
+	labels map[string]string,
+	rules []rbacv1.PolicyRule,
+	subjects []rbacv1.Subject,
+) error {
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns, Labels: labels},
+		Rules:      rules,
+	}
+	if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("%s %s: %w", ErrCreateRole, ns, err)
+	}
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: roleName, Namespace: ns, Labels: labels},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: roleName},
+		Subjects:   subjects,
+	}
+	if err := c.Create(ctx, binding); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("%s %s: %w", ErrCreateRoleBinding, ns, err)
+	}
+	return nil
+}
+
+// namespaceIsTerminating reports whether ns is gone from the live object
+// graph or is already terminating. NotFound and Forbidden (missing get
+// permission) return false so callers can still attempt Role creation and
+// recover from the API's terminating-namespace 403.
+func namespaceIsTerminating(ctx context.Context, c client.Client, ns string) (bool, error) {
+	obj := &corev1.Namespace{}
+	err := c.Get(ctx, client.ObjectKey{Name: ns}, obj)
+	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("get namespace %s: %w", ns, err)
+	}
+	if obj.DeletionTimestamp != nil && !obj.DeletionTimestamp.IsZero() {
+		return true, nil
+	}
+	return obj.Status.Phase == corev1.NamespaceTerminating, nil
+}
+
+func isNamespaceTerminatingCreateError(err error) bool {
+	if err == nil || !apierrors.IsForbidden(err) {
+		return false
+	}
+	return strings.Contains(err.Error(), "because it is being terminated")
 }
 
 // cleanupExecutionRBAC removes all RBAC resources and the per-run SA created for
