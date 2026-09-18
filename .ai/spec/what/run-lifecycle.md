@@ -1,6 +1,6 @@
 # Run lifecycle (state machine)
 
-Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gates, sandbox calls, and RBAC** are defined in `approval.md` and `sandbox-execution.md`. **Field semantics** are in `crd-api.md`.
+Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gates, batch sandbox execution, and RBAC** are defined in `approval.md` and `sandbox-execution.md`. **Field semantics** are in `crd-api.md`. **OLS-3569 producer hooks** are defined in `data-collection.md`; shared event semantics are authoritative in `ols/.ai/spec/what/agentic-data-collection.md`.
 
 ## Behavioral Rules
 
@@ -62,6 +62,8 @@ Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gat
 22. **Selected option for verification**: Verification MUST use the same selected remediation option as execution (latest trimmed analysis result).
 23. **Terminal-run TTL / auto-deletion**: On every reconcile of a terminal run (rule 4), the controller MUST: (a) stamp `status.terminalTime` once, the first time the run is observed terminal (this stamping is unconditional and independent of whether any cluster TTL config exists); (b) if `spec.ttlAfterTerminal` is unset, stamp it from `AgenticOLSConfig.spec.lifecycle.terminalTTL` when that cluster default exists (never overwriting a pre-set value) — when no cluster default exists, no default is stamped, but this does NOT suppress deletion of a run whose `ttlAfterTerminal` was already pre-set independently of the cluster config; (c) once `spec.ttlAfterTerminal` is a non-zero value, however it got set, delete the `AgenticRun` once `status.terminalTime + ttlAfterTerminal` has elapsed (Kubernetes GC cascades to owned resources), otherwise re-queue for the remaining duration. `ttlAfterTerminal == 0` explicitly disables auto-deletion for that run. When no TTL is ever configured (no cluster default and no per-run override), the run is never auto-deleted. The `AgenticOLSConfig`/`ApprovalPolicy`/watched-`ConfigMap` fan-out MUST re-enqueue terminal runs still missing `status.terminalTime` (unconditional), and MUST re-enqueue terminal runs missing `spec.ttlAfterTerminal` only when an effective cluster-wide TTL is currently configured — never when no cluster default exists, since there would be nothing to stamp and re-enqueuing every such run on every config-adjacent change would be pure churn. When a terminal run re-enters revision (rule 6), the revision handler MUST clear `status.terminalTime` so a later terminal phase gets a fresh timestamp rather than computing TTL expiry off the earlier terminal event. See `crd-api.md` rules 6a, 6b, 48.
 24. **TTL stamping MUST NOT desynchronize revision detection**: Stamping `spec.ttlAfterTerminal` (rule 23b) is a spec write and therefore advances `metadata.generation` like any other spec mutation. Because rule 6 (generation vs. `Analyzed.observedGeneration`) does not distinguish which spec field changed, the controller MUST advance `Analyzed.observedGeneration` to the post-stamp `metadata.generation` in the same operation, so this internal, non-user-initiated generation bump can never be misread as a new revision request (which would otherwise be possible via stale, previously-processed `spec.revisionFeedback`, since that field is never cleared — see rule 6).
+25. [PLANNED: OLS-3569] **Lifecycle trace coverage**: The operator MUST invoke the producer hooks in `data-collection.md` for run receipt, every entered phase, every observed completed Result CR, every applied human approval or denial, and terminal observation. Terminal coverage MUST include every outcome in rule 4, including `Completed` with condition reason `NoActionRequired`; cancellation remains `Failed` with reason `CancelledByUser`.
+26. [PLANNED: OLS-3569] **Raw status and duration evidence**: Phase spans MUST retain native start/end timestamps and OTel status. Result and terminal events MUST emit the source CR conditions, statuses, reasons, action or check outcomes, failures, and timestamps required by the parent event contract. The operator MUST emit source evidence without joining attempts or calculating lifecycle aggregates.
 
 ## Configuration Surface
 
@@ -75,6 +77,7 @@ Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gat
 - `status.conditions[*].type`, `status.conditions[*].status`, `status.conditions[*].reason`, `status.conditions[*].observedGeneration`
 - `status.steps.*.results`, `status.steps.*.sandbox`
 - `spec.ttlAfterTerminal`, `status.terminalTime` (terminal-run auto-deletion, rules 23–24)
+- [PLANNED: OLS-3569] Shared Collector connectivity is consumed through the existing `lightspeed-agentic-configuration` handoff; collection state is not part of this lifecycle configuration.
 
 ## Constraints
 
@@ -95,3 +98,4 @@ Behavioral specification for the `AgenticRun` resource lifecycle. **Approval gat
 - [PLANNED: OLS-3743] Distinguish cooperative agent timeout, sandbox startup timeout, and hard sandbox runtime timeout; all are terminal without automatic retries.
 - [PLANNED: OLS-3298] Per-run cancellation produces `Failed / CancelledByUser`, blocks later stages, and uses the shared hard-stop cleanup contract.
 - [PLANNED: OLS-4018] Global suspension hard-stops active managed sandbox workloads and takes precedence over an unreconciled per-run cancellation.
+- [PLANNED: OLS-3569] Emit the lifecycle producer hooks in rules 25–26 through the existing operator trace path without changing compliance or templog behavior.

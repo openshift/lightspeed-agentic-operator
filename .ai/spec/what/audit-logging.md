@@ -1,6 +1,6 @@
 # Audit Logging
 
-Implementation spec for compliance audit logging in the agentic operator. Parent spec: `ols/.ai/spec/what/audit-logging.md` (authoritative for cross-repo requirements, event semantics, correlation contract, and OTel GenAI attribute reference).
+Implementation spec for compliance audit logging and lifecycle trace production in the agentic operator. Parent spec: `ols/.ai/spec/what/audit-logging.md` (authoritative for cross-repo event semantics, correlation, and OTel GenAI attributes). Product collection semantics are authoritative in `ols/.ai/spec/what/agentic-data-collection.md`.
 
 ## Behavioral Rules
 
@@ -10,123 +10,87 @@ Implementation spec for compliance audit logging in the agentic operator. Parent
 
 2. Phase trace root spans MUST use the following names, all with span kind `INTERNAL`:
    - `agenticrun.analyze` — analysis phase
-   - `agenticrun.human_approval` — approval phase (short-lived: just the approval event, not the wait time)
+   - `agenticrun.human_approval` — approval observation, not the human wait interval
    - `agenticrun.execute` — execution phase
    - `agenticrun.verify` — verification phase
    - `agenticrun.escalate` — escalation phase
-   - `agenticrun.terminal` — terminal phase (Completed, Failed, Denied, Escalated, EmergencyStopped)
+   - `agenticrun.terminal` — terminal observation for `Completed`, `Failed`, `Denied`, `Escalated`, or `EmergencyStopped`; [PLANNED: OLS-3569] coverage MUST include `Completed` with reason `NoActionRequired`
 
-3. Every span in every phase trace MUST carry these span attributes:
-   - `agenticrun.uid` — the AgenticRun CR's `metadata.uid` with hyphens stripped to produce a 32-char hex string. This is the cross-trace correlation key. `agenticrun.uid` is a span attribute, not the trace ID.
-   - `agenticrun.name` — the AgenticRun CR's `metadata.name`.
-   - `agenticrun.namespace` — the AgenticRun CR's `metadata.namespace`.
+3. Every span in every phase trace MUST carry `agenticrun.uid`, `agenticrun.phase`, `agenticrun.name`, and `agenticrun.namespace` as span attributes. `agenticrun.uid` and `agenticrun.phase` MUST satisfy the canonical values and span-level placement defined by the parent data-collection contract; resource attributes are not a fallback.
 
-4. Phase root spans that call the sandbox SHOULD carry `gen_ai.request.model` and `gen_ai.provider.name` as span attributes where the operator knows the model/provider being sent to the sandbox.
+4. Phase root spans that create a batch sandbox SHOULD carry `gen_ai.request.model` and `gen_ai.provider.name` where the operator knows the model and provider.
 
-### Span Links
+### Span Links and Restart
 
-5. Each phase trace's root span MUST include an OTel Span Link back to the prior phase's root span. This gives trace UIs a "click to see previous phase" affordance. The first phase trace (analysis) has no prior link.
+5. Each phase trace's root span MUST include an OTel Span Link to the prior phase's root span when that context is available. The analysis phase has no prior link.
 
-6. On operator restart, the operator MUST be able to resume producing traces for an in-progress AgenticRun. Since each phase gets a fresh trace ID, the operator does not need to reconstruct a prior trace ID. It reads `agenticrun.uid` from the CR's `metadata.uid` for the correlation attribute and creates the next phase trace normally. [DEFERRED: needs Jira] Span Links to prior phases require persisting the prior phase's span context (trace ID + span ID) on the AgenticRun's status or annotations; currently the in-memory `priorPhase` map is lost on restart, breaking span link continuity but not `agenticrun.uid` correlation.
+6. On operator restart, the operator MUST resume trace production for an in-progress AgenticRun using the CR's literal `metadata.uid`. A new phase gets a fresh trace ID. [DEFERRED: needs Jira] Persisting the prior phase span context for link continuity remains deferred; loss of that link MUST NOT change UID correlation.
 
-### CR Serialization as Span Events
+### Lifecycle Event Production
 
-8. The operator MUST emit the following span events attached to the corresponding phase root spans. Each span event records a CR serialization using a split model:
-   - **Key fields as span event attributes** (queryable): `result.name`, `result.uid`, `options.count`, `actions_taken.count`, `checks.count`, `phase`, `reason`.
-   - **Full CR serialization as a span event attribute** (viewable, full fidelity): complete `.spec` + `.status` + select metadata as a single attribute value.
+7. [PLANNED: OLS-3569] The operator MUST emit the parent-defined lifecycle event catalog from its local producer hooks: run receipt and completed Result CRs from reconciliation, authenticated approval or denial from the webhook, and terminal state from terminal reconciliation. The parent specs own event names and required fields; this file owns the producer locations and timing.
 
-   | Span Event Name | Parent Span | When | Key Attributes |
-   |---|---|---|---|
-   | `agenticrun.received` | `agenticrun.analyze` | New AgenticRun CR detected (finalizer added) | Full AgenticRun CR serialization |
-   | `agenticrun.analysis.completed` | `agenticrun.analyze` | AnalysisResult CR created | `result.name`, `result.uid`, `options.count` + full AnalysisResult CR serialization |
-   | `agenticrun.approval.completed` | `agenticrun.human_approval` | AgenticRunApproval PATCH observed by webhook | `approver.uid`, `approver.username`, selected option, full text of selected option |
-   | `agenticrun.execution.completed` | `agenticrun.execute` | ExecutionResult CR created | `result.name`, `result.uid`, `actions_taken.count` + full ExecutionResult CR serialization |
-   | `agenticrun.verification.completed` | `agenticrun.verify` | VerificationResult CR created | `result.name`, `result.uid`, `checks.count` + full VerificationResult CR serialization |
-   | `agenticrun.escalation.completed` | `agenticrun.escalate` | EscalationResult CR created | Full EscalationResult CR serialization |
-   | `agenticrun.terminal` | `agenticrun.terminal` | AgenticRun reaches terminal phase | `phase`, `reason` |
+8. All operator spans MUST use span kind `INTERNAL`. The operator orchestrates Kubernetes workflow resources; the batch sandbox creates the LLM `CLIENT` spans.
 
-9. CR serialization MUST include `.spec` plus `metadata.name`, `metadata.namespace`, `metadata.creationTimestamp`, and `metadata.uid`. Not the full Kubernetes metadata. Result CRs (AnalysisResult, ExecutionResult, VerificationResult, EscalationResult) MUST also include `.status` since the useful data (RemediationOptions, ActionsTaken, Checks, etc.) lives in status.
+### Batch Sandbox Trace Propagation
 
-### Span Kinds
+9. For analysis, execution, verification, and escalation, the operator MUST create the input ConfigMap and then inject telemetry into the generated Pod or SandboxTemplate. When the shared OTLP connection is configured, the container MUST receive:
+   - `OTEL_EXPORTER_OTLP_ENDPOINT` from `lightspeed-agentic-configuration.data.otel-collector-endpoint`
+   - `OTEL_EXPORTER_OTLP_CERTIFICATE` set to `/etc/certs/otel-collector-ca/service-ca.crt` from the mounted Secret named by `otel-ca-secret`
+   - `LIGHTSPEED_AGENTICRUN_UID` with the literal AgenticRun UID
+   - `LIGHTSPEED_AGENTICRUN_STEP` with the current phase
+   - `TRACEPARENT` from the active phase span
 
-10. All operator spans MUST use span kind `INTERNAL`. The operator performs Kubernetes workflow orchestration; it does not make external LLM API calls. The sandbox makes the LLM calls and creates `CLIENT` spans for those.
+10. The operator MUST NOT construct an HTTP sandbox request or use HTTP for trace-context propagation. If tracing is active after a resumed reconciliation, the operator MUST establish the current phase span before Pod creation. If no valid span context exists because tracing is inactive, it MUST omit `TRACEPARENT`; telemetry failure MUST NOT block the batch ConfigMap/Pod/Result CR workflow.
 
-### Trace Propagation
+### Exporter Fan-Out
 
-11. The operator MUST propagate trace context to batch sandbox pods via the W3C `TRACEPARENT` environment variable on the container. The value is the active phase span from `BeginStep` at pod creation time. The trace ID is the auto-generated trace ID for the current phase trace (not the AgenticRun UID). When no valid span is in context, the operator MUST omit `TRACEPARENT` (sandbox graceful degradation).
+11. [PLANNED: OLS-3569] Product data collection MUST reuse the operator spans and span events above rather than add another application emission. Shared event, correlation, fidelity, and collection-boundary semantics are defined only by the parent data-collection contract and the local producer additions in `data-collection.md`.
 
-### Structured Log Format — OTel JSON via Stdout Exporter
+12. The operator MUST fan each single span/event emission to the independently configured destinations:
+    - **Compliance stdout exporter** — serializes spans as OTLP JSON while compliance audit is enabled.
+    - **Configured compliance OTLP exporter** — sends traces to `spec.audit.otel.endpoint` while compliance audit is enabled and an endpoint exists.
+    - **Shared Collector OTLP exporter** — sends traces through the existing handoff connection, independent of `spec.audit.enabled`.
 
-12. The operator MUST configure two exporters on its TracerProvider:
-    - **Stdout exporter** — serializes spans as OTLP JSON to stdout. Active when audit is enabled (`spec.audit.enabled` is `true` or absent — see rules 24–25). When `spec.audit.enabled` is `false`, the stdout exporter produces no output. This is the compliance record. The stdout exporter MUST NOT truncate span attributes or event attributes.
-    - **OTLP exporter** — sends spans to the in-cluster Collector via OTLP gRPC. Configured from the `lightspeed-otel-collector-client` ConfigMap (managed by lightspeed-operator). Uses a no-op exporter when the ConfigMap is not yet available.
+13. Exporter fan-out creates destination copies of one emission, not separate application emissions. Each datum MUST be recorded exactly once as an OTel span or span event.
 
-13. The single-emission rule MUST be followed: each audit-significant datum is recorded exactly once, as an OTel span or span event. The stdout and OTLP exporters are two destinations for the same emission, not two separate emission paths. Application-level loggers (Go `logr`) MUST emit only developer-debugging messages and MUST NOT re-emit data that appears in spans or span events.
-
-14. The operator MUST NOT emit custom structured JSON audit events to stdout via the application logger. All audit data flows through OTel spans and span events. The stdout exporter produces the structured JSON output (OTLP JSON format) automatically.
+14. Application loggers MUST emit only developer-debugging messages and MUST NOT duplicate span or span-event data. The operator MUST NOT emit a second custom JSON audit event through the application logger.
 
 ### Reconcile Loop Emission
 
-15. All span events listed in section 8 MUST be emitted from the reconciliation loop where the operator already has the AgenticRun object in scope. The `agenticrun.uid` is read from the AgenticRun's `metadata.uid`. (`agenticrun.approval.completed` is webhook-emitted as defined below.) Terminal phase handling (terminal span + span event) MUST run before the suspension guard so that EmergencyStopped runs receive audit cleanup even while the system is suspended.
+15. Reconcile-produced lifecycle events MUST be emitted where the operator has the AgenticRun or completed Result CR in scope. Terminal span/event handling MUST run before the suspension guard so `EmergencyStopped` runs receive terminal telemetry while the system is suspended.
 
-### Human Approval Trace
-
-16. The `agenticrun.human_approval` trace is short-lived: it records just the approval event, not the wait time. Human decision-time duration is derived from timestamps between the `agenticrun.analysis.completed` event (on the analysis trace) and the `agenticrun.approval.completed` event (on the approval trace).
+16. The `agenticrun.human_approval` trace is short-lived and records only the observed decision. The operator MUST NOT keep a span open during the human wait.
 
 ### Mutating Admission Webhook
 
 17. The operator MUST host a MutatingAdmissionWebhook for `PATCH` operations on `agenticrunapprovals.agentic.openshift.io/v1alpha1`.
 
-18. The webhook MUST read `request.userInfo.username` and `request.userInfo.uid` from the AdmissionReview and write them into `spec.approver.uid`, `spec.approver.username`, and `spec.approver.timestamp` (server-side `time.Now()`) on the CR, overwriting any client-submitted values.
+18. The webhook MUST read `request.userInfo.username` and `request.userInfo.uid` from the AdmissionReview and write them into `spec.approver.uid`, `spec.approver.username`, and `spec.approver.timestamp` using server time, overwriting client-submitted values.
 
-19. The webhook MUST emit the `agenticrun.approval.completed` span event with user identity attributes (`approver.uid`, `approver.username`) on the `agenticrun.human_approval` phase trace's root span. The `agenticrun.uid` is read from the CR's owner reference UID field.
+19. The webhook MUST emit the parent-defined approval event on the `agenticrun.human_approval` root span with authenticated identity and the decision and selection actually applied. It MUST read `agenticrun.uid` from the AgenticRun owner reference.
 
-20. The webhook MUST be fail-closed — if the webhook is unavailable, the API server rejects the PATCH.
+20. The webhook MUST fail closed: if it is unavailable, the API server rejects the PATCH.
 
-21. The webhook runs in the same controller-manager process — same binary, same OTel TracerProvider, same exporters.
+21. The webhook MUST run in the controller-manager process and use the same OTel TracerProvider and exporters as reconciliation.
 
-### CRD Changes
+### CRD and Configuration
 
-22. The AgenticRunApproval CRD MUST add `spec.approver` with fields:
-    - `uid` (string) — from `userInfo.uid`, webhook-authoritative
-    - `username` (string) — from `userInfo.username`, webhook-authoritative
-    - `timestamp` (string, RFC3339) — server-side `time.Now()`, webhook-authoritative
+22. The AgenticRunApproval CRD MUST define `spec.approver.uid`, `spec.approver.username`, and RFC3339 `spec.approver.timestamp` as webhook-authoritative strings.
 
-### Configuration
+23. [PLANNED -- spec.audit field not yet in AgenticOLSConfig CRD; see crd-api.md] The operator reads compliance audit configuration from `AgenticOLSConfig.spec.audit`. `spec.audit.enabled` defaults to `true` and gates the compliance stdout and configured compliance OTLP destinations. [PLANNED: OLS-3569] It MUST NOT gate instrumentation or trace export through the shared Collector connection. Templog behavior remains defined only in `templog.md`.
 
-23. [PLANNED -- spec.audit field not yet in AgenticOLSConfig CRD; see crd-api.md] The operator reads audit config from the `AgenticOLSConfig` CR at `spec.audit`.
+24. When compliance audit is enabled, the stdout exporter emits OTLP JSON; when disabled, it emits no compliance output. The configured compliance OTLP endpoint is `AgenticOLSConfig.spec.audit.otel.endpoint`.
 
-24. [PLANNED -- spec.audit field not yet in AgenticOLSConfig CRD; see crd-api.md] `spec.audit.enabled` controls whether audit emission is active. Defaults to `true` — when the CR is absent or the field is not set, audit is enabled. Set to `false` to disable all audit emission (both stdout and OTLP exporters).
-
-25. When audit is enabled (`spec.audit.enabled` is `true` or absent), the stdout exporter always emits OTLP JSON to stdout. When `spec.audit.enabled` is `false`, the stdout exporter produces no output. This is what any log aggregator (Loki, Splunk, Fluentd, etc.) reads from container logs.
-
-26. The OTLP exporter endpoint is sourced from the `lightspeed-otel-collector-client` ConfigMap (field `collector-endpoint`). The operator blocks at startup until this ConfigMap exists (5 min timeout, fatal on expiry). Runtime changes to the ConfigMap reconfigure the exporter without restart. The OTLP exporter is additive — it provides distributed tracing and log persistence alongside the stdout compliance record.
-
-27. The operator MUST pass the OTEL endpoint to the sandbox via environment variable or config mount so the sandbox can configure its own exporters.
-
-### OTLP Log Emission (Templog)
-
-28. When the OTLP log endpoint environment variable is set (wired by the lightspeed-operator when `spec.templog` is enabled), the operator MUST also emit audit span data as OTLP log records to that endpoint. This is in addition to the stdout and OTLP trace exporters.
-
-29. Each OTLP log record MUST carry: `agenticrun.uid` as a log record attribute (raw Kubernetes `metadata.uid` with hyphens — collector normalizes to 32-char hex for the `agentic_run_id` column), `agenticrun.phase` as a log record attribute (the current audit phase: `analysis`, `approval`, `execution`, `verification`, `escalation`, `terminal`), and the span event data as the log record body. The OTel log record's native `TraceID` field carries the per-phase trace ID and is not used by the collector for templog column mapping.
-
-30. OTLP logs and traces share the same Collector endpoint (from ConfigMap). Both are active when the Collector is configured and audit is enabled (`spec.audit.enabled` is `true` or absent). When `spec.audit.enabled` is `false`, neither OTLP traces nor OTLP log records are emitted.
-
-31. When the OTLP log endpoint is absent, no OTLP log records are emitted. No error, no warning — graceful degradation.
-
-### Templog Finalizer
-
-32. When a new AgenticRun CR is created and templog is enabled (read from an environment variable set by the lightspeed-operator), the operator MUST add the finalizer `agentic.openshift.io/templog-cleanup` to the AgenticRun. Both RBAC and templog finalizers are processed in a **single reconcile pass** on deletion (RBAC first, then templog).
-
-33. On AgenticRun deletion, if the `agentic.openshift.io/templog-cleanup` finalizer is present, the operator MUST call the Collector admin API: `DELETE /api/v1/logs?agentic_run_id=<uid>` passing the raw Kubernetes UID (with hyphens; collector normalizes internally). On success, remove the finalizer. On failure, block deletion and requeue with exponential backoff.
-
-34. The finalizer calls the Collector admin API (`DELETE /api/v1/logs?agentic_run_id=<uid>`) to delete all temporary log entries for the run. The finalizer depends on the Collector admin API being reachable. Retry on failure with a 30-second interval, up to 3 attempts total, before blocking the run's deletion. See `templog.md` for edge cases.
+25. [PLANNED: OLS-3569] The shared Collector connection MUST be read from `lightspeed-agentic-configuration` keys `otel-collector-endpoint` and `otel-ca-secret`. Runtime ConfigMap or CA rotation MUST rebuild that connection using the existing configuration-watch mechanics. The operator MUST NOT read a collection gate or create a second product endpoint/key.
 
 ## Cross-References
 
-- `run-lifecycle.md` — phase transitions where span events are emitted
+- `run-lifecycle.md` — phase transitions and terminal outcomes where producer hooks run
 - `approval.md` — approval flow and AgenticRunApproval CR
-- `sandbox-execution.md` — sandbox HTTP calls where trace context is propagated
-- `crd-api.md` — CRD definitions (AgenticRunApproval needs `spec.approver` addition)
-- `templog.md` — Temporary audit log storage: OTLP log emission, finalizer, Postgres cleanup
-- `ols/.ai/spec/what/audit-logging.md` — parent spec (cross-repo requirements, event semantics, correlation contract, OTel GenAI attribute reference)
+- `sandbox-execution.md` — input ConfigMap, batch Pod or SandboxClaim, and Result CR flow
+- `crd-api.md` — AgenticRunApproval and `spec.approver`
+- `templog.md` — canonical local OTLP log-bridge and finalizer behavior
+- `data-collection.md` — OLS-3569 operator producer requirements
+- `ols/.ai/spec/what/audit-logging.md` — authoritative shared audit event and correlation semantics
+- `ols/.ai/spec/what/agentic-data-collection.md` — authoritative product collection contract

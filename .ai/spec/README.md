@@ -26,6 +26,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Look up a CRD field | `what/crd-api.md` |
 | Understand the approval system | `what/approval.md` |
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
+| Understand Agentic data collection traces | `what/data-collection.md` |
 | Navigate the project layout | `how/project-structure.md` |
 | Understand the kill switch / system config | `what/system-config.md` |
 | Navigate the controller codebase | `how/reconciler.md` |
@@ -41,6 +42,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | `what/crd-api.md` | `how/reconciler.md`, `how/cli.md` |
 | `what/approval.md` | `how/reconciler.md`, `how/cli.md` |
 | `what/sandbox-execution.md` | `how/reconciler.md` |
+| `what/data-collection.md` | Operator lifecycle trace production and batch sandbox propagation; shared semantics are authoritative in `ols/.ai/spec/what/agentic-data-collection.md` |
 
 ## Conventions
 
@@ -54,6 +56,6 @@ AI agents. Content is optimized for precision and machine consumption.
 
 ## Project Context
 
-This operator watches `AgenticRun` CRs and drives them through a multi-phase workflow (analysis, execution, verification) by calling the sandbox runtime's `POST /v1/agent/run` endpoint. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
+This operator watches `AgenticRun` CRs and drives them through a multi-phase workflow (analysis, execution, verification) with human approval gates. It executes each agent step as a batch sandbox: the operator writes an input ConfigMap, creates a Pod or SandboxClaim, and observes the Result CR created by the sandbox. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
 
 Jira tracking: Feature OCPSTRAT-3095, Epic OLS-2894, Kill Switch OLS-3018.
