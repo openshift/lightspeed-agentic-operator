@@ -10,6 +10,7 @@
 | `cmd/main.go` | `main`, `scheme` | Operator binary entry point |
 | `cmd/oc-agentic/main.go` | `main` | CLI binary entry point |
 | `controller/agenticrun/` | `AgenticRunReconciler`, `SandboxAgentCaller`, `SandboxManager`, `SandboxLifecycle`, `PodSpecBuilder`, `PodEventHandler`, `TimeoutHandler` | AgenticRun reconciler, unified sandbox management (SA, RBAC, ConfigMap, pod), unified pod event handler (pod_handler.go handles both bare-pod labels and sandbox-claim ownerRef chain), mode-dispatching timeout loop (timeout_handler.go), results |
+| `controller/agent/` | `Reconciler` | Cluster-scoped Agent Ready status (LLMProvider + credentials Secret) [OLS-4224] |
 | `controller/console/` | `EnsureAgenticConsole`, `AgenticConsoleConfig` | Console plugin deployment (Deployment, Service, ConfigMap, ConsolePlugin CR) |
 | `controller/sandbox/` | Legacy bootstrap helpers | SA creation inlined into `cmd/main.go` |
 | `pkg/configuration/` | `Config`, `Cache`, `OnConfigMapChange` | ConfigMap-driven cache for sandbox mode, PodSpec, OTEL, MCP, and [PLANNED: OLS-3928] tool-result inspection |
@@ -44,6 +45,7 @@
 **Controller setup** (inlined in `cmd/main.go`):
 - Creates `SandboxManager(client, cfgCache, namespace)` and `SandboxAgentCaller` with dependency injection
 - Registers `AgenticRunReconciler` via `SetupWithManager`
+- Registers `agent.Reconciler` via `SetupWithManager` (Agent Ready status)
 - Registers `EnsureAgenticConsole` as a `RunnableFunc`
 - Registers `lightspeed-agent` SA creation as a `RunnableFunc`
 

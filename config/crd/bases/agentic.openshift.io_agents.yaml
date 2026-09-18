@@ -21,7 +21,7 @@ spec:
     - jsonPath: .spec.model
       name: Model
       type: string
-    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+    - jsonPath: .status.ready
       name: Ready
       type: string
     - jsonPath: .metadata.creationTimestamp
@@ -337,6 +337,16 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              ready:
+                description: |-
+                  ready is a copy of the Ready condition status for table output.
+                  kube-apiserver additionalPrinterColumns do not evaluate JSONPath filters
+                  such as `.status.conditions[?(@.type=="Ready")].status`.
+                  Must be one of: True, False.
+                enum:
+                - "True"
+                - "False"
+                type: string
             type: object
         required:
         - spec

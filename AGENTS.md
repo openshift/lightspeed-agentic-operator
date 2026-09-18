@@ -17,6 +17,7 @@ All specifications live in `.ai/spec/`. Start with `.ai/spec/README.md` for proj
 |------|------|
 | `api/v1alpha1/` | CRD types, `DerivePhase`, constants |
 | `controller/agenticrun/` | AgenticRun reconciler, approval, sandbox wiring |
+| `controller/agent/` | Agent Ready status (LLMProvider + Secret) |
 | `controller/agenticolsconfig/` | AgenticOLSConfig reconciler |
 | `controller/sandbox/` | Sandbox pod management |
 | `cli/` | `oc-agentic` plugin |

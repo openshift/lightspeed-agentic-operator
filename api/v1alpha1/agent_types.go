@@ -155,7 +155,7 @@ type AgentSpec struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="LLM",type=string,JSONPath=`.spec.llmProvider.name`
 // +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`
-// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.ready`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Agent defines a cluster-scoped agent tier (e.g., "default", "smart", "fast").
@@ -238,6 +238,14 @@ type AgentStatus struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=8
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type" protobuf:"bytes,1,rep,name=conditions"`
+
+	// ready is a copy of the Ready condition status for table output.
+	// kube-apiserver additionalPrinterColumns do not evaluate JSONPath filters
+	// such as `.status.conditions[?(@.type=="Ready")].status`.
+	// Must be one of: True, False.
+	// +optional
+	// +kubebuilder:validation:Enum=True;False
+	Ready string `json:"ready,omitempty"`
 }
 
 // +kubebuilder:object:root=true
