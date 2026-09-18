@@ -22,6 +22,61 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
+func TestPreserveFailedSandbox(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        bool
+	}{
+		{name: "absent", want: false},
+		{name: "true", annotations: map[string]string{preserveSandboxAnnotation: "true"}, want: true},
+		{name: "case insensitive", annotations: map[string]string{preserveSandboxAnnotation: " TRUE "}, want: true},
+		{name: "false", annotations: map[string]string{preserveSandboxAnnotation: "false"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := &agenticv1alpha1.AgenticRun{ObjectMeta: metav1.ObjectMeta{Annotations: tt.annotations}}
+			if got := preserveFailedSandbox(run); got != tt.want {
+				t.Fatalf("preserveFailedSandbox() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHandleTerminalCleanupPreservesFailedSandbox(t *testing.T) {
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		wantRelease int
+	}{
+		{name: "preserved", annotations: map[string]string{preserveSandboxAnnotation: "true"}, wantRelease: 0},
+		{name: "not preserved", wantRelease: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := testAgenticRun()
+			run.Annotations = tt.annotations
+			run.Status.Steps.Analysis.Sandbox.ClaimName = "analysis-sandbox"
+			run.Status.Conditions = []metav1.Condition{{
+				Type:   agenticv1alpha1.AgenticRunConditionAnalyzed,
+				Status: metav1.ConditionFalse,
+				Reason: reasonFailed,
+			}}
+			caller := newTestAgentCaller()
+			fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).
+				WithStatusSubresource(run).Build()
+			r := &AgenticRunReconciler{Client: fc, Agent: caller, Namespace: "default"}
+
+			if _, err := r.handleTerminalCleanup(context.Background(), run, agenticv1alpha1.AgenticRunPhaseFailed); err != nil {
+				t.Fatalf("handleTerminalCleanup: %v", err)
+			}
+			if caller.releaseAllCount != tt.wantRelease {
+				t.Fatalf("ReleaseSandboxes called %d times, want %d", caller.releaseAllCount, tt.wantRelease)
+			}
+		})
+	}
+}
+
 // --- Configurable agent stub for tests ---
 
 type testAgentCaller struct {
@@ -901,6 +956,28 @@ func TestReconcile_AddsFinalizersOnTerminalRun(t *testing.T) {
 	}
 	if !controllerutil.ContainsFinalizer(&updated, templogCleanupFinalizer) {
 		t.Error("templog finalizer should be added on first sight of terminal run")
+	}
+}
+
+func TestDeletion_PreservedSandboxStillReleases(t *testing.T) {
+	now := metav1.Now()
+	run := testAgenticRun()
+	run.UID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+	run.DeletionTimestamp = &now
+	run.Finalizers = []string{rbacCleanupFinalizer}
+	run.Annotations = map[string]string{preserveSandboxAnnotation: "true"}
+	run.Status.Steps.Analysis.Sandbox.ClaimName = "analysis-sandbox"
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).
+		WithStatusSubresource(run).Build()
+	caller := newTestAgentCaller().withClient(t, fc, "default")
+	r := &AgenticRunReconciler{Client: fc, Agent: caller, Namespace: "default"}
+
+	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if caller.releaseAllCount != 1 {
+		t.Fatalf("ReleaseSandboxes called %d times, want 1", caller.releaseAllCount)
 	}
 }
 

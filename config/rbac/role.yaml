@@ -8,10 +8,13 @@ rules:
   - ""
   resources:
   - configmaps
-  - secrets
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -33,11 +36,22 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - serviceaccounts
   verbs:
   - create
   - delete
   - get
+  - list
+  - patch
+  - watch
 - apiGroups:
   - agentic.openshift.io
   resources:
@@ -93,6 +107,8 @@ rules:
   - create
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - agents.x-k8s.io
@@ -133,13 +149,23 @@ rules:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
-  - clusterroles
   verbs:
   - create
   - delete
   - get
   - list
-  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+  - create
+  - delete
+  - get
+  - list
+  - watch
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
@@ -149,3 +175,7 @@ rules:
   - create
   - delete
   - get
+  - list
+  - patch
+  - update
+  - watch

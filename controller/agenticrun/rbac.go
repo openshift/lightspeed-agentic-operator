@@ -2,20 +2,25 @@ package agenticrun
 
 import (
 	"context"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
 
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;delete;get
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;delete;get;list;watch;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind
 
 const (
 	rbacNamespacesAnnotation = "agentic.openshift.io/rbac-namespaces"
@@ -33,10 +38,33 @@ const (
 	ErrDeleteClusterRole        = "delete ClusterRole"
 )
 
-var readerBindings atomic.Value // []string — cached CRB names; nil until first discovery
+var (
+	errReaderBindingsStale = errors.New("cached reader bindings are stale")
+	readerBindings         atomic.Value // []string — cached CRB names; nil until first discovery
+)
 
 func init() {
 	readerBindings.Store([]string(nil))
+}
+
+func invalidateReaderBindings() {
+	readerBindings.Store([]string(nil))
+}
+
+func readerBindingReferencesServiceAccount(obj interface{}, namespace string) bool {
+	switch value := obj.(type) {
+	case *rbacv1.ClusterRoleBinding:
+		for _, subject := range value.Subjects {
+			if subject.Kind == rbacv1.ServiceAccountKind && subject.Name == defaultSandboxSA && subject.Namespace == namespace {
+				return true
+			}
+		}
+	case toolscache.DeletedFinalStateUnknown:
+		return readerBindingReferencesServiceAccount(value.Obj, namespace)
+	case *toolscache.DeletedFinalStateUnknown:
+		return readerBindingReferencesServiceAccount(value.Obj, namespace)
+	}
+	return false
 }
 
 // Spoke reader CRB names — created by the hub operator's provisioner during
@@ -80,6 +108,58 @@ func removeReaderSubjectOnSpoke(ctx context.Context, spokeClient client.Client, 
 	return firstErr
 }
 
+// addSubjectToBinding is retained for spoke bindings, whose names are
+// managed by the hub and whose subjects are still maintained in place.
+func addSubjectToBinding(ctx context.Context, c client.Client, bindingName string, subject rbacv1.Subject) error {
+	for attempts := 0; attempts < 3; attempts++ {
+		crb := &rbacv1.ClusterRoleBinding{}
+		if err := c.Get(ctx, client.ObjectKey{Name: bindingName}, crb); err != nil {
+			return fmt.Errorf("%s %s: %w", ErrAddReaderSubject, bindingName, err)
+		}
+		for _, s := range crb.Subjects {
+			if s.Kind == subject.Kind && s.Name == subject.Name && s.Namespace == subject.Namespace {
+				return nil
+			}
+		}
+		crb.Subjects = append(crb.Subjects, subject)
+		if err := c.Update(ctx, crb); err == nil {
+			return nil
+		} else if !apierrors.IsConflict(err) {
+			return fmt.Errorf("%s %s: %w", ErrAddReaderSubject, bindingName, err)
+		}
+	}
+	return fmt.Errorf("%s: conflict after retries", ErrAddReaderSubject)
+}
+
+func removeSubjectFromBinding(ctx context.Context, c client.Client, bindingName, saName, namespace string) error {
+	for attempts := 0; attempts < 3; attempts++ {
+		crb := &rbacv1.ClusterRoleBinding{}
+		if err := c.Get(ctx, client.ObjectKey{Name: bindingName}, crb); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return fmt.Errorf("%s %s: %w", ErrRemoveReaderSubject, bindingName, err)
+		}
+		filtered := make([]rbacv1.Subject, 0, len(crb.Subjects))
+		for _, s := range crb.Subjects {
+			if s.Kind == rbacv1.ServiceAccountKind && s.Name == saName && s.Namespace == namespace {
+				continue
+			}
+			filtered = append(filtered, s)
+		}
+		if len(filtered) == len(crb.Subjects) {
+			return nil
+		}
+		crb.Subjects = filtered
+		if err := c.Update(ctx, crb); err == nil {
+			return nil
+		} else if !apierrors.IsConflict(err) {
+			return fmt.Errorf("%s %s: %w", ErrRemoveReaderSubject, bindingName, err)
+		}
+	}
+	return fmt.Errorf("%s: conflict after retries", ErrRemoveReaderSubject)
+}
+
 // resolveReaderBindings returns all ClusterRoleBindings that list the
 // lightspeed-agent SA as a subject.  Results are discovered once and cached
 // for the lifetime of the process (CRBs are static infrastructure).
@@ -89,6 +169,10 @@ func resolveReaderBindings(ctx context.Context, c client.Client, operatorNS stri
 		return names, nil
 	}
 
+	return discoverReaderBindings(ctx, c, operatorNS)
+}
+
+func discoverReaderBindings(ctx context.Context, c client.Client, operatorNS string) ([]string, error) {
 	log := logf.FromContext(ctx)
 	log.Info("discovering reader ClusterRoleBindings by SA subject")
 
@@ -138,107 +222,124 @@ func stepAbbrev(step string) string {
 	}
 }
 
-// addReaderSubject adds the SA as a subject to every ClusterRoleBinding that
-// references the lightspeed-agent SA (e.g. cluster-reader, cluster-monitoring-view).
-// Idempotent — skips bindings where the subject is already present.
-// Retries each binding independently on conflict (optimistic locking).
-func addReaderSubject(ctx context.Context, c client.Client, saName, namespace string) error {
-	names, err := resolveReaderBindings(ctx, c, namespace)
-	if err != nil {
-		return fmt.Errorf("%s: %w", ErrAddReaderSubject, err)
-	}
+// readerBindingName returns a unique name for the binding that grants one
+// sandbox ServiceAccount the permissions of a discovered reader binding.
+func readerBindingName(runUID, step, sourceName string) string {
+	digest := sha256.Sum256([]byte(sourceName))
+	return truncateK8sName(fmt.Sprintf("ls-reader-%s-%s-%x", stepAbbrev(step), runUID, digest[:4]))
+}
 
+// addReaderSubject creates a per-run binding for every ClusterRoleBinding that
+// references the lightspeed-agent SA. It deliberately does not modify those
+// shared bindings: concurrent AgenticRuns must not race on their resourceVersion.
+func addReaderSubject(ctx context.Context, c client.Client, runUID, step, saName, namespace string) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		names, err := resolveReaderBindings(ctx, c, namespace)
+		if err != nil {
+			return fmt.Errorf("%s: %w", ErrAddReaderSubject, err)
+		}
+		err = addReaderSubjectForBindings(ctx, c, runUID, step, saName, namespace, names)
+		if !errors.Is(err, errReaderBindingsStale) {
+			return err
+		}
+		readerBindings.Store([]string(nil))
+	}
+	return fmt.Errorf("%s: cached reader bindings remained stale after refresh", ErrAddReaderSubject)
+}
+
+func addReaderSubjectForBindings(ctx context.Context, c client.Client, runUID, step, saName, namespace string, names []string) error {
 	subject := rbacv1.Subject{
 		Kind:      rbacv1.ServiceAccountKind,
 		Name:      saName,
 		Namespace: namespace,
 	}
-
-	for _, bindingName := range names {
-		if err := addSubjectToBinding(ctx, c, bindingName, subject); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func addSubjectToBinding(ctx context.Context, c client.Client, bindingName string, subject rbacv1.Subject) error {
-	for attempts := 0; attempts < 3; attempts++ {
-		crb := &rbacv1.ClusterRoleBinding{}
-		if err := c.Get(ctx, client.ObjectKey{Name: bindingName}, crb); err != nil {
-			return fmt.Errorf("%s %s: %w", ErrAddReaderSubject, bindingName, err)
-		}
-
-		for _, s := range crb.Subjects {
-			if s.Kind == subject.Kind && s.Name == subject.Name && s.Namespace == subject.Namespace {
-				return nil
+	created := make([]string, 0, len(names))
+	cleanupCreated := func() {
+		cleanupCtx, cancel := cleanupContext(ctx)
+		defer cancel()
+		for _, name := range created {
+			binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
+			if cleanupErr := c.Delete(cleanupCtx, binding); cleanupErr != nil && !apierrors.IsNotFound(cleanupErr) {
+				logf.FromContext(ctx).Error(cleanupErr, "cleanup: failed to delete reader RBAC", LogKeyName, name)
 			}
 		}
-
-		crb.Subjects = append(crb.Subjects, subject)
-		err := c.Update(ctx, crb)
-		if err == nil {
-			return nil
-		}
-		if !apierrors.IsConflict(err) {
-			return fmt.Errorf("%s %s: %w", ErrAddReaderSubject, bindingName, err)
-		}
 	}
-	return fmt.Errorf("%s: conflict after retries", ErrAddReaderSubject)
-}
-
-// removeReaderSubject removes the SA from every cached reader ClusterRoleBinding.
-// Idempotent — no-op if the subject is not present. Returns nil when no bindings
-// are found (they may have been deleted during teardown); propagates all other errors.
-func removeReaderSubject(ctx context.Context, c client.Client, saName, namespace string) error {
-	names, err := resolveReaderBindings(ctx, c, namespace)
-	if err != nil {
-		if strings.Contains(err.Error(), "no ClusterRoleBinding found") {
-			return nil
-		}
-		return fmt.Errorf("%s: %w", ErrRemoveReaderSubject, err)
-	}
-
-	for _, bindingName := range names {
-		if err := removeSubjectFromBinding(ctx, c, bindingName, saName, namespace); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func removeSubjectFromBinding(ctx context.Context, c client.Client, bindingName, saName, namespace string) error {
-	for attempts := 0; attempts < 3; attempts++ {
-		crb := &rbacv1.ClusterRoleBinding{}
-		if err := c.Get(ctx, client.ObjectKey{Name: bindingName}, crb); err != nil {
+	for _, sourceName := range names {
+		source := &rbacv1.ClusterRoleBinding{}
+		if err := c.Get(ctx, client.ObjectKey{Name: sourceName}, source); err != nil {
+			cleanupCreated()
 			if apierrors.IsNotFound(err) {
-				return nil // binding gone, nothing to remove
+				return fmt.Errorf("%w: %s: %v", errReaderBindingsStale, sourceName, err)
 			}
-			return fmt.Errorf("%s %s: %w", ErrRemoveReaderSubject, bindingName, err)
+			return fmt.Errorf("%s %s: %w", ErrAddReaderSubject, sourceName, err)
 		}
-
-		filtered := make([]rbacv1.Subject, 0, len(crb.Subjects))
-		for _, s := range crb.Subjects {
-			if s.Kind == rbacv1.ServiceAccountKind && s.Name == saName && s.Namespace == namespace {
-				continue
+		binding := &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: readerBindingName(runUID, step, sourceName),
+				Labels: map[string]string{
+					LabelRun:       runUID,
+					LabelStep:      step,
+					LabelComponent: "reader-rbac",
+				},
+			},
+			RoleRef:  source.RoleRef,
+			Subjects: []rbacv1.Subject{subject},
+		}
+		if err := c.Create(ctx, binding); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				existing := &rbacv1.ClusterRoleBinding{}
+				if getErr := c.Get(ctx, client.ObjectKey{Name: binding.Name}, existing); getErr != nil {
+					cleanupCreated()
+					return fmt.Errorf("%s %s: get existing binding: %w", ErrAddReaderSubject, binding.Name, getErr)
+				}
+				if equality.Semantic.DeepEqual(existing.RoleRef, binding.RoleRef) &&
+					equality.Semantic.DeepEqual(existing.Subjects, binding.Subjects) {
+					continue
+				}
+				if existing.Labels[LabelRun] != runUID ||
+					existing.Labels[LabelStep] != step ||
+					existing.Labels[LabelComponent] != "reader-rbac" {
+					cleanupCreated()
+					return fmt.Errorf("%s %s: existing binding is not owned by this run", ErrAddReaderSubject, binding.Name)
+				}
+				if deleteErr := c.Delete(ctx, existing); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+					cleanupCreated()
+					return fmt.Errorf("%s %s: delete stale binding: %w", ErrAddReaderSubject, binding.Name, deleteErr)
+				}
+				if createErr := c.Create(ctx, binding); createErr != nil {
+					cleanupCreated()
+					return fmt.Errorf("%s %s: recreate binding: %w", ErrAddReaderSubject, binding.Name, createErr)
+				}
 			}
-			filtered = append(filtered, s)
+			if !apierrors.IsAlreadyExists(err) {
+				cleanupCreated()
+				return fmt.Errorf("%s %s: %w", ErrAddReaderSubject, binding.Name, err)
+			}
 		}
+		created = append(created, binding.Name)
+	}
+	return nil
+}
 
-		if len(filtered) == len(crb.Subjects) {
-			return nil
-		}
-
-		crb.Subjects = filtered
-		err := c.Update(ctx, crb)
-		if err == nil {
-			return nil
-		}
-		if !apierrors.IsConflict(err) {
-			return fmt.Errorf("%s %s: %w", ErrRemoveReaderSubject, bindingName, err)
+// removeReaderSubject deletes the per-run reader bindings. The shared reader
+// bindings are intentionally left untouched.
+func removeReaderSubject(ctx context.Context, c client.Client, runUID, step, _ string) error {
+	var bindings rbacv1.ClusterRoleBindingList
+	if err := c.List(ctx, &bindings, client.MatchingLabels{
+		LabelRun:       runUID,
+		LabelStep:      step,
+		LabelComponent: "reader-rbac",
+	}); err != nil {
+		return fmt.Errorf("%s: list per-run reader bindings: %w", ErrRemoveReaderSubject, err)
+	}
+	var firstErr error
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if err := c.Delete(ctx, binding); err != nil && !apierrors.IsNotFound(err) && firstErr == nil {
+			firstErr = fmt.Errorf("%s %s: %w", ErrRemoveReaderSubject, binding.Name, err)
 		}
 	}
-	return fmt.Errorf("%s: conflict after retries", ErrRemoveReaderSubject)
+	return firstErr
 }
 
 // ensureExecutionRBAC creates Role+RoleBinding (namespace-scoped) and

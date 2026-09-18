@@ -186,7 +186,13 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 	if r.Audit != nil {
 		r.Audit.CompleteStep(run, step, resultCR)
 	}
-	r.releaseSandbox(ctx, run, step)
+	condition := meta.FindStatusCondition(run.Status.Conditions, condType)
+	preserve := preserveFailedSandbox(run) && condition != nil && condition.Status == metav1.ConditionFalse
+	if preserve {
+		log.Info("preserving failed sandbox for debugging", LogKeyStep, step)
+	} else {
+		r.releaseSandbox(ctx, run, step)
+	}
 	return nil
 }
 

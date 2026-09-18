@@ -7,8 +7,10 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	toolscache "k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -58,15 +60,15 @@ type AgenticRunReconciler struct {
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticrunapprovals,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticrunapprovals/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=approvalpolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=agentic.openshift.io,resources=analysisresults,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=agentic.openshift.io,resources=executionresults,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=agentic.openshift.io,resources=verificationresults,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=agentic.openshift.io,resources=escalationresults,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=agentic.openshift.io,resources=analysisresults,verbs=get;list;watch;create;patch;update
+// +kubebuilder:rbac:groups=agentic.openshift.io,resources=executionresults,verbs=get;list;watch;create;patch;update
+// +kubebuilder:rbac:groups=agentic.openshift.io,resources=verificationresults,verbs=get;list;watch;create;patch;update
+// +kubebuilder:rbac:groups=agentic.openshift.io,resources=escalationresults,verbs=get;list;watch;create;patch;update
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=analysisresults/status;executionresults/status;verificationresults/status;escalationresults/status,verbs=get;patch;update
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;create;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;create;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;delete;patch;update
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticolsconfigs,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;delete;get;list;patch;update;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -87,7 +89,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
 			if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
-				log.Error(err, "sandbox release failed during deletion")
+				return ctrl.Result{}, fmt.Errorf("release sandboxes during deletion: %w", err)
 			}
 			original := run.DeepCopy()
 			controllerutil.RemoveFinalizer(&run, rbacCleanupFinalizer)
@@ -223,6 +225,26 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 // SetupWithManager sets up the controller with the Manager.
+func readerBindingEventHandlers(namespace string) toolscache.ResourceEventHandlerFuncs {
+	return toolscache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj interface{}) {
+			if readerBindingReferencesServiceAccount(obj, namespace) {
+				invalidateReaderBindings()
+			}
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			if readerBindingReferencesServiceAccount(oldObj, namespace) || readerBindingReferencesServiceAccount(newObj, namespace) {
+				invalidateReaderBindings()
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			if readerBindingReferencesServiceAccount(obj, namespace) {
+				invalidateReaderBindings()
+			}
+		},
+	}
+}
+
 func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	maxConcurrent := int(agenticv1alpha1.DefaultMaxConcurrentRuns)
 	var ap agenticv1alpha1.ApprovalPolicy
@@ -264,6 +286,14 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	readerBindingInformer, err := mgr.GetCache().GetInformer(context.Background(), &rbacv1.ClusterRoleBinding{})
+	if err != nil {
+		return fmt.Errorf("get ClusterRoleBinding informer: %w", err)
+	}
+	if _, err := readerBindingInformer.AddEventHandler(readerBindingEventHandlers(r.Namespace)); err != nil {
+		return fmt.Errorf("watch ClusterRoleBindings: %w", err)
+	}
+
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&agenticv1alpha1.AgenticRun{}).
 		Owns(&agenticv1alpha1.AgenticRunApproval{}).
@@ -292,10 +322,13 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // sandbox claims, emits audit spans, and delegates to TTL handling.
 func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	if hasSandboxClaims(run) {
+	preserve := phase == agenticv1alpha1.AgenticRunPhaseFailed && preserveFailedSandbox(run)
+	if hasSandboxClaims(run) && !preserve {
 		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
 			log.Error(err, "sandbox cleanup failed at terminal phase")
 		}
+	} else if preserve {
+		log.Info("preserving failed sandbox for debugging")
 	}
 	if r.Audit != nil {
 		r.Audit.EmitTerminalSpan(ctx, run, string(phase), terminalReason(run))
@@ -324,6 +357,14 @@ func (r *AgenticRunReconciler) handleTerminalTTL(ctx context.Context, run *agent
 			log.Error(err, "failed to stamp terminalTime")
 			return ctrl.Result{}, false, fmt.Errorf("%s: %w", ErrStampTerminalTTL, err)
 		}
+	}
+
+	// Preserved failed sandboxes must not be removed by terminal TTL. Keep the
+	// terminal timestamp for observability, but leave the run and its sandbox
+	// resources until the run is explicitly deleted.
+	if agenticv1alpha1.DerivePhase(run.Status.Conditions) == agenticv1alpha1.AgenticRunPhaseFailed && preserveFailedSandbox(run) {
+		log.Info("terminal TTL disabled for preserved failed sandbox", LogKeyName, run.Name)
+		return ctrl.Result{}, false, nil
 	}
 
 	// --- Stamp ttlAfterTerminal from cluster config if not already set ---

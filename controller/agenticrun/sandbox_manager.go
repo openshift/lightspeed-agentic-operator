@@ -130,7 +130,9 @@ func (m *SandboxManager) Create(
 	var createErr error
 	defer func() {
 		if createErr != nil {
-			m.cleanupOnCreateFailure(ctx, run, step, serviceAccount, spoke)
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			m.cleanupOnCreateFailure(cleanupCtx, run, step, serviceAccount, spoke)
 		}
 	}()
 
@@ -297,10 +299,21 @@ func (m *SandboxManager) ensureSA(ctx context.Context, run *agenticv1alpha1.Agen
 				Labels:    spokeLabels(string(run.UID), run.Name, run.Spec.TargetCluster, step+"-sa"),
 			},
 		}
-		if err := spoke.Client.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+		created := false
+		if err := spoke.Client.Create(ctx, sa); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				return fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+			}
+		} else {
+			created = true
 		}
-		return addReaderSubjectOnSpoke(ctx, spoke.Client, saName, spoke.Namespace)
+		if err := addReaderSubjectOnSpoke(ctx, spoke.Client, saName, spoke.Namespace); err != nil {
+			if created {
+				_ = spoke.Client.Delete(ctx, sa)
+			}
+			return err
+		}
+		return nil
 	}
 
 	// hub path: unchanged
@@ -311,10 +324,21 @@ func (m *SandboxManager) ensureSA(ctx context.Context, run *agenticv1alpha1.Agen
 			Labels:    rbacLabels(string(run.UID), step+"-sa"),
 		},
 	}
-	if err := m.client.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+	created := false
+	if err := m.client.Create(ctx, sa); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+		}
+	} else {
+		created = true
 	}
-	return addReaderSubject(ctx, m.client, saName, m.namespace)
+	if err := addReaderSubject(ctx, m.client, string(run.UID), step, saName, m.namespace); err != nil {
+		if created {
+			_ = m.client.Delete(ctx, sa)
+		}
+		return err
+	}
+	return nil
 }
 
 // setSAOwner sets the pod/claim as owner on the per-run ServiceAccount
@@ -360,7 +384,7 @@ func (m *SandboxManager) cleanupOnCreateFailure(ctx context.Context, run *agenti
 				log.Error(err, "cleanup: spoke step cleanup", LogKeyName, serviceAccount)
 			}
 		} else {
-			if err := removeReaderSubject(ctx, m.client, serviceAccount, m.namespace); err != nil {
+			if err := removeReaderSubject(ctx, m.client, string(run.UID), step, m.namespace); err != nil {
 				log.Error(err, "cleanup: failed to remove reader subjects", LogKeyName, serviceAccount)
 			}
 			if step == "execution" {
@@ -635,7 +659,7 @@ func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.Agent
 			firstErr = err
 		}
 	} else {
-		if err := removeReaderSubject(ctx, m.client, saName, m.namespace); err != nil && firstErr == nil {
+		if err := removeReaderSubject(ctx, m.client, string(run.UID), step, m.namespace); err != nil && firstErr == nil {
 			firstErr = err
 		}
 		if step == "execution" {

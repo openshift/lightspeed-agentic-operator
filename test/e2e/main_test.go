@@ -35,15 +35,9 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	if err := setupCrashLoopPod(suiteClient); err != nil {
-		fmt.Fprintf(os.Stderr, "FATAL: setup crash-loop pod: %v\n", err)
-		os.Exit(1)
-	}
-
 	code := m.Run()
 
 	ctx := context.Background()
-	_ = suiteClient.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "e2e-crasher", Namespace: "staging"}})
 	for _, obj := range fixtureStubs() {
 		_ = suiteClient.Delete(ctx, obj)
 	}
@@ -250,50 +244,5 @@ func setupRealProviderFixtures(c client.Client) error {
 		fmt.Fprintf(os.Stderr, "suite: created %T/%s\n", obj, obj.GetName())
 	}
 	fmt.Fprintf(os.Stderr, "suite: real provider fixtures created: provider=%s model=%s llm=%s\n", provider, model, llmName)
-	return nil
-}
-
-func setupCrashLoopPod(c client.Client) error {
-	ctx := context.Background()
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "e2e-crasher",
-			Namespace: "staging",
-			Labels:    map[string]string{"app": "e2e-crasher"},
-		},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyAlways,
-			Containers: []corev1.Container{{
-				Name:    "crasher",
-				Image:   "busybox:latest",
-				Command: []string{"sh", "-c", "exit 1"},
-			}},
-		},
-	}
-
-	deleteAndWait(ctx, c, pod)
-
-	pod.SetResourceVersion("")
-	pod.SetUID("")
-	if err := c.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create crash-loop pod: %w", err)
-	}
-
-	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
-		var p corev1.Pod
-		if err := c.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, &p); err != nil {
-			return false, nil
-		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.RestartCount > 0 {
-				return true, nil
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		return fmt.Errorf("crash-loop pod never restarted: %w", err)
-	}
-	fmt.Fprintln(os.Stderr, "suite: crash-loop pod is CrashLoopBackOff in staging namespace")
 	return nil
 }

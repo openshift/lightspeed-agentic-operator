@@ -307,6 +307,11 @@ func (r *AgenticRunReconciler) handleFailed(
 	log := logf.FromContext(ctx)
 	log.Info("handling system failure (terminal)")
 
+	if preserveFailedSandbox(run) {
+		log.Info("preserving failed sandbox for debugging")
+		return ctrl.Result{}, nil
+	}
+
 	spoke, spokeErr := spokeAccessForRun(ctx, r.Client, run, r.Namespace)
 	if spokeErr != nil {
 		log.Error(spokeErr, "RBAC cleanup: spoke unreachable")
@@ -392,7 +397,8 @@ func (r *AgenticRunReconciler) handleEscalation(
 
 	escalated := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionEscalated)
 	if escalated != nil {
-		if escalated.Status == metav1.ConditionUnknown && escalated.Reason == reasonInProgress {
+		if escalated.Status == metav1.ConditionUnknown &&
+			(escalated.Reason == reasonInProgress || escalated.Reason == ReasonRunning) {
 			log.V(1).Info("escalation already in progress, waiting")
 			return ctrl.Result{}, nil
 		}
