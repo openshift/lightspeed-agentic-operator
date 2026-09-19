@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	agentcontroller "github.com/openshift/lightspeed-agentic-operator/controller/agent"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticolsconfig"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticrun"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
@@ -166,6 +167,14 @@ func main() {
 		EventRecorder: mgr.GetEventRecorderFor("agenticolsconfig-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticOLSConfig controller")
+		os.Exit(1)
+	}
+
+	if err := (&agentcontroller.Reconciler{
+		Client:    mgr.GetClient(),
+		Namespace: namespace,
+	}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to set up Agent controller")
 		os.Exit(1)
 	}
 
