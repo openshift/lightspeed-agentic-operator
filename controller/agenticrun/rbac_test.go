@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -330,6 +331,181 @@ func TestEnsureExecutionRBAC_NamespacesFromRBACRules(t *testing.T) {
 		if err := fc.Get(ctx, types.NamespacedName{Name: roleName, Namespace: ns}, &role); err != nil {
 			t.Fatalf("Role not found in %s: %v", ns, err)
 		}
+	}
+}
+
+func terminatingNamespace(name string) *corev1.Namespace {
+	now := metav1.Now()
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"example.com/block"},
+		},
+		Status: corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
+	}
+}
+
+func TestEnsureExecutionRBAC_TerminatingNamespaceLiftsToClusterRole(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+	stuck := "mock-stuck-ns"
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(readerBinding(), terminatingNamespace(stuck)).Build()
+
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "unstick-ns", Namespace: "openshift-lightspeed", UID: "uid-unstick-ns"},
+	}
+	rbacResult := &agenticv1alpha1.RBACResult{
+		NamespaceScoped: []agenticv1alpha1.RBACRule{{
+			Namespace:     stuck,
+			APIGroups:     []string{""},
+			Resources:     []string{"configmaps"},
+			Verbs:         []string{"get", "patch", "update"},
+			Justification: "Clear blocking ConfigMap finalizer",
+		}},
+	}
+
+	if err := ensureExecutionRBAC(ctx, fc, run, rbacResult, "openshift-lightspeed", nil); err != nil {
+		t.Fatalf("ensureExecutionRBAC: %v", err)
+	}
+
+	roleName := executionRoleName("uid-unstick-ns")
+	var role rbacv1.Role
+	if err := fc.Get(ctx, types.NamespacedName{Name: roleName, Namespace: stuck}, &role); err == nil {
+		t.Fatal("Role must not be created in a Terminating namespace")
+	}
+
+	crName := clusterRoleName("uid-unstick-ns")
+	var cr rbacv1.ClusterRole
+	if err := fc.Get(ctx, types.NamespacedName{Name: crName}, &cr); err != nil {
+		t.Fatalf("ClusterRole not found: %v", err)
+	}
+	if len(cr.Rules) != 1 || cr.Rules[0].Resources[0] != "configmaps" {
+		t.Fatalf("unexpected ClusterRole rules: %+v", cr.Rules)
+	}
+
+	var crb rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: crName}, &crb); err != nil {
+		t.Fatalf("ClusterRoleBinding not found: %v", err)
+	}
+	if crb.Subjects[0].Name != sandboxSAName(run, "execution") {
+		t.Fatalf("unexpected subject: %s", crb.Subjects[0].Name)
+	}
+}
+
+func TestEnsureExecutionRBAC_ActiveNamespaceStillGetsRole(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+	live := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "production"},
+		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(readerBinding(), live).Build()
+
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "fix-oom", Namespace: "default", UID: "uid-live-ns"},
+		Spec:       agenticv1alpha1.AgenticRunSpec{TargetNamespaces: []string{"production"}},
+	}
+	rbacResult := &agenticv1alpha1.RBACResult{
+		NamespaceScoped: []agenticv1alpha1.RBACRule{{
+			APIGroups: []string{"apps"}, Resources: []string{"deployments"},
+			Verbs: []string{"get", "patch"}, Justification: "Patch deployment memory",
+		}},
+	}
+
+	if err := ensureExecutionRBAC(ctx, fc, run, rbacResult, "default", nil); err != nil {
+		t.Fatalf("ensureExecutionRBAC: %v", err)
+	}
+
+	var role rbacv1.Role
+	if err := fc.Get(ctx, types.NamespacedName{Name: executionRoleName("uid-live-ns"), Namespace: "production"}, &role); err != nil {
+		t.Fatalf("Role not found in active namespace: %v", err)
+	}
+	var cr rbacv1.ClusterRole
+	if err := fc.Get(ctx, types.NamespacedName{Name: clusterRoleName("uid-live-ns")}, &cr); err == nil {
+		t.Fatal("ClusterRole should not exist when the target namespace is Active")
+	}
+}
+
+func TestEnsureExecutionRBAC_MixedActiveAndTerminatingNamespaces(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+	live := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "healthy-ns"},
+		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(readerBinding(), live, terminatingNamespace("mock-stuck-ns")).Build()
+
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "mixed-ns", Namespace: "default", UID: "uid-mixed-ns"},
+		Spec:       agenticv1alpha1.AgenticRunSpec{TargetNamespaces: []string{"healthy-ns", "mock-stuck-ns"}},
+	}
+	rbacResult := &agenticv1alpha1.RBACResult{
+		NamespaceScoped: []agenticv1alpha1.RBACRule{{
+			APIGroups: []string{""}, Resources: []string{"configmaps"},
+			Verbs: []string{"get", "patch"}, Justification: "Patch configmaps",
+		}},
+	}
+
+	if err := ensureExecutionRBAC(ctx, fc, run, rbacResult, "default", nil); err != nil {
+		t.Fatalf("ensureExecutionRBAC: %v", err)
+	}
+
+	roleName := executionRoleName("uid-mixed-ns")
+	var liveRole rbacv1.Role
+	if err := fc.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "healthy-ns"}, &liveRole); err != nil {
+		t.Fatalf("Role not found in healthy-ns: %v", err)
+	}
+	var stuckRole rbacv1.Role
+	if err := fc.Get(ctx, types.NamespacedName{Name: roleName, Namespace: "mock-stuck-ns"}, &stuckRole); err == nil {
+		t.Fatal("Role must not be created in mock-stuck-ns")
+	}
+	var cr rbacv1.ClusterRole
+	if err := fc.Get(ctx, types.NamespacedName{Name: clusterRoleName("uid-mixed-ns")}, &cr); err != nil {
+		t.Fatalf("ClusterRole not found: %v", err)
+	}
+}
+
+func TestEnsureExecutionRBAC_TerminatingCreateForbiddenFallback(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+	stuck := "mock-stuck-ns"
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, client client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				role, ok := obj.(*rbacv1.Role)
+				if ok && role.Namespace == stuck {
+					return apierrors.NewForbidden(
+						schema.GroupResource{Group: rbacv1.GroupName, Resource: "roles"},
+						role.Name,
+						fmt.Errorf("unable to create new content in namespace %s because it is being terminated", stuck),
+					)
+				}
+				return client.Create(ctx, obj, opts...)
+			},
+		}).Build()
+
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "fallback", Namespace: "default", UID: "uid-fallback"},
+		Spec:       agenticv1alpha1.AgenticRunSpec{TargetNamespaces: []string{stuck}},
+	}
+	rbacResult := &agenticv1alpha1.RBACResult{
+		NamespaceScoped: []agenticv1alpha1.RBACRule{{
+			APIGroups: []string{""}, Resources: []string{"configmaps"},
+			Verbs: []string{"patch"}, Justification: "Clear finalizer",
+		}},
+	}
+
+	if err := ensureExecutionRBAC(ctx, fc, run, rbacResult, "default", nil); err != nil {
+		t.Fatalf("ensureExecutionRBAC: %v", err)
+	}
+
+	var cr rbacv1.ClusterRole
+	if err := fc.Get(ctx, types.NamespacedName{Name: clusterRoleName("uid-fallback")}, &cr); err != nil {
+		t.Fatalf("ClusterRole not found after terminating 403: %v", err)
 	}
 }
 
