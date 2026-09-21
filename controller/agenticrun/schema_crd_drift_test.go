@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -21,6 +22,42 @@ func crdBasesDir(t *testing.T) string {
 		t.Fatal("cannot resolve test source path via runtime.Caller")
 	}
 	return filepath.Join(filepath.Dir(thisFile), "..", "..", "config", "crd", "bases")
+}
+
+// TestLLMProviderCRDRequiresAzureAPIVersion guards the operator/sandbox
+// contract: Azure providers must supply an explicit API version, because the
+// sandbox intentionally does not choose one by default.
+func TestLLMProviderCRDRequiresAzureAPIVersion(t *testing.T) {
+	crdPath := filepath.Join(crdBasesDir(t), "agentic.openshift.io_llmproviders.yaml")
+	raw, err := os.ReadFile(crdPath)
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(raw, &crd); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+
+	for _, v := range crd.Spec.Versions {
+		if v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+		spec, ok := v.Schema.OpenAPIV3Schema.Properties["spec"]
+		if !ok {
+			t.Fatalf("CRD version %s is missing spec schema", v.Name)
+		}
+		azure, ok := spec.Properties["azureOpenAI"]
+		if !ok {
+			t.Fatalf("CRD version %s is missing spec.azureOpenAI schema", v.Name)
+		}
+		if !slices.Contains(azure.Required, "apiVersion") {
+			t.Fatalf("CRD version %s spec.azureOpenAI.required = %v, want apiVersion", v.Name, azure.Required)
+		}
+		return
+	}
+
+	t.Fatal("no CRD version contained an OpenAPI schema")
 }
 
 // TestSchemasCoverCRDRequiredFields guards against the schema/CRD contract

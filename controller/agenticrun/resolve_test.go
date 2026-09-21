@@ -2,8 +2,10 @@ package agenticrun
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -184,5 +186,105 @@ func TestResolveAgenticRun_AgentCaching(t *testing.T) {
 	}
 	if resolved.Analysis.LLM != resolved.Execution.LLM {
 		t.Error("same LLM should resolve to the same LLMProvider pointer (cached)")
+	}
+}
+
+// ── Azure credential validation ──
+
+func azureLLM(secretName string) *agenticv1alpha1.LLMProvider {
+	return &agenticv1alpha1.LLMProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "azure-llm"},
+		Spec: agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+			AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+				Endpoint:          "https://myresource.openai.azure.com",
+			},
+		},
+	}
+}
+
+func azureSecret(name string, keys map[string][]byte) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "openshift-lightspeed"},
+		Data:       keys,
+	}
+}
+
+func TestValidateCredentials_AzureAPIKey(t *testing.T) {
+	secret := azureSecret("creds", map[string][]byte{
+		"apitoken": []byte("my-key"),
+	})
+	fc := buildFakeClient(azureLLM("creds"), secret)
+	err := validateCredentials(context.Background(), fc, azureLLM("creds"), "openshift-lightspeed")
+	if err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+}
+
+func TestValidateCredentials_AzureEntraID(t *testing.T) {
+	secret := azureSecret("creds", map[string][]byte{
+		"client_id":     []byte("cid"),
+		"tenant_id":     []byte("tid"),
+		"client_secret": []byte("csec"),
+	})
+	fc := buildFakeClient(azureLLM("creds"), secret)
+	err := validateCredentials(context.Background(), fc, azureLLM("creds"), "openshift-lightspeed")
+	if err != nil {
+		t.Errorf("expected nil, got %v", err)
+	}
+}
+
+func TestValidateCredentials_AzureIncompleteSP(t *testing.T) {
+	secret := azureSecret("creds", map[string][]byte{
+		"client_id": []byte("cid"),
+		"tenant_id": []byte("tid"),
+		// client_secret missing, no apitoken
+	})
+	fc := buildFakeClient(azureLLM("creds"), secret)
+	err := validateCredentials(context.Background(), fc, azureLLM("creds"), "openshift-lightspeed")
+	if err == nil {
+		t.Fatal("expected error for incomplete SP set")
+	}
+	if !strings.Contains(err.Error(), "client_secret") {
+		t.Errorf("expected error to mention missing key, got: %v", err)
+	}
+}
+
+func TestValidateCredentials_AzureNoCredentials(t *testing.T) {
+	secret := azureSecret("creds", map[string][]byte{
+		"unrelated": []byte("value"),
+	})
+	fc := buildFakeClient(azureLLM("creds"), secret)
+	err := validateCredentials(context.Background(), fc, azureLLM("creds"), "openshift-lightspeed")
+	if err == nil {
+		t.Fatal("expected error when no valid credential set")
+	}
+}
+
+func TestValidateCredentials_NonAzureSkips(t *testing.T) {
+	llm := &agenticv1alpha1.LLMProvider{
+		ObjectMeta: metav1.ObjectMeta{Name: "anthropic-llm"},
+		Spec: agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderAnthropic,
+			Anthropic: agenticv1alpha1.AnthropicConfig{
+				CredentialsSecret: agenticv1alpha1.SecretReference{Name: "api-key"},
+			},
+		},
+	}
+	// No secret in cluster — validation should skip for non-Azure
+	fc := buildFakeClient(llm)
+	err := validateCredentials(context.Background(), fc, llm, "openshift-lightspeed")
+	if err != nil {
+		t.Errorf("non-Azure providers should skip validation, got: %v", err)
+	}
+}
+
+func TestValidateCredentials_AzureSecretNotFound(t *testing.T) {
+	// Secret doesn't exist
+	fc := buildFakeClient(azureLLM("missing-secret"))
+	err := validateCredentials(context.Background(), fc, azureLLM("missing-secret"), "openshift-lightspeed")
+	if err == nil {
+		t.Fatal("expected error when secret not found")
 	}
 }
