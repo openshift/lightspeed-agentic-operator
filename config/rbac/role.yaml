@@ -69,6 +69,7 @@ rules:
   - agenticolsconfigs/status
   - agenticrunapprovals/status
   - agenticruns/status
+  - agents/status
   - analysisresults/status
   - escalationresults/status
   - executionresults/status
