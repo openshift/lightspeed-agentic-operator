@@ -168,7 +168,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// --- Resolve agents/LLMs ---
-	resolved, err := resolveAgenticRun(ctx, r.Client, &run, approval)
+	resolved, err := resolveAgenticRun(ctx, r.Client, &run, approval, r.Namespace)
 	if err != nil {
 		log.Error(err, "workflow resolution failed")
 		base := run.DeepCopy()

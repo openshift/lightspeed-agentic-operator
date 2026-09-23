@@ -184,8 +184,7 @@ type AzureOpenAIConfig struct {
 	// apiVersion is the Azure OpenAI API version. Azure API versions use
 	// a date-based format: YYYY-MM-DD with an optional "-preview" suffix
 	// (e.g., "2024-02-01", "2024-08-01-preview").
-	// When omitted, the SDK default is used.
-	// +optional
+	// +required
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32
 	// +kubebuilder:validation:XValidation:rule="self.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}(-preview)?$')",message="apiVersion must be a date in YYYY-MM-DD format with an optional -preview suffix"
