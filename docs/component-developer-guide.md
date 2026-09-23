@@ -145,12 +145,16 @@ Every step (analysis, execution, verification) has a built-in approval gate. The
                                +-----------+
 
   Any step can also reach a terminal state off this spine:
-    Denied  -- an approval was denied on the AgenticRunApproval.
-    Failed  -- a step failed to run: an analysis/execution error, or a
-               verification *system* failure (agent crash, timeout, or no
-               result produced). An *objective* verification failure does
-               NOT land here -- it escalates (Verifying -> Escalating ->
-               Escalated), never re-executing.
+    Denied           -- an approval was denied on the AgenticRunApproval.
+    Failed           -- a step failed to run: an analysis/execution error,
+                        or a verification *system* failure (agent crash,
+                        timeout, or no result produced). An *objective*
+                        verification failure does NOT land here -- it
+                        escalates (Verifying -> Escalating -> Escalated),
+                        never re-executing.
+    EmergencyStopped -- an admin emergency-stopped the run via the
+                        EmergencyStopped condition. Reachable from any
+                        non-terminal phase. Terminal.
 ```
 
 - **Pending** -- AgenticRun created, waiting for reconciliation.
@@ -163,6 +167,7 @@ Every step (analysis, execution, verification) has a built-in approval gate. The
 - **Failed** -- A step failed. Terminal for analysis/execution failures and for verification *system* failures (crash/timeout/no result). An objective verification failure instead escalates immediately (no retry) -- see **Escalating** / **Escalated**.
 - **Escalating** -- Verification failed and the operator is producing an `EscalationResult` (the `Escalated` condition is `Unknown`). In-flight, not terminal -- do not treat it as a final state.
 - **Escalated** -- Escalation complete. An `EscalationResult` has been produced with the execution and verification history for a human operator to assess. Terminal.
+- **EmergencyStopped** -- An admin set the `EmergencyStopped` condition to halt the run. Reachable from any non-terminal phase. Terminal.
 
 ### Approval flow
 
@@ -205,6 +210,8 @@ for event := range watch.ResultChan() {
         // Verification failed; escalation is in progress (not yet terminal) -- keep watching
     case v1alpha1.AgenticRunPhaseEscalated:
         // Verification failed; an EscalationResult was created for human review
+    case v1alpha1.AgenticRunPhaseEmergencyStopped:
+        // Run was emergency-stopped by an admin
     }
 }
 ```
@@ -290,7 +297,10 @@ spec:
   tools:
     requiredSecrets:
       - name: acs-api-token
-        mountAs: ACS_API_TOKEN
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: ACS_API_TOKEN
 
   # Analysis gets remediation + compliance skills
   analysis:
@@ -434,11 +444,11 @@ func handleViolation(w http.ResponseWriter, r *http.Request) {
         Spec: v1alpha1.AgenticRunSpec{
             Request: formatViolation(violation),
             TargetNamespaces: []string{violation.Namespace},
-            Analysis: &v1alpha1.AgenticRunStep{
+            Analysis: v1alpha1.AgenticRunStep{
                 Agent: "smart",
             },
-            Execution:    &v1alpha1.AgenticRunStep{},
-            Verification: &v1alpha1.AgenticRunStep{Agent: "fast"},
+            Execution:    v1alpha1.AgenticRunStep{},
+            Verification: v1alpha1.AgenticRunStep{Agent: "fast"},
             Tools: v1alpha1.ToolsSpec{
                 Skills: []v1alpha1.SkillsSource{{
                     Image: "registry.redhat.io/acs/lightspeed-skills:latest",
@@ -529,15 +539,15 @@ type AgenticRunSpec struct {
     // Analysis output configuration (mode + optional custom schema).
     // Mode: Default (full built-in schema) or Minimal (title only).
     // Immutable after creation.
-    AnalysisOutput *AnalysisOutput
+    AnalysisOutput AnalysisOutput
 
     // Per-step configuration. Analysis is required.
     // Omit execution to skip it (advisory/assisted).
     // Omit verification to skip it.
     // All immutable after creation.
-    Analysis     *AgenticRunStep  // required
-    Execution    *AgenticRunStep
-    Verification *AgenticRunStep
+    Analysis     AgenticRunStep  // required
+    Execution    AgenticRunStep
+    Verification AgenticRunStep
 
     // Mutable fields — the designated mutation points.
     RevisionFeedback string  // Set to feedback text to trigger re-analysis.
@@ -558,7 +568,7 @@ type AgenticRunStep struct {
 
     // Per-step tools that replace spec.tools for this step.
     // Use when different steps need different skills.
-    Tools *ToolsSpec
+    Tools ToolsSpec
 }
 ```
 
