@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -44,13 +45,21 @@ func init() {
 
 func main() {
 	var (
-		metricsAddr string
-		healthAddr  string
-		namespace   string
+		metricsAddr         string
+		healthAddr          string
+		namespace           string
+		secureMetricsServer bool
+		metricsCertDir      string
+		metricsCertName     string
+		metricsKeyName      string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
+	flag.BoolVar(&secureMetricsServer, "secure-metrics-server", false, "Serve metrics over TLS using the configured certificate files.")
+	flag.StringVar(&metricsCertDir, "metrics-cert-dir", "/etc/tls/private", "Directory containing the metrics TLS certificate and key.")
+	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "Metrics TLS certificate file name.")
+	flag.StringVar(&metricsKeyName, "metrics-key-name", "tls.key", "Metrics TLS private key file name.")
 	flag.StringVar(&namespace, "namespace", "", "The namespace where the operator runs (required).")
 	flag.Parse()
 
@@ -73,8 +82,15 @@ func main() {
 	}
 
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
+		Scheme: scheme,
+		Metrics: metricsserver.Options{
+			BindAddress:    metricsAddr,
+			SecureServing:  secureMetricsServer,
+			FilterProvider: filters.WithAuthenticationAndAuthorization,
+			CertDir:        metricsCertDir,
+			CertName:       metricsCertName,
+			KeyName:        metricsKeyName,
+		},
 		HealthProbeBindAddress: healthAddr,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			Port:    9443,
