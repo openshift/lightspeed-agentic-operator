@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -211,7 +212,9 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 	spoke, spokeErr := spokeAccessForRun(ctx, s.K8sClient, run, s.Namespace)
 	if spokeErr != nil {
 		log.Error(spokeErr, "release: spoke unreachable, skipping spoke cleanup")
-		firstErr = spokeErr
+		if !apierrors.IsNotFound(spokeErr) || run.DeletionTimestamp.IsZero() {
+			firstErr = spokeErr
+		}
 	}
 
 	executionReleased := false
@@ -232,8 +235,8 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 	}
 
 	// If execution RBAC was created (annotation present) but patchSandboxInfo
-	// failed (no claim name), Release("execution") was skipped above. Clean up
-	// the RBAC unconditionally to prevent leaks.
+	// failed (no claim name), Release("execution") was skipped above. Attempt
+	// RBAC cleanup even without a claim name; missing spoke access skips it.
 	if !executionReleased {
 		// spoke already resolved above.
 		if err := cleanupStepRBAC(ctx, spoke, s.K8sClient, s.Namespace, run, "execution"); err != nil && firstErr == nil {
