@@ -150,13 +150,20 @@ func setupRealProviderFixtures(c client.Client) error {
 	provider := os.Getenv("E2E_PROVIDER")
 	model := os.Getenv("E2E_MODEL")
 	keyPath := os.Getenv("E2E_PROVIDER_KEY_PATH")
-	if model == "" || keyPath == "" {
-		return fmt.Errorf("E2E_PROVIDER=%s requires E2E_MODEL and E2E_PROVIDER_KEY_PATH", provider)
+	if model == "" {
+		return fmt.Errorf("E2E_PROVIDER=%s requires E2E_MODEL", provider)
 	}
 
-	creds, err := os.ReadFile(keyPath)
-	if err != nil {
-		return fmt.Errorf("read credentials %s: %w", keyPath, err)
+	var creds []byte
+	if provider != "bedrock-deepseek" && provider != "bedrock-claude" {
+		if keyPath == "" {
+			return fmt.Errorf("E2E_PROVIDER=%s requires E2E_PROVIDER_KEY_PATH", provider)
+		}
+		var err error
+		creds, err = os.ReadFile(keyPath)
+		if err != nil {
+			return fmt.Errorf("read credentials %s: %w", keyPath, err)
+		}
 	}
 
 	secretName := fmt.Sprintf("e2e-%s-secret", provider)
@@ -200,6 +207,29 @@ func setupRealProviderFixtures(c client.Client) error {
 			Type: agenticv1alpha1.LLMProviderOpenAI,
 			OpenAI: agenticv1alpha1.OpenAIConfig{
 				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+			},
+		}
+	case "azure-openai":
+		secretData = map[string][]byte{"AZURE_OPENAI_API_KEY": []byte(strings.TrimSpace(string(creds)))}
+		llmSpec = agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+			AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+				Endpoint:          os.Getenv("AZURE_OPENAI_ENDPOINT"),
+			},
+		}
+	case "bedrock-deepseek", "bedrock-claude":
+		accessKey, secretKey := os.Getenv("E2E_BEDROCK_ACCESS_KEY_ID"), os.Getenv("E2E_BEDROCK_SECRET_ACCESS_KEY")
+		if accessKey == "" || secretKey == "" {
+			return fmt.Errorf("%s requires Bedrock AWS credentials", provider)
+		}
+		secretData = map[string][]byte{"AWS_ACCESS_KEY_ID": []byte(accessKey), "AWS_SECRET_ACCESS_KEY": []byte(secretKey)}
+		llmSpec = agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderAWSBedrock,
+			AWSBedrock: agenticv1alpha1.AWSBedrockConfig{
+				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+				Region:            os.Getenv("BEDROCK_REGION"),
+				URL:               os.Getenv("BEDROCK_URL"),
 			},
 		}
 	default:

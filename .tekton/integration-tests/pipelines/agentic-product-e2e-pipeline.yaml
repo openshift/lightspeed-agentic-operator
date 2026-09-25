@@ -7,8 +7,9 @@ spec:
   description: |
     Runs lightspeed-agentic-operator product e2e tests on a Konflux HyperShift ephemeral OpenShift cluster.
     Deploys the operator with the real sandbox image from SNAPSHOT, then runs
-    scripts/e2e-cluster.sh against all LLM providers (Claude, Gemini, OpenAI)
-    with live credentials from Konflux workspace secrets.
+    scripts/e2e-cluster.sh in order against Vertex Claude, Vertex Gemini,
+    OpenAI, Azure OpenAI, Bedrock DeepSeek, and Bedrock Claude, with live
+    credentials from Konflux workspace secrets.
   params:
     - name: SNAPSHOT
       description: 'The JSON string representing the snapshot of the application under test.'
@@ -75,6 +76,18 @@ spec:
           - name: openai-creds
             secret:
               secretName: openai
+          - name: azure-openai-creds
+            secret:
+              secretName: azureopenai-apitoken
+          - name: azureopenai-entra-id
+            secret:
+              secretName: azureopenai-entra-id
+          - name: bedrock-creds
+            secret:
+              secretName: bedrock-apitoken
+          - name: bedrock-role-creds
+            secret:
+              secretName: bedrock-role-apitoken
           - name: ols-konflux-artifacts-bot-creds
             secret:
               secretName: ols-konflux-artifacts-bot
@@ -170,6 +183,14 @@ spec:
                 mountPath: /var/run/credentials/vertex
               - name: openai-creds
                 mountPath: /var/run/credentials/openai
+              - name: azure-openai-creds
+                mountPath: /var/run/credentials/azure-openai
+              - name: azureopenai-entra-id
+                mountPath: /var/run/credentials/azureopenai-entra-id
+              - name: bedrock-creds
+                mountPath: /var/run/credentials/bedrock
+              - name: bedrock-role-creds
+                mountPath: /var/run/credentials/bedrock-role
             env:
               - name: KUBECONFIG
                 value: "/credentials/kubeconfig"
@@ -185,6 +206,36 @@ spec:
                 value: "global"
               - name: OPENAI_PROVIDER_KEY_PATH
                 value: "/var/run/credentials/openai/token"
+              - name: AZUREOPENAI_PROVIDER_KEY_PATH
+                value: "/var/run/credentials/azure-openai/token"
+              - name: AZURE_OPENAI_ENDPOINT
+                value: "https://ols-test.openai.azure.com/"
+              - name: BEDROCK_REGION
+                value: "us-east-1"
+              - name: BEDROCK_URL
+                value: "https://bedrock-mantle.us-east-1.api.aws"
+              - name: BEDROCK_AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: bedrock-apitoken
+                    key: aws_access_key_id
+              - name: BEDROCK_AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: bedrock-apitoken
+                    key: aws_secret_access_key
+              - name: BEDROCK_ROLE_AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: bedrock-role-apitoken
+                    key: aws_access_key_id
+              - name: BEDROCK_ROLE_AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: bedrock-role-apitoken
+                    key: aws_secret_access_key
+              - name: BEDROCK_ROLE_ARN
+                value: "arn:aws:iam::103138678430:role/BedrockAccessRole"
               - name: ARTIFACT_DIR
                 value: "/workspace/konflux-artifacts"
               - name: E2E_SCENARIO_TAGS

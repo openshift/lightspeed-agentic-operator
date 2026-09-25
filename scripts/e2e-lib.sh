@@ -270,7 +270,9 @@ resolve_model() {
     case "$provider" in
         claude) echo "claude-sonnet-4-6" ;;
         gemini) echo "gemini-3.1-flash-lite" ;;
-        openai) echo "gpt-5.4-mini" ;;
+        openai|azure-openai) echo "gpt-5.4-mini" ;;
+        bedrock-deepseek) echo "deepseek.v3.2" ;;
+        bedrock-claude) echo "anthropic.claude-sonnet-4-6" ;;
         *) log_error "Unknown provider: $provider"; return 1 ;;
     esac
 }

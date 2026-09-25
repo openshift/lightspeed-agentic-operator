@@ -11,9 +11,12 @@
 #
 # Required env:
 #   IMG or SNAPSHOT          — operator image
-#   VERTEX_PROVIDER_KEY_PATH — GCP SA JSON (for claude/gemini)
-#   VERTEX_PROJECT_ID        — GCP project ID (for claude/gemini)
-#   OPENAI_PROVIDER_KEY_PATH — OpenAI API key file (for openai)
+#   VERTEX_PROVIDER_KEY_PATH          — GCP SA JSON (for claude/gemini)
+#   VERTEX_PROJECT_ID                 — GCP project ID (for claude/gemini)
+#   OPENAI_PROVIDER_KEY_PATH          — OpenAI API key file (for openai)
+#   AZUREOPENAI_PROVIDER_KEY_PATH     — Azure OpenAI API key file (for azure-openai)
+#   BEDROCK_AWS_ACCESS_KEY_ID         — AWS access key ID (for bedrock-deepseek and bedrock-claude)
+#   BEDROCK_AWS_SECRET_ACCESS_KEY     — AWS secret access key (for bedrock-deepseek and bedrock-claude)
 #
 # Optional env:
 #   OPERATOR_NAMESPACE       — default: openshift-lightspeed
@@ -34,7 +37,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/e2e-lib.sh
 source "$SCRIPT_DIR/e2e-lib.sh"
 
-PROVIDERS="${*:-claude gemini openai}"
+PROVIDERS="${*:-claude gemini openai azure-openai bedrock-deepseek bedrock-claude}"
 NAMESPACE="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
 export OPERATOR_NAMESPACE="$NAMESPACE"
 SCENARIOS_TMPDIR=""
@@ -76,7 +79,9 @@ run_provider() {
     local provider="$1"
     local model
     model="$(resolve_model "$provider")"
-    local key_path
+    local key_path=""
+    local bedrock_access_key=""
+    local bedrock_secret_key=""
 
     case "$provider" in
         claude|gemini)
@@ -84,6 +89,17 @@ run_provider() {
             ;;
         openai)
             key_path="${OPENAI_PROVIDER_KEY_PATH:?Missing OPENAI_PROVIDER_KEY_PATH}"
+            ;;
+        azure-openai)
+            key_path="${AZUREOPENAI_PROVIDER_KEY_PATH:?Missing AZUREOPENAI_PROVIDER_KEY_PATH}"
+            ;;
+        bedrock-deepseek)
+            bedrock_access_key="${BEDROCK_AWS_ACCESS_KEY_ID:?Missing BEDROCK_AWS_ACCESS_KEY_ID}"
+            bedrock_secret_key="${BEDROCK_AWS_SECRET_ACCESS_KEY:?Missing BEDROCK_AWS_SECRET_ACCESS_KEY}"
+            ;;
+        bedrock-claude)
+            bedrock_access_key="${BEDROCK_AWS_ACCESS_KEY_ID:?Missing BEDROCK_AWS_ACCESS_KEY_ID}"
+            bedrock_secret_key="${BEDROCK_AWS_SECRET_ACCESS_KEY:?Missing BEDROCK_AWS_SECRET_ACCESS_KEY}"
             ;;
         *)
             log_error "Unknown provider: $provider"
@@ -97,9 +113,14 @@ run_provider() {
         E2E_PROVIDER="$provider"
         E2E_MODEL="$model"
         E2E_PROVIDER_KEY_PATH="$key_path"
+        E2E_BEDROCK_ACCESS_KEY_ID="$bedrock_access_key"
+        E2E_BEDROCK_SECRET_ACCESS_KEY="$bedrock_secret_key"
         E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}"
         VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}"
         VERTEX_REGION="${VERTEX_REGION:-global}"
+        AZURE_OPENAI_ENDPOINT="${AZURE_OPENAI_ENDPOINT:-https://ols-test.openai.azure.com/}"
+        BEDROCK_REGION="${BEDROCK_REGION:-us-east-1}"
+        BEDROCK_URL="${BEDROCK_URL:-https://bedrock-mantle.us-east-1.api.aws}"
         TEST_NAMESPACE="$NAMESPACE"
     )
 

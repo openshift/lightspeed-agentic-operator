@@ -560,7 +560,7 @@ func discoverScenarios(t *testing.T, scenariosDir string) []discoveredScenario {
 		}
 	}
 
-	agenticDir := filepath.Join(scenariosDir, "agentic")
+	agenticDir := filepath.Join(scenariosDir, "evals/scenarios")
 	entries, err := os.ReadDir(agenticDir)
 	if err != nil {
 		t.Fatalf("read scenarios dir %s: %v", agenticDir, err)
@@ -682,13 +682,20 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 	provider := os.Getenv("E2E_PROVIDER")
 	model := os.Getenv("E2E_MODEL")
 	keyPath := os.Getenv("E2E_PROVIDER_KEY_PATH")
-	if provider == "" || model == "" || keyPath == "" {
-		t.Fatalf("E2E_PROVIDER, E2E_MODEL, E2E_PROVIDER_KEY_PATH must all be set")
+	if provider == "" || model == "" {
+		t.Fatalf("E2E_PROVIDER and E2E_MODEL must both be set")
 	}
 
-	creds, err := os.ReadFile(keyPath)
-	if err != nil {
-		t.Fatalf("read credentials %s: %v", keyPath, err)
+	var creds []byte
+	if provider != "bedrock-deepseek" && provider != "bedrock-claude" {
+		if keyPath == "" {
+			t.Fatalf("E2E_PROVIDER=%s requires E2E_PROVIDER_KEY_PATH", provider)
+		}
+		var err error
+		creds, err = os.ReadFile(keyPath)
+		if err != nil {
+			t.Fatalf("read credentials %s: %v", keyPath, err)
+		}
 	}
 
 	secretName := fmt.Sprintf("e2e-%s-secret", provider)
@@ -732,6 +739,29 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 			Type: agenticv1alpha1.LLMProviderOpenAI,
 			OpenAI: agenticv1alpha1.OpenAIConfig{
 				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+			},
+		}
+	case "azure-openai":
+		secretData = map[string][]byte{"AZURE_OPENAI_API_KEY": []byte(strings.TrimSpace(string(creds)))}
+		llmSpec = agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+			AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+				Endpoint:          os.Getenv("AZURE_OPENAI_ENDPOINT"),
+			},
+		}
+	case "bedrock-deepseek", "bedrock-claude":
+		accessKey, secretKey := os.Getenv("E2E_BEDROCK_ACCESS_KEY_ID"), os.Getenv("E2E_BEDROCK_SECRET_ACCESS_KEY")
+		if accessKey == "" || secretKey == "" {
+			t.Fatalf("%s requires Bedrock AWS credentials", provider)
+		}
+		secretData = map[string][]byte{"AWS_ACCESS_KEY_ID": []byte(accessKey), "AWS_SECRET_ACCESS_KEY": []byte(secretKey)}
+		llmSpec = agenticv1alpha1.LLMProviderSpec{
+			Type: agenticv1alpha1.LLMProviderAWSBedrock,
+			AWSBedrock: agenticv1alpha1.AWSBedrockConfig{
+				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+				Region:            os.Getenv("BEDROCK_REGION"),
+				URL:               os.Getenv("BEDROCK_URL"),
 			},
 		}
 	default:
