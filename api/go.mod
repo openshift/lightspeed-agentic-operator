@@ -1,6 +1,6 @@
 module github.com/openshift/lightspeed-agentic-operator/api
 
-go 1.25.7
+go 1.27.0
 
 require (
 	k8s.io/apiextensions-apiserver v0.35.3
@@ -21,7 +21,7 @@ require (
 	golang.org/x/text v0.40.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
-	k8s.io/kube-openapi v0.0.0-20260821135717-be32def86098 // indirect
+	k8s.io/kube-openapi v0.0.0-20260911184034-7970a1e230da // indirect
 	sigs.k8s.io/json v0.0.0-20260909141634-11ed52e25bc5 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
