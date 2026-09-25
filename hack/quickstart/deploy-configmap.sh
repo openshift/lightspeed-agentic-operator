@@ -58,7 +58,7 @@ fail() {
 step "Creating ${CONFIGMAP_NAME} in ${NAMESPACE}"
 step "Sandbox image: ${SANDBOX_IMAGE}"
 
-POD_SPEC="{\"containers\":[{\"name\":\"agent\",\"image\":\"${SANDBOX_IMAGE}\",\"resources\":{\"requests\":{\"cpu\":\"100m\",\"memory\":\"256Mi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"1Gi\"}},\"securityContext\":{\"allowPrivilegeEscalation\":false,\"runAsNonRoot\":true,\"capabilities\":{\"drop\":[\"ALL\"]},\"seccompProfile\":{\"type\":\"RuntimeDefault\"}}}],\"securityContext\":{\"runAsNonRoot\":true,\"seccompProfile\":{\"type\":\"RuntimeDefault\"}}}"
+POD_SPEC="{\"containers\":[{\"name\":\"agent\",\"image\":\"${SANDBOX_IMAGE}\",\"imagePullPolicy\":\"Always\",\"resources\":{\"requests\":{\"cpu\":\"100m\",\"memory\":\"256Mi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"1Gi\"}},\"securityContext\":{\"allowPrivilegeEscalation\":false,\"runAsNonRoot\":true,\"capabilities\":{\"drop\":[\"ALL\"]},\"seccompProfile\":{\"type\":\"RuntimeDefault\"}}}],\"securityContext\":{\"runAsNonRoot\":true,\"seccompProfile\":{\"type\":\"RuntimeDefault\"}}}"
 
 # Detect OTEL collector if deployed.
 OTEL_DATA=""
@@ -110,6 +110,7 @@ metadata:
   namespace: ${NAMESPACE}
 data:
   sandbox-mode: "bare-pod"
+  tool-output-inspection-enabled: "true"
   sandbox-pod-spec: '${POD_SPEC}'
   tls-profile: "IntermediateType"
   tls-min-version: "VersionTLS12"

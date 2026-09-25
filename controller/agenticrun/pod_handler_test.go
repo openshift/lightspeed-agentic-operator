@@ -438,6 +438,18 @@ func TestPodFailMessage(t *testing.T) {
 			want: "OOMKilled",
 		},
 		{
+			name: "tool result safety inspection failure",
+			pod: &corev1.Pod{Status: corev1.PodStatus{
+				Phase: corev1.PodFailed,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Message: toolResultSafetyInspectionFailed,
+					}},
+				}},
+			}},
+			want: msgToolResultSafetyInspectionFailed,
+		},
+		{
 			name: "failed with exit code",
 			pod: &corev1.Pod{Status: corev1.PodStatus{
 				Phase: corev1.PodFailed,

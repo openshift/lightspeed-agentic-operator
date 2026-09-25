@@ -483,6 +483,9 @@ func podFailMessage(pod *corev1.Pod) string {
 	}
 	msg, exitCode := podTerminatedInfo(pod)
 	if msg != "" {
+		if msg == toolResultSafetyInspectionFailed {
+			return msgToolResultSafetyInspectionFailed
+		}
 		return msg
 	}
 	if exitCode != nil {

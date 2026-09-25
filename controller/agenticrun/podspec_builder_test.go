@@ -388,6 +388,34 @@ func TestBuild_ConfiguredAgentLimits(t *testing.T) {
 	}
 }
 
+func TestBuild_ToolOutputInspectionEnv(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *configuration.Config
+		want   string
+	}{
+		{name: "missing config defaults enabled", config: nil, want: "true"},
+		{name: "explicitly enabled", config: &configuration.Config{ToolOutputInspectionEnabled: true}, want: "true"},
+		{name: "explicitly disabled", config: &configuration.Config{ToolOutputInspectionEnabled: false}, want: "false"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &PodSpecBuilder{}
+			agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+			llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+			ps, err := b.Build(testBasePodSpec(), agent, llm, nil, tt.config, "analysis", "uid", "sa", "uid-test-run", "", 600, 200)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			env := envToMap(ps.Containers[0].Env)
+			if env["LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED"] != tt.want {
+				t.Errorf("LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED = %q, want %q", env["LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED"], tt.want)
+			}
+		})
+	}
+}
+
 func TestBuild_TLSHandoff(t *testing.T) {
 	b := &PodSpecBuilder{}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
