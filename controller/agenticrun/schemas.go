@@ -72,13 +72,13 @@ var AnalysisOutputSchema = json.RawMessage(schemaReplacer.Replace(`{
               "description": { "type": "string", "maxLength": {{maxLenPlanDescription}}, "description": "Markdown-formatted summary of the overall remediation approach" },
               "actions": {
                 "type": "array",
-                "description": "Ordered list of exact bash commands to execute. Each action is one command.",
+                "description": "Ordered list of exact remediation actions. Each action is one kubectl/oc command or MCP tool call.",
                 "items": {
                   "type": "object",
                   "properties": {
-                    "command": { "type": "string", "maxLength": {{maxLenActionCommand}}, "description": "Exact executable bash command using kubectl or oc (e.g., 'kubectl set image deployment/foo container=registry/foo:v1.3 -n production')" },
+                    "command": { "type": "string", "maxLength": {{maxLenActionCommand}}, "description": "Exact executable kubectl/oc command or MCP tool name with JSON arguments (e.g., 'update_deployment_image({\"namespace\":\"production\"})')" },
                     "type": { "type": "string", "maxLength": {{maxLenActionType}}, "description": "Action phase category (e.g., 'pre-check', 'mutation', 'wait', 'post-check')" },
-                    "description": { "type": "string", "maxLength": {{maxLenActionDescription}}, "description": "What this command does and why" }
+                    "description": { "type": "string", "maxLength": {{maxLenActionDescription}}, "description": "What this action does and why" }
                   },
                   "required": ["command", "type", "description"]
                 }
