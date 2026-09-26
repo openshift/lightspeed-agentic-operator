@@ -101,11 +101,16 @@ func (b *PodSpecBuilder) Build(
 	container.TerminationMessagePolicy = corev1.TerminationMessageFallbackToLogsOnError
 	var volumes []corev1.Volume
 
+	toolOutputInspectionEnabled := true
+	if cfg != nil {
+		toolOutputInspectionEnabled = cfg.ToolOutputInspectionEnabled
+	}
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: "LIGHTSPEED_PROVIDER", Value: providerTypeString(llm.Spec.Type)},
 		corev1.EnvVar{Name: "LIGHTSPEED_MODEL", Value: agent.Spec.Model},
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENT_TIMEOUT_SECONDS", Value: strconv.Itoa(timeoutSeconds)},
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENT_MAX_TURNS", Value: strconv.Itoa(maxTurns)},
+		corev1.EnvVar{Name: "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", Value: strconv.FormatBool(toolOutputInspectionEnabled)},
 	)
 	if cfg != nil {
 		container.Env = append(container.Env,

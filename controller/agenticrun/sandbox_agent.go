@@ -36,6 +36,10 @@ const (
 	ReasonSandboxFailed         = "SandboxFailed"
 	ReasonAgentTimeout          = "AgentTimeout"
 
+	// Tool-result safety inspection failure marker and its user-facing message.
+	toolResultSafetyInspectionFailed    = "ToolResultSafetyInspectionFailed"
+	msgToolResultSafetyInspectionFailed = "Lightspeed stopped the operation because a tool result failed the safety inspection."
+
 	// Pod start timeout — covers image pull, scheduling, resource limits, etc.
 	podStartTimeout = 5 * time.Minute
 
