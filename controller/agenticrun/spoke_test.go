@@ -136,6 +136,54 @@ func TestSpokeAccessForRun_SecretMissing(t *testing.T) {
 	}
 }
 
+func TestReleaseSandboxes_SpokeAccessFailure(t *testing.T) {
+	tests := []struct {
+		name          string
+		deleting      bool
+		invalidSecret bool
+		wantErr       bool
+	}{
+		{name: "missing Secret during deletion", deleting: true},
+		{name: "missing Secret before deletion", wantErr: true},
+		{name: "invalid Secret during deletion", deleting: true, invalidSecret: true, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := testSandboxAgenticRun()
+			run.Spec.TargetCluster = "test-spoke"
+			run.Status.Steps.Analysis.Sandbox.ClaimName = "ls-analysis-test"
+			if tt.deleting {
+				now := metav1.Now()
+				run.DeletionTimestamp = &now
+			}
+
+			sandbox := &mockSandboxProvider{}
+			caller := newTestSandboxAgentCaller(sandbox)
+			if tt.invalidSecret {
+				secret := &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "spoke-kubeconfig-test-spoke",
+						Namespace: "test-ns",
+					},
+					Data: map[string][]byte{kubeconfigKey: []byte("not valid yaml {{{")},
+				}
+				if err := caller.K8sClient.Create(context.Background(), secret); err != nil {
+					t.Fatalf("create Secret: %v", err)
+				}
+			}
+
+			err := caller.ReleaseSandboxes(context.Background(), run)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ReleaseSandboxes() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if sandbox.releaseCalls != 1 {
+				t.Errorf("Release calls = %d, want 1", sandbox.releaseCalls)
+			}
+		})
+	}
+}
+
 func TestSpokeAccessForRun_MalformedKubeconfig(t *testing.T) {
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -534,6 +582,36 @@ func TestCleanupStepRBAC_Spoke_IdempotentWhenMissing(t *testing.T) {
 
 	if err := cleanupStepRBAC(context.Background(), spoke, fc, spokeManagedNamespace, run, "analysis"); err != nil {
 		t.Fatalf("expected no error for missing resources, got: %v", err)
+	}
+}
+
+func TestCleanupStepRBAC_SpokeUnavailable_DoesNotDeleteHubRBAC(t *testing.T) {
+	ctx := context.Background()
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{UID: "uid-spoke"},
+		Spec:       agenticv1alpha1.AgenticRunSpec{TargetCluster: "test-spoke"},
+	}
+	saName := sandboxSAName(run, "analysis")
+	crbName := perRunCRBName(string(run.UID), "analysis", 0)
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: "default"},
+	}
+	crb := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   crbName,
+			Labels: rbacLabels(string(run.UID), "reader-rbac"),
+		},
+	}
+	hubClient := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(sa, crb).Build()
+
+	if err := cleanupStepRBAC(ctx, nil, hubClient, "default", run, "analysis"); err != nil {
+		t.Fatalf("cleanupStepRBAC: %v", err)
+	}
+	if err := hubClient.Get(ctx, types.NamespacedName{Name: saName, Namespace: "default"}, &corev1.ServiceAccount{}); err != nil {
+		t.Errorf("hub ServiceAccount was not preserved: %v", err)
+	}
+	if err := hubClient.Get(ctx, types.NamespacedName{Name: crbName}, &rbacv1.ClusterRoleBinding{}); err != nil {
+		t.Errorf("hub ClusterRoleBinding was not preserved: %v", err)
 	}
 }
 

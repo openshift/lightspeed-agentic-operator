@@ -254,8 +254,13 @@ func buildSandboxKubeconfig(spoke *SpokeAccess, token string) ([]byte, error) {
 //
 // Derives the target client, namespace, and cleanup mode from spoke:
 //   - spoke != nil → spoke.Client / spoke.Namespace, per-run CRB deletion
-//   - spoke == nil → hubClient / hubNS, per-run CRB deletion
+//   - spoke == nil, local run → hubClient / hubNS, per-run CRB deletion
+//   - spoke == nil, spoke run → skip remote RBAC cleanup
 func cleanupStepRBAC(ctx context.Context, spoke *SpokeAccess, hubClient client.Client, hubNS string, run *agenticv1alpha1.AgenticRun, step string) error {
+	if run.Spec.TargetCluster != "" && spoke == nil {
+		return nil
+	}
+
 	c, ns := hubClient, hubNS
 	isSpoke := spoke != nil
 	if isSpoke {
