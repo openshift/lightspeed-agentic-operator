@@ -1,0 +1,11 @@
+# Grants a metrics scraper access to the authenticated metrics endpoint.
+# Bind this role to the ServiceAccount used by the cluster's metrics scraper.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: agentic-operator-metrics-reader
+rules:
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get

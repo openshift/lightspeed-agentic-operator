@@ -21,6 +21,10 @@ import (
 
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=create;delete;get;list;watch;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=bind
+// The delegated metrics filter authenticates requests with TokenReviews and
+// authorizes them with SubjectAccessReviews.
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 
 const (
 	rbacNamespacesAnnotation = "agentic.openshift.io/rbac-namespaces"

@@ -33,7 +33,9 @@ spec:
             - /manager
           args:
             - --namespace=__OPERATOR_NAMESPACE__
-            - --metrics-bind-address=:8080
+            - --metrics-bind-address=:8443
+            - --secure-metrics-server
+            - --metrics-cert-dir=/etc/tls/private
             - --health-probe-bind-address=:8081
           env:
             - name: POD_NAMESPACE
@@ -41,7 +43,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
           ports:
-            - containerPort: 8080
+            - containerPort: 8443
               name: metrics
               protocol: TCP
             - containerPort: 8081
@@ -51,6 +53,9 @@ spec:
               name: webhook
               protocol: TCP
           volumeMounts:
+            - name: metrics-tls
+              mountPath: /etc/tls/private
+              readOnly: true
             - name: webhook-certs
               mountPath: /tmp/k8s-webhook-server/serving-certs
               readOnly: true
@@ -80,7 +85,9 @@ spec:
               drop:
                 - ALL
       volumes:
+        - name: metrics-tls
+          secret:
+            secretName: agentic-operator-metrics-tls
         - name: webhook-certs
           secret:
             secretName: agentic-operator-webhook-certs
-            optional: true
