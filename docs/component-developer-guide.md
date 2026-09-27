@@ -93,7 +93,8 @@ spec:
     - affected-namespace
   analysis:
     agent: smart
-  execution: {}
+  execution:
+    agent: default
   verification:
     agent: fast
   tools:
@@ -280,43 +281,32 @@ analysisOutput:
         type: string
 ```
 
-### Per-step tools
+### Run-level tools
 
-When different steps need different skills from the same image, use per-step tools. Per-step tools **replace** (not merge with) the shared `spec.tools` for that step.
+Tools are defined once at `spec.tools` and are available to every configured step: analysis, execution, verification, and escalation. Skills, MCP servers, and required secrets are shared across the workflow.
 
 ```yaml
 spec:
-  # Shared secrets available to all steps
   tools:
+    skills:
+      - image: registry.redhat.io/acs/lightspeed-skills:latest
+        paths: [/skills/acs-remediation, /skills/acs-compliance]
     requiredSecrets:
       - name: acs-api-token
-        mountAs: ACS_API_TOKEN
+        mountAs:
+          type: EnvVar
+          envVar:
+            name: ACS_API_TOKEN
 
-  # Analysis gets remediation + compliance skills
   analysis:
     agent: smart
-    tools:
-      skills:
-        - image: registry.redhat.io/acs/lightspeed-skills:latest
-          paths: [/skills/acs-remediation, /skills/acs-compliance]
-
-  # Execution gets only remediation skills
   execution:
-    tools:
-      skills:
-        - image: registry.redhat.io/acs/lightspeed-skills:latest
-          paths: [/skills/acs-remediation]
-
-  # Verification gets only compliance skills
+    agent: default
   verification:
     agent: fast
-    tools:
-      skills:
-        - image: registry.redhat.io/acs/lightspeed-skills:latest
-          paths: [/skills/acs-compliance]
 ```
 
-Note that per-step `tools` replaces the shared `spec.tools` entirely for that step. In the example above, `requiredSecrets` from `spec.tools` are **not** automatically inherited by steps that define their own tools. If a step needs the secret, include it in the step's tools block.
+There are no per-step tool overrides. Every configured step receives the same run-level tools and required secrets.
 
 ## Workflow shapes
 
@@ -335,7 +325,8 @@ The workflow shape is defined directly on the AgenticRun by including or omittin
 spec:
   analysis:
     agent: smart
-  execution: {}
+  execution:
+    agent: default
   verification:
     agent: fast
 ```

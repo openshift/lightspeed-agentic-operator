@@ -255,8 +255,7 @@ const (
 )
 
 // AgenticRunStep defines per-step configuration on an AgenticRun. The agent
-// field selects which cluster-scoped Agent CR handles this step. The
-// tools field provides per-step tools that replace the shared spec.tools.
+// field selects which cluster-scoped Agent CR handles this step.
 // +kubebuilder:validation:MinProperties=1
 type AgenticRunStep struct {
 	// agent is the name of the cluster-scoped Agent CR to use for this step.
@@ -266,15 +265,10 @@ type AgenticRunStep struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="must be a valid DNS subdomain: lowercase alphanumeric characters, hyphens, and dots"
 	Agent string `json:"agent,omitempty"`
-
-	// tools provides per-step tools that replace the shared spec.tools
-	// for this step. Use this when different steps need different skills.
-	// +optional
-	Tools ToolsSpec `json:"tools,omitzero"`
 }
 
 func (s AgenticRunStep) IsZero() bool {
-	return s.Agent == "" && s.Tools.IsZero()
+	return s.Agent == ""
 }
 
 // AgenticRunSpec defines the desired state of AgenticRun.
@@ -351,35 +345,27 @@ type AgenticRunSpec struct {
 	// +optional
 	AnalysisOutput AnalysisOutput `json:"analysisOutput,omitzero"`
 
-	// tools defines the default tools for all steps: skills images,
-	// MCP servers, and required secrets. Per-step tools
-	// (analysis.tools, execution.tools, verification.tools) replace
-	// this default for individual steps.
+	// tools defines the tools available to every configured step: analysis,
+	// execution, verification, and escalation. It includes skills images,
+	// MCP servers, and required secrets.
 	//
-	// Immutable: the skills and secrets available to the agent are
-	// fixed at creation. Changing tools mid-flight could violate the
-	// assumptions of an in-progress analysis or execution.
+	// Immutable: the tools available to the agent are fixed at creation.
+	// Changing tools mid-flight could violate the assumptions of an
+	// in-progress analysis or execution.
 	// +optional
 	Tools ToolsSpec `json:"tools,omitzero"`
 
-	// analysis defines per-step configuration for the analysis step,
-	// including which agent handles it and any per-step tools.
-	//
-	// Immutable: agent and per-step tools are fixed at creation.
+	// analysis defines the agent used for the analysis step.
 	// +required
 	Analysis AgenticRunStep `json:"analysis,omitzero"`
 
-	// execution defines per-step configuration for the execution step.
+	// execution defines the agent used for the execution step.
 	// Omit to skip execution (advisory/assisted patterns).
-	//
-	// Immutable: agent and per-step tools are fixed at creation.
 	// +optional
 	Execution AgenticRunStep `json:"execution,omitzero"`
 
-	// verification defines per-step configuration for the verification step.
+	// verification defines the agent used for the verification step.
 	// Omit to skip verification.
-	//
-	// Immutable: agent and per-step tools are fixed at creation.
 	// +optional
 	Verification AgenticRunStep `json:"verification,omitzero"`
 
@@ -515,7 +501,8 @@ type AgenticRunStatus struct {
 //	            name: ACS_API_TOKEN
 //	  analysis:
 //	    agent: smart
-//	  execution: {}
+//	  execution:
+//	    agent: default
 //	  verification:
 //	    agent: fast
 type AgenticRun struct {

@@ -131,6 +131,76 @@ func TestReadFromConfigMap_MissingOptionalFields(t *testing.T) {
 	}
 }
 
+func TestParseConfigMap_ToolOutputInspectionEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		present bool
+		want    bool
+	}{
+		{name: "true", value: "true", present: true, want: true},
+		{name: "false", value: "false", present: true, want: false},
+		{name: "trimmed mixed case false", value: " False ", present: true, want: false},
+		{name: "missing defaults enabled", want: true},
+		{name: "empty defaults enabled", value: "", present: true, want: true},
+		{name: "malformed defaults enabled", value: "invalid", present: true, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data := map[string]string{}
+			if tc.present {
+				data[KeyToolOutputInspectionEnabled] = tc.value
+			}
+			cfg, err := parseConfigMap(&corev1.ConfigMap{Data: data})
+			if err != nil {
+				t.Fatalf("parseConfigMap: %v", err)
+			}
+			if cfg.ToolOutputInspectionEnabled != tc.want {
+				t.Fatalf("ToolOutputInspectionEnabled = %v, want %v", cfg.ToolOutputInspectionEnabled, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseConfigMap_TLSFields(t *testing.T) {
+	cm := &corev1.ConfigMap{
+		Data: map[string]string{
+			KeyTLSProfile:            "IntermediateType",
+			KeyTLSMinVersion:         "VersionTLS12",
+			KeyTLSCipherSuites:       `["TLS_AES_128_GCM_SHA256"]`,
+			KeyAdditionalCAConfigMap: "custom-ca",
+		},
+	}
+
+	cfg, err := parseConfigMap(cm)
+	if err != nil {
+		t.Fatalf("parseConfigMap: %v", err)
+	}
+	if cfg.TLS.Profile != "IntermediateType" {
+		t.Errorf("TLS.Profile = %q", cfg.TLS.Profile)
+	}
+	if cfg.TLS.MinVersion != "VersionTLS12" {
+		t.Errorf("TLS.MinVersion = %q", cfg.TLS.MinVersion)
+	}
+	if cfg.TLS.CipherSuites != `["TLS_AES_128_GCM_SHA256"]` {
+		t.Errorf("TLS.CipherSuites = %q", cfg.TLS.CipherSuites)
+	}
+	if cfg.AdditionalCAConfigMap != "custom-ca" {
+		t.Errorf("AdditionalCAConfigMap = %q", cfg.AdditionalCAConfigMap)
+	}
+}
+
+func TestParseConfigMap_TLSAdditionalCAConfigMapOmitted(t *testing.T) {
+	cfg, err := parseConfigMap(&corev1.ConfigMap{})
+	if err != nil {
+		t.Fatalf("parseConfigMap: %v", err)
+	}
+	if cfg.AdditionalCAConfigMap != "" {
+		t.Errorf("AdditionalCAConfigMap = %q, want empty", cfg.AdditionalCAConfigMap)
+	}
+}
+
 func TestParseConfigMap_RHOKPFields(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		Data: map[string]string{

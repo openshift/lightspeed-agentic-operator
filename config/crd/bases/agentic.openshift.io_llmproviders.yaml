@@ -175,6 +175,7 @@ spec:
                       apiVersion is the Azure OpenAI API version. Azure API versions use
                       a date-based format: YYYY-MM-DD with an optional "-preview" suffix
                       (e.g., "2024-02-01", "2024-08-01-preview").
+                      Optional for compatibility with existing Azure providers.
                     maxLength: 32
                     minLength: 1
                     type: string
@@ -241,7 +242,6 @@ spec:
                     - message: fragments are not allowed in URL
                       rule: '!self.contains(''#'')'
                 required:
-                - apiVersion
                 - credentialsSecret
                 - endpoint
                 type: object

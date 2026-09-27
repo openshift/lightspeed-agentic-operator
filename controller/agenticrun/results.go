@@ -3,6 +3,8 @@ package agenticrun
 import (
 	"context"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,6 +20,20 @@ const (
 	ErrCreateResultCR             = "create"
 	ErrPatchResultStatus          = "patch"
 )
+
+const maxResultFailureReason = 8192
+
+func boundedFailureReason(reason string) string {
+	if len(reason) <= maxResultFailureReason {
+		return reason
+	}
+
+	limit := maxResultFailureReason - len("...")
+	for limit > 0 && !utf8.ValidString(reason[:limit]) {
+		limit--
+	}
+	return strings.TrimSpace(reason[:limit]) + "..."
+}
 
 func resultCRName(agenticRunName, step string, index int) string {
 	return truncateK8sName(fmt.Sprintf("%s-%s-%d", agenticRunName, step, index))
@@ -97,7 +113,7 @@ func (r *AgenticRunReconciler) createAnalysisResult(
 		Status: agenticv1alpha1.AnalysisResultStatus{
 			Conditions:    resultConditions(startTime, completedAt, outcome),
 			Sandbox:       sandbox,
-			FailureReason: failureReason,
+			FailureReason: boundedFailureReason(failureReason),
 		},
 	}
 
@@ -152,7 +168,7 @@ func (r *AgenticRunReconciler) createExecutionResult(
 		Status: agenticv1alpha1.ExecutionResultStatus{
 			Conditions:    resultConditions(startTime, completedAt, outcome),
 			Sandbox:       sandbox,
-			FailureReason: failureReason,
+			FailureReason: boundedFailureReason(failureReason),
 		},
 	}
 
@@ -203,7 +219,7 @@ func (r *AgenticRunReconciler) createVerificationResult(
 		Status: agenticv1alpha1.VerificationResultStatus{
 			Conditions:    resultConditions(startTime, completedAt, outcome),
 			Sandbox:       sandbox,
-			FailureReason: failureReason,
+			FailureReason: boundedFailureReason(failureReason),
 		},
 	}
 
@@ -255,7 +271,7 @@ func (r *AgenticRunReconciler) createEscalationResult(
 		Status: agenticv1alpha1.EscalationResultStatus{
 			Conditions:    resultConditions(startTime, completedAt, outcome),
 			Sandbox:       sandbox,
-			FailureReason: failureReason,
+			FailureReason: boundedFailureReason(failureReason),
 		},
 	}
 

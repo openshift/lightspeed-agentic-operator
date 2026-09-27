@@ -95,7 +95,7 @@ func TestBuildAnalysisQuery_FullAgenticRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "Derive RBAC") {
+	if !strings.Contains(result, "derive RBAC") {
 		t.Error("full run should mention RBAC derivation")
 	}
 	if !strings.Contains(result, "Verification plan") {
@@ -113,8 +113,8 @@ func TestBuildAnalysisQuery_FullAgenticRun(t *testing.T) {
 	if !strings.Contains(result, "kubectl") {
 		t.Error("should instruct use of kubectl")
 	}
-	if !strings.Contains(result, "remediation script") {
-		t.Error("should require a remediation script")
+	if !strings.Contains(result, "Plan remediation actions") {
+		t.Error("should require a remediation action plan")
 	}
 	if !strings.Contains(result, "skill") {
 		t.Error("should mention skill priority")
@@ -131,7 +131,7 @@ func TestBuildAnalysisQuery_TrustMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(result, "Derive RBAC") {
+	if !strings.Contains(result, "derive RBAC") {
 		t.Error("execution run should mention RBAC derivation")
 	}
 	if strings.Contains(result, "Verification plan") {
@@ -145,7 +145,7 @@ func TestBuildAnalysisQuery_Advisory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Contains(result, "Derive RBAC") {
+	if strings.Contains(result, "derive RBAC") {
 		t.Error("advisory run should NOT mention RBAC derivation")
 	}
 	if strings.Contains(result, "Verification plan") {

@@ -6,24 +6,22 @@ Implementation details for the agentic-operator's role in the templog feature.
 
 ### Configuration
 
-1. The agentic-operator reads Collector connectivity from a well-known ConfigMap (`lightspeed-otel-collector-client`) in the operator namespace, created by the lightspeed-operator.
-2. The ConfigMap contains: `collector-endpoint` (OTLP gRPC host:port), `admin-endpoint` (HTTPS admin API), `ca.crt` (TLS CA certificate), `credentials-secret` (optional).
-3. Two valid ConfigMap states exist:
-    - **Disabled:** empty data / no `collector-endpoint` — OTLP export is off (stdout audit continues). Used by quickstart/e2e without a Collector.
-    - **Enabled:** `collector-endpoint` (host:port), `admin-endpoint` (`https://…`), and parseable `ca.crt` PEM are all required. When `credentials-secret` is set, the named Secret in the operator namespace must contain `tls.crt` and `tls.key` (standard TLS Secret keys); those PEMs are loaded into the OTLP and admin HTTPS clients for mTLS. When the key is omitted, trust is CA-only (current lightspeed-operator default).
-4. On startup, the operator blocks until the ConfigMap exists (5 minute timeout). Missing ConfigMap or an **invalid enabled** ConfigMap is fatal. An empty/disabled ConfigMap is success.
-5. A controller-runtime informer watches the ConfigMap for runtime changes. On a valid change, exporters are rebuilt then the previous providers are shut down. On an **invalid enabled** update, export is disabled (old config is not retained) and an error is logged; reconcile does not retry.
+1. [PLANNED: OLS-3685] The agentic-operator reads Collector connectivity from the `lightspeed-agentic-configuration` ConfigMap in the operator namespace, created by the lightspeed-operator.
+2. The ConfigMap supplies `otel-collector-endpoint`, `otel-admin-endpoint`, and `otel-ca-secret`. The named Secret contains the public Collector CA under `otel-ca.crt`; the operator uses it to trust OTLP and admin HTTPS connections.
+3. The agentic-operator does not receive a templog or product-collection enablement value. Whether received logs are stored and received traces are staged depends on the Collector pipelines independently configured by the lightspeed-operator.
+4. Missing or invalid Collector connectivity disables OTLP export and records a bounded configuration error; it MUST NOT prevent the controller manager from starting or block reconciliation. Stdout compliance output continues when enabled, and the configuration watcher enables OTLP after valid handoff resources appear.
+5. A controller-runtime informer watches the ConfigMap and referenced CA Secret for runtime changes. On a valid change, exporters are rebuilt before previous providers are shut down. On an invalid update, export is disabled and an error is logged; reconciliation does not retain stale connectivity.
 
 ### OTLP Log Emission
 
-6. When the Collector is configured, the agentic-operator emits audit events as OTLP log records to it. When disabled or unconfigured, OTLP emission is a no-op. Whether records are stored depends on the Collector's pipeline configuration (managed by the lightspeed-operator).
-7. Structured JSON to stdout always emits unconditionally. Stdout emission is not configurable — it is always on. This is dual emission: stdout + OTLP (when enabled).
+6. When the Collector is configured and compliance audit is enabled, the agentic-operator emits audit events as OTLP log records to it. When audit is disabled or connectivity is unavailable, OTLP log emission is a no-op. Whether records are stored depends on the Collector's pipeline configuration managed by the lightspeed-operator; product trace export remains independent.
+7. Structured compliance JSON emits to stdout only when compliance audit is enabled. When enabled with Collector connectivity, this is dual emission: stdout plus OTLP logs.
 8. Each OTLP log record carries:
    - `agenticrun.uid` as a log record attribute (AgenticRun `metadata.uid`, raw UUID with hyphens — collector normalizes to 32-char hex on INSERT)
    - `agenticrun.phase` as a log record attribute (the current audit phase: `analysis`, `approval`, `execution`, `verification`, `escalation`, `terminal`)
    - `event` as a log record attribute (the event discriminator, e.g., `audit.agenticrun.received`)
    - The full structured JSON audit event as the log record body
-9. When the Collector is not configured (ConfigMap absent at runtime after initial startup), OTLP log emission is a no-op. Stdout continues unaffected.
+9. When Collector connectivity is unavailable, OTLP log emission is a no-op. Compliance stdout behavior remains governed by the audit setting.
 
 ### OTLP Trace Emission
 
@@ -50,11 +48,10 @@ Implementation details for the agentic-operator's role in the templog feature.
 
 ## Edge Cases
 
-- **Invalid enabled ConfigMap at startup.** Fatal — operator exits.
-- **Invalid enabled ConfigMap at runtime.** Export disabled; old config discarded; error logged; no reconcile retry.
+- **Invalid connectivity at startup or runtime.** OTLP export is disabled, stale configuration is not retained, and a bounded error is logged. The operator continues reconciling and the watcher enables export after valid handoff resources appear.
 - **Collector unavailable during AgenticRun deletion.** The finalizer retries up to 3 times. After exhausting retries, the finalizer is removed and deletion proceeds. Log records become orphaned in Postgres — acceptable trade-off vs blocking deletion forever.
 - **No rows to delete.** The Collector admin API returns HTTP 200 with `{"deleted": 0}`. The finalizer succeeds and is removed. No error.
-- **ConfigMap deleted at runtime.** OTLP emission becomes no-op. Stdout continues. Admin API calls (finalizer) return nil immediately (no client configured). Finalizer is removed without cleanup.
+- **ConfigMap deleted at runtime.** OTLP emission becomes a no-op. Compliance stdout remains governed by the audit setting. A cleanup attempt without an admin client is a normal failed attempt under rule 14; it does not bypass retry accounting or remove the finalizer early.
 - **Operator restart mid-cleanup.** The retry counter is stored as an annotation on the CR — survives restart. The operator resumes from the stored attempt count.
 
 ## Cross-References

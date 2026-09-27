@@ -2,7 +2,9 @@ package agenticrun
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -11,6 +13,34 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
+
+func TestBoundedFailureReason(t *testing.T) {
+	short := "permission denied"
+	if got := boundedFailureReason(short); got != short {
+		t.Fatalf("short failure reason changed: got length %d", len(got))
+	}
+
+	long := strings.Repeat("x", maxResultFailureReason+100)
+	got := boundedFailureReason(long)
+	if len(got) > maxResultFailureReason {
+		t.Fatalf("failure reason length = %d, want <= %d", len(got), maxResultFailureReason)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("truncated failure reason should end with ellipsis: %q", got[len(got)-10:])
+	}
+
+	boundary := strings.Repeat("x", maxResultFailureReason-4) + "é" + "tail"
+	got = boundedFailureReason(boundary)
+	if !utf8.ValidString(got) {
+		t.Fatal("truncated failure reason is not valid UTF-8")
+	}
+	if len(got) > maxResultFailureReason {
+		t.Fatalf("UTF-8 failure reason length = %d, want <= %d", len(got), maxResultFailureReason)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("UTF-8 truncated failure reason should end with ellipsis: %q", got[len(got)-10:])
+	}
+}
 
 func TestResultLabels_UsesUID(t *testing.T) {
 	uid := "a1b2c3d4-e5f6-7890-1234-567890abcdef"

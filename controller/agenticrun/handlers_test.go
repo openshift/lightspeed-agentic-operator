@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -145,7 +146,7 @@ func TestReconcile_WorkflowVariants(t *testing.T) {
 			scheme := testScheme()
 			run := tt.run
 
-			objs := []client.Object{run, testDefaultAgent(), testLLM("smart"), testAutoApprovePolicy()}
+			objs := []client.Object{run, testDefaultAgent(), testLLM("smart"), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "llm-secret", Namespace: "default"}}, testAutoApprovePolicy()}
 			fc := fake.NewClientBuilder().WithScheme(scheme).
 				WithObjects(objs...).
 				WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()

@@ -25,9 +25,22 @@ SANDBOX_IMAGE="quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lights
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --sandbox-image=*) SANDBOX_IMAGE="${1#*=}"; shift ;;
-    --sandbox-image)   [ $# -lt 2 ] && { echo "Missing value for $1" >&2; exit 1; }; SANDBOX_IMAGE="$2"; shift 2 ;;
-    *) echo "Unknown flag: $1" >&2; exit 1 ;;
+  --sandbox-image=*)
+    SANDBOX_IMAGE="${1#*=}"
+    shift
+    ;;
+  --sandbox-image)
+    [ $# -lt 2 ] && {
+      echo "Missing value for $1" >&2
+      exit 1
+    }
+    SANDBOX_IMAGE="$2"
+    shift 2
+    ;;
+  *)
+    echo "Unknown flag: $1" >&2
+    exit 1
+    ;;
   esac
 done
 
@@ -35,9 +48,12 @@ CONFIGMAP_NAME="lightspeed-agentic-configuration"
 COLLECTOR_NAME="lightspeed-otel-collector"
 COLLECTOR_CERT_SECRET="${COLLECTOR_NAME}-cert"
 
-info()  { echo "  ✓ $*"; }
-step()  { echo "[configmap] $*"; }
-fail()  { echo "  ✗ $*" >&2; exit 1; }
+info() { echo "  ✓ $*"; }
+step() { echo "[configmap] $*"; }
+fail() {
+  echo "  ✗ $*" >&2
+  exit 1
+}
 
 step "Creating ${CONFIGMAP_NAME} in ${NAMESPACE}"
 step "Sandbox image: ${SANDBOX_IMAGE}"
@@ -95,6 +111,9 @@ metadata:
 data:
   sandbox-mode: "bare-pod"
   sandbox-pod-spec: '${POD_SPEC}'
+  tls-profile: "IntermediateType"
+  tls-min-version: "VersionTLS12"
+  tls-cipher-suites: '["TLS_AES_128_GCM_SHA256","TLS_AES_256_GCM_SHA384","TLS_CHACHA20_POLY1305_SHA256","ECDHE-ECDSA-AES128-GCM-SHA256","ECDHE-RSA-AES128-GCM-SHA256","ECDHE-ECDSA-AES256-GCM-SHA384","ECDHE-RSA-AES256-GCM-SHA384","ECDHE-ECDSA-CHACHA20-POLY1305","ECDHE-RSA-CHACHA20-POLY1305","DHE-RSA-AES128-GCM-SHA256","DHE-RSA-AES256-GCM-SHA384"]'
 ${OTEL_DATA}
 EOF
 

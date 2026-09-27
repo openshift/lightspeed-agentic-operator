@@ -25,5 +25,9 @@ oc delete role "${ADAPTER_NAME}-agenticruns" -n "${NAMESPACE}" --ignore-not-foun
   echo "  ! Warning: could not delete Role (managed cluster?)"
 oc delete rolebinding "${ADAPTER_NAME}-alertmanager" -n openshift-monitoring --ignore-not-found ||
   echo "  ! Warning: could not delete RoleBinding in openshift-monitoring (managed cluster?)"
+oc delete clusterrolebinding "${ADAPTER_NAME}-agenticolsconfig" --ignore-not-found ||
+  echo "  ! Warning: could not delete ClusterRoleBinding (managed cluster?)"
+oc delete clusterrole "${ADAPTER_NAME}-agenticolsconfig" --ignore-not-found ||
+  echo "  ! Warning: could not delete ClusterRole (managed cluster?)"
 
 info "Alerts adapter resources deleted"

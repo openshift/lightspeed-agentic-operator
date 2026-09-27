@@ -4,15 +4,12 @@ package e2e
 
 import (
 	"context"
-	"fmt"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
@@ -152,9 +149,9 @@ func TestVerificationFlow_FailureEscalatesSingleExecution(t *testing.T) {
 	t.Log("Approving verification (mock agent will report a FAILING check — MOCK_VERIFY_FAIL)")
 	approveVerification(t, c, prop.Name)
 
-	t.Log("Waiting for escalation to be raised (phase Escalating or Escalated)")
-	updated := waitForEscalationRaised(t, c, prop.Name)
-	t.Logf("Escalation raised: phase=%s", agenticv1alpha1.DerivePhase(updated.Status.Conditions))
+	t.Log("Waiting for escalation to complete")
+	updated := waitForPhase(t, c, prop.Name, agenticv1alpha1.AgenticRunPhaseEscalated)
+	t.Logf("Escalation completed: phase=%s", agenticv1alpha1.DerivePhase(updated.Status.Conditions))
 
 	// --- Verify: Verified=False/VerificationFailed ---
 	verified := meta.FindStatusCondition(updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionVerified)
@@ -163,28 +160,12 @@ func TestVerificationFlow_FailureEscalatesSingleExecution(t *testing.T) {
 	}
 	t.Log("Verified: Verified=False/VerificationFailed condition present")
 
-	// --- Verify: Escalated condition present with the expected reason ---
-	// Unknown while Escalating — reason VerificationFailed (not yet started)
-	// or InProgress (escalation agent running; reachable now that escalation
-	// auto-approves by default and the poll can land mid-run) — or True if
-	// the controller auto-advanced to Escalated (terminal reason Complete).
+	// --- Verify: Escalated=True/Succeeded ---
 	escalated := meta.FindStatusCondition(updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionEscalated)
-	if escalated == nil {
-		t.Fatalf("expected Escalated condition, got nil")
+	if escalated == nil || escalated.Status != metav1.ConditionTrue || escalated.Reason != "Succeeded" {
+		t.Fatalf("expected Escalated=True/Succeeded, got %+v", escalated)
 	}
-	switch escalated.Status {
-	case metav1.ConditionUnknown:
-		if escalated.Reason != agenticv1alpha1.ReasonVerificationFailed && escalated.Reason != "InProgress" {
-			t.Fatalf("expected Escalated=Unknown reason %s or InProgress, got %+v", agenticv1alpha1.ReasonVerificationFailed, escalated)
-		}
-	case metav1.ConditionTrue:
-		if escalated.Reason != "Complete" {
-			t.Fatalf("expected Escalated=True reason Complete, got %+v", escalated)
-		}
-	default:
-		t.Fatalf("expected Escalated condition Unknown or True, got %+v", escalated)
-	}
-	t.Logf("Verified: Escalated condition present with status=%s reason=%s", escalated.Status, escalated.Reason)
+	t.Log("Verified: Escalated=True/Succeeded")
 
 	// --- Verify: exactly ONE ExecutionResult — proof of no re-execution ---
 	// Result CRs are labelled with the run UID (LabelRun = string(run.UID)),
@@ -199,38 +180,4 @@ func TestVerificationFlow_FailureEscalatesSingleExecution(t *testing.T) {
 	t.Logf("Verified: exactly 1 ExecutionResult %s exists — no re-execution occurred", execList.Items[0].Name)
 
 	t.Log("PASS: verification failure escalated with a single execution")
-}
-
-// waitForEscalationRaised polls until the AgenticRun's Escalated condition is
-// present with Status Unknown (phase Escalating) or True (phase Escalated,
-// if the controller auto-advances before the poll observes Escalating).
-// Either outcome proves escalation was raised. Fails fast if the run instead
-// reaches a different terminal phase.
-func waitForEscalationRaised(t *testing.T, c client.Client, name string) agenticv1alpha1.AgenticRun {
-	t.Helper()
-	ctx := context.Background()
-	var updated agenticv1alpha1.AgenticRun
-
-	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
-		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: testNS}, &updated); err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
-			return false, err
-		}
-		phase := agenticv1alpha1.DerivePhase(updated.Status.Conditions)
-		t.Logf("polling %s: phase=%s conditions=%d", name, phase, len(updated.Status.Conditions))
-		if phase == agenticv1alpha1.AgenticRunPhaseEscalating || phase == agenticv1alpha1.AgenticRunPhaseEscalated {
-			return true, nil
-		}
-		if terminalPhases[phase] {
-			return false, fmt.Errorf("reached terminal phase %s without escalation being raised", phase)
-		}
-		return false, nil
-	})
-	if err != nil {
-		phase := agenticv1alpha1.DerivePhase(updated.Status.Conditions)
-		t.Fatalf("waiting for escalation raised failed: %v; current=%s conditions=%v", err, phase, updated.Status.Conditions)
-	}
-	return updated
 }

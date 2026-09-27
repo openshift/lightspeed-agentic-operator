@@ -26,7 +26,7 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 8. The operator MUST interact with the Kubernetes API server for all CR CRUD, status updates, and RBAC management.
 9. When `sandbox-mode=sandbox-claim` (from `lightspeed-agentic-configuration` ConfigMap), the operator MUST interact with the Sandbox API (`extensions.agents.x-k8s.io/v1alpha1` `SandboxClaim`, `agents.x-k8s.io/v1alpha1` `Sandbox`) to provision ephemeral agent workloads. In the default `bare-pod` mode, the operator creates Pods directly and does not depend on Sandbox API CRDs.
 10. The operator MUST resolve `Agent` CRs and their referenced `LLMProvider` CRs to determine model configuration and credentials for each workflow step.
-11. The operator MUST call the sandbox agent's `POST /v1/agent/run` HTTP endpoint for each workflow step (analysis, execution, verification, escalation).
+11. For each workflow step (analysis, execution, verification, escalation), the operator MUST materialize input in a ConfigMap and create a batch Pod or SandboxClaim. The sandbox MUST publish a Result CR whose `spec` is immutable; its `status` MAY subsequently be patched. The operator MUST observe and process the Result CR only after `status.conditions` includes `Completed=True`. The production workflow does not call a sandbox HTTP endpoint.
 12. [PLANNED: OLS-3236] Console plugin deployment is migrated to the lightspeed-operator. The agentic-operator no longer interacts with OpenShift Console APIs for plugin deployment.
 
 ### Dual-Module Structure

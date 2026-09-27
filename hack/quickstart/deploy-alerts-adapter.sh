@@ -132,6 +132,37 @@ subjects:
   name: ${ADAPTER_NAME}
   namespace: ${NAMESPACE}
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ${ADAPTER_NAME}-agenticolsconfig
+  labels:
+    app: ${ADAPTER_NAME}
+    app.kubernetes.io/name: ${ADAPTER_NAME}
+    app.kubernetes.io/component: alerts-adapter
+rules:
+- apiGroups: ["agentic.openshift.io"]
+  resources: ["agenticolsconfigs"]
+  resourceNames: ["cluster"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ${ADAPTER_NAME}-agenticolsconfig
+  labels:
+    app: ${ADAPTER_NAME}
+    app.kubernetes.io/name: ${ADAPTER_NAME}
+    app.kubernetes.io/component: alerts-adapter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ${ADAPTER_NAME}-agenticolsconfig
+subjects:
+- kind: ServiceAccount
+  name: ${ADAPTER_NAME}
+  namespace: ${NAMESPACE}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

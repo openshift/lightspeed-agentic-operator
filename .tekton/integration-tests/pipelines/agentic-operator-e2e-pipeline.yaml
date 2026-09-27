@@ -97,7 +97,7 @@ spec:
                 value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1"
               - name: SANDBOX_MODE
                 value: "$(params.sandbox-mode)"
-            image: registry.redhat.io/openshift4/ose-cli:latest
+            image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.22
             script: |
               set -euo pipefail
               dnf -y install jq git make golang
@@ -172,7 +172,7 @@ spec:
                 value: "$(params.namespace)"
               - name: COMMIT
                 value: "$(params.commit)"
-            image: registry.redhat.io/openshift4/ose-cli:latest
+            image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.22
             script: |
               set -euo pipefail
               dnf -y install git make golang

@@ -94,7 +94,7 @@ spec:
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.labels['appstudio.openshift.io/component']
-            image: registry.redhat.io/openshift4/ose-cli:latest
+            image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.22
             script: |
               set -euo pipefail
               dnf -y install jq
@@ -142,7 +142,7 @@ spec:
                 value: "$(steps.extract-images.results.operator-image)"
               - name: SANDBOX_IMAGE
                 value: "$(steps.extract-images.results.sandbox-image)"
-            image: registry.redhat.io/openshift4/ose-cli:latest
+            image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.22
             script: |
               set -euo pipefail
               dnf -y install jq git make golang
@@ -189,7 +189,7 @@ spec:
                 value: "/workspace/konflux-artifacts"
               - name: E2E_SCENARIO_TAGS
                 value: "alert"
-            image: registry.redhat.io/openshift4/ose-cli:latest
+            image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.22
             script: |
               set -euo pipefail
               dnf -y install git make golang jq

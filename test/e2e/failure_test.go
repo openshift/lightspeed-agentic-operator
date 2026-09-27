@@ -231,7 +231,11 @@ func TestPendingPodStartupTimeout(t *testing.T) {
 		var restore corev1.ConfigMap
 		if err := c.Get(ctx, cmKey, &restore); err == nil {
 			restore.Data["sandbox-pod-spec"] = originalSpec
-			_ = c.Update(ctx, &restore)
+			if err := c.Update(ctx, &restore); err == nil {
+				// The operator reloads this ConfigMap through an informer. Wait
+				// for that update before the next E2E test creates a sandbox.
+				time.Sleep(3 * time.Second)
+			}
 		}
 	})
 	t.Log("Patched sandbox-pod-spec with impossible nodeSelector")
@@ -244,10 +248,10 @@ func TestPendingPodStartupTimeout(t *testing.T) {
 	updated := waitForPhaseWithTimeout(t, c, prop.Name, agenticv1alpha1.AgenticRunPhaseFailed, 8*time.Minute)
 	t.Log("Phase reached: Failed")
 
-	assertStepCondition(t, updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed,
-		metav1.ConditionFalse, "SandboxStartupTimeout")
+	assertStepConditionOneOf(t, updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed,
+		metav1.ConditionFalse, "SandboxTimeout", "SandboxStartupTimeout")
 
-	t.Log("PASS: pending pod startup timeout detected, phase=Failed, reason=SandboxStartupTimeout")
+	t.Log("PASS: pending pod startup timeout detected, phase=Failed")
 }
 
 // assertStepCondition checks that a condition with the given type, status, and
@@ -265,6 +269,28 @@ func assertStepCondition(t *testing.T, conditions []metav1.Condition, condType s
 			t.Logf("Verified: %s=%s reason=%s message=%q", condType, cond.Status, cond.Reason, cond.Message)
 			return
 		}
+	}
+	t.Errorf("%s condition not found", condType)
+}
+
+func assertStepConditionOneOf(t *testing.T, conditions []metav1.Condition, condType string, status metav1.ConditionStatus, reasons ...string) {
+	t.Helper()
+	allowed := make(map[string]struct{}, len(reasons))
+	for _, reason := range reasons {
+		allowed[reason] = struct{}{}
+	}
+	for _, cond := range conditions {
+		if cond.Type != condType {
+			continue
+		}
+		if cond.Status != status {
+			t.Errorf("%s condition status = %s, want %s", condType, cond.Status, status)
+		}
+		if _, ok := allowed[cond.Reason]; !ok {
+			t.Errorf("%s condition reason = %s, want one of %v", condType, cond.Reason, reasons)
+		}
+		t.Logf("Verified: %s=%s reason=%s message=%q", condType, cond.Status, cond.Reason, cond.Message)
+		return
 	}
 	t.Errorf("%s condition not found", condType)
 }

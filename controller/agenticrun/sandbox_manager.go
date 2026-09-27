@@ -108,14 +108,6 @@ func (m *SandboxManager) Create(
 
 	span := trace.SpanFromContext(ctx)
 
-	// Gate: spoke runs require sandbox credential support (OLS-3951).
-	// Without it the pod cannot reach the spoke or write Result CRs.
-	// Checked before spokeAccessForRun so a missing kubeconfig doesn't
-	// mask the unsupported-feature error.
-	if run.Spec.TargetCluster != "" {
-		return "", fmt.Errorf("%s: targetCluster is not yet supported (requires OLS-3951)", errCreateSandbox)
-	}
-
 	// Resolve spoke access once for the entire Create flow.
 	// nil when targetCluster is empty (hub path — unchanged behavior).
 	spoke, err := spokeAccessForRun(ctx, m.client, run, m.namespace)
@@ -130,21 +122,32 @@ func (m *SandboxManager) Create(
 	var createErr error
 	defer func() {
 		if createErr != nil {
-			m.cleanupOnCreateFailure(ctx, run, step, serviceAccount, spoke)
+			cleanupCtx, cancel := cleanupContext(ctx)
+			defer cancel()
+			m.cleanupOnCreateFailure(cleanupCtx, run, step, serviceAccount, spoke)
 		}
 	}()
 
-	if err := m.ensureSA(ctx, run, serviceAccount, step, spoke); err != nil {
+	token, err := m.ensureSA(ctx, run, serviceAccount, step, spoke)
+	if err != nil {
 		createErr = err
 		return "", err
 	}
 
-	// For spoke runs, the sandbox pod runs on the hub but doesn't need
-	// hub cluster access — spoke access comes via a mounted kubeconfig
-	// (OLS-3951). Use the default SA and don't mount any token.
+	// For spoke runs, the sandbox pod uses the default SA with automount
+	// enabled — the automounted token provides hub API access for writing
+	// Result CRs. Spoke cluster access comes via a mounted kubeconfig
+	// (KUBECONFIG env var). The two credential paths don't conflict.
 	podServiceAccount := serviceAccount
 	if spoke != nil {
 		podServiceAccount = "default"
+	}
+
+	if spoke != nil {
+		if err := m.ensureSandboxKubeconfig(ctx, run, step, spoke, token); err != nil {
+			createErr = err
+			return "", err
+		}
 	}
 	span.AddEvent("sandbox.sa.created")
 
@@ -152,12 +155,12 @@ func (m *SandboxManager) Create(
 		rbac := &agentCtx.ApprovedOption.RBAC
 		if len(rbac.NamespaceScoped) > 0 || len(rbac.ClusterScoped) > 0 {
 			// Execution RBAC targets spoke when targetCluster is set.
-			rbacClient := m.client // hub client
-			rbacNS := m.namespace  // hub namespace
+			rbacClient := m.client
+			rbacNS := m.namespace
 			var extraLabels map[string]string
 			if spoke != nil {
-				rbacClient = spoke.Client // spoke client
-				rbacNS = spoke.Namespace  // spoke namespace
+				rbacClient = spoke.Client
+				rbacNS = spoke.Namespace
 				extraLabels = spokeExtraLabels(run.Name, run.Spec.TargetCluster)
 			}
 			base := run.DeepCopy()
@@ -186,10 +189,9 @@ func (m *SandboxManager) Create(
 	span.AddEvent("sandbox.configmap.created")
 
 	// Result RBAC is always on the hub — the sandbox pod writes its Result CR
-	// to the hub API server. For spoke runs the pod uses the default SA with
-	// automount disabled, so this binding is dormant until OLS-3951 provides
-	// hub-write credentials. The Role/RoleBinding are GC'd via owner ref.
-	if err := ensureResultRBAC(ctx, m.client, run, step, serviceAccount, m.namespace); err != nil {
+	// to the hub API server. Bind to podServiceAccount (= "default" for spoke,
+	// = per-step SA for hub) so the pod's actual hub identity has permission.
+	if err := ensureResultRBAC(ctx, m.client, run, step, podServiceAccount, m.namespace); err != nil {
 		createErr = err
 		return "", err
 	}
@@ -203,8 +205,7 @@ func (m *SandboxManager) Create(
 		agent,
 		llm,
 		tools,
-		&cfg.OTEL,
-		&cfg.RHOKP,
+		cfg,
 		step,
 		string(run.UID),
 		podServiceAccount,
@@ -218,10 +219,8 @@ func (m *SandboxManager) Create(
 		return "", createErr
 	}
 
-	// Spoke sandbox pods don't need hub SA tokens — spoke access is via
-	// a mounted kubeconfig (OLS-3951). Don't mount any credentials.
 	if spoke != nil {
-		podSpec.AutomountServiceAccountToken = ptr.To(false)
+		mountSpokeKubeconfig(podSpec, sandboxKubeconfigSecretName(string(run.UID), step))
 	}
 
 	if deadline > 0 {
@@ -281,13 +280,14 @@ func (m *SandboxManager) Create(
 	return name, nil
 }
 
-// ensureSA creates a per-step ServiceAccount and adds it to the shared reader
+// ensureSA creates a per-step ServiceAccount and adds it to reader
 // ClusterRoleBindings. For spoke runs, creates the SA on the spoke cluster
-// with spoke labels and uses hardcoded CRB names. Idempotent.
+// with spoke labels, creates per-run CRBs, and requests a 24h bound token
+// via TokenRequest. For hub runs, adds the SA to the shared reader CRBs.
+// Idempotent.
 //
-// TokenRequest for the spoke SA is deferred to OLS-3951 (sandbox kubeconfig
-// mounting) — no point minting a 24h token until a consumer exists.
-func (m *SandboxManager) ensureSA(ctx context.Context, run *agenticv1alpha1.AgenticRun, saName, step string, spoke *SpokeAccess) error {
+// Returns the spoke token (non-empty for spoke, empty for hub).
+func (m *SandboxManager) ensureSA(ctx context.Context, run *agenticv1alpha1.AgenticRun, saName, step string, spoke *SpokeAccess) (string, error) {
 	if spoke != nil {
 		// spoke path: SA on spoke with spoke-specific labels
 		sa := &corev1.ServiceAccount{
@@ -297,10 +297,27 @@ func (m *SandboxManager) ensureSA(ctx context.Context, run *agenticv1alpha1.Agen
 				Labels:    spokeLabels(string(run.UID), run.Name, run.Spec.TargetCluster, step+"-sa"),
 			},
 		}
-		if err := spoke.Client.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+		created := false
+		if err := spoke.Client.Create(ctx, sa); err != nil {
+			if !apierrors.IsAlreadyExists(err) {
+				return "", fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+			}
+		} else {
+			created = true
 		}
-		return addReaderSubjectOnSpoke(ctx, spoke.Client, saName, spoke.Namespace)
+		if err := addReaderSubjectOnSpoke(ctx, spoke.Client, string(run.UID), step, saName, spoke.Namespace, spokeExtraLabels(run.Name, run.Spec.TargetCluster)); err != nil {
+			if created {
+				_ = spoke.Client.Delete(ctx, sa)
+			}
+			return "", err
+		}
+		// Request a 24h bound token for the spoke SA. This token is embedded
+		// in the sandbox kubeconfig Secret so the pod can target the spoke.
+		token, err := requestSpokeToken(ctx, spoke.Config, saName, spoke.Namespace)
+		if err != nil {
+			return "", err
+		}
+		return token, nil
 	}
 
 	// hub path: unchanged
@@ -311,10 +328,94 @@ func (m *SandboxManager) ensureSA(ctx context.Context, run *agenticv1alpha1.Agen
 			Labels:    rbacLabels(string(run.UID), step+"-sa"),
 		},
 	}
-	if err := m.client.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+	created := false
+	if err := m.client.Create(ctx, sa); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return "", fmt.Errorf("%s %s: %w", ErrCreateSandboxSA, saName, err)
+		}
+	} else {
+		created = true
 	}
-	return addReaderSubject(ctx, m.client, saName, m.namespace)
+	if err := addReaderSubject(ctx, m.client, string(run.UID), step, saName, m.namespace); err != nil {
+		if created {
+			_ = m.client.Delete(ctx, sa)
+		}
+		return "", err
+	}
+	return "", nil
+}
+
+// ensureSandboxKubeconfig creates or refreshes the hub Secret containing the
+// spoke kubeconfig (server URL, CA, proxy-url, ephemeral token). On retry
+// (AlreadyExists), the Secret data is refreshed so the pod gets the freshly
+// requested token.
+func (m *SandboxManager) ensureSandboxKubeconfig(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, spoke *SpokeAccess, token string) error {
+	kubeconfigData, err := buildSandboxKubeconfig(spoke, token)
+	if err != nil {
+		return err
+	}
+	kcSecretName := sandboxKubeconfigSecretName(string(run.UID), step)
+	kcSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kcSecretName,
+			Namespace: m.namespace,
+			Labels:    rbacLabels(string(run.UID), "sandbox-kubeconfig"),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: agenticv1alpha1.GroupVersion.String(),
+				Kind:       "AgenticRun",
+				Name:       run.Name,
+				UID:        run.UID,
+			}},
+		},
+		Data: map[string][]byte{
+			spokeKubeconfigFileName: kubeconfigData,
+		},
+	}
+	if err := m.client.Create(ctx, kcSecret); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create sandbox kubeconfig Secret %s: %w", kcSecretName, err)
+		}
+		// On retry, refresh the Secret data so the pod mounts the
+		// freshly requested token instead of a potentially expired one.
+		existing := &corev1.Secret{}
+		if err := m.client.Get(ctx, client.ObjectKey{Name: kcSecretName, Namespace: m.namespace}, existing); err != nil {
+			return fmt.Errorf("get existing sandbox kubeconfig Secret %s: %w", kcSecretName, err)
+		}
+		// Defense-in-depth: verify the existing Secret belongs to this run.
+		if existing.Labels[LabelRun] != string(run.UID) {
+			return fmt.Errorf("sandbox kubeconfig Secret %s belongs to a different run (label %s != %s)", kcSecretName, existing.Labels[LabelRun], string(run.UID))
+		}
+		existing.Data = kcSecret.Data
+		if err := m.client.Update(ctx, existing); err != nil {
+			return fmt.Errorf("update sandbox kubeconfig Secret %s: %w", kcSecretName, err)
+		}
+	}
+	return nil
+}
+
+// mountSpokeKubeconfig adds the spoke kubeconfig Secret as a volume and sets
+// the KUBECONFIG env var on all containers in the pod spec.
+func mountSpokeKubeconfig(podSpec *corev1.PodSpec, secretName string) {
+	kcMountPath := spokeKubeconfigMountPath + "/" + spokeKubeconfigFileName
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: spokeKubeconfigVolume,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{
+				SecretName: secretName,
+			},
+		},
+	})
+	for i := range podSpec.Containers {
+		podSpec.Containers[i].VolumeMounts = append(podSpec.Containers[i].VolumeMounts, corev1.VolumeMount{
+			Name:      spokeKubeconfigVolume,
+			MountPath: spokeKubeconfigMountPath,
+			ReadOnly:  true,
+		})
+		podSpec.Containers[i].Env = append(podSpec.Containers[i].Env, corev1.EnvVar{
+			Name:  "KUBECONFIG",
+			Value: kcMountPath,
+		})
+	}
 }
 
 // setSAOwner sets the pod/claim as owner on the per-run ServiceAccount
@@ -353,27 +454,26 @@ func (m *SandboxManager) cleanupOnCreateFailure(ctx context.Context, run *agenti
 	if err := m.client.Delete(ctx, rb); err != nil && !apierrors.IsNotFound(err) {
 		log.Error(err, "cleanup: failed to delete result RoleBinding", LogKeyName, roleName)
 	}
-	// SA + reader subject + execution RBAC cleanup: spoke or hub.
+	// Spoke kubeconfig Secret cleanup (hub-side, alongside ConfigMap + result RBAC).
+	// Check LabelRun before deleting — a colliding name from a different run
+	// must not be removed (see ownership guard in Create).
+	if spoke != nil {
+		kcName := sandboxKubeconfigSecretName(string(run.UID), step)
+		existing := &corev1.Secret{}
+		if err := m.client.Get(ctx, client.ObjectKey{Name: kcName, Namespace: m.namespace}, existing); err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.Error(err, "cleanup: failed to get sandbox kubeconfig Secret", LogKeyName, kcName)
+			}
+		} else if existing.Labels[LabelRun] == string(run.UID) {
+			if err := m.client.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "cleanup: failed to delete sandbox kubeconfig Secret", LogKeyName, kcName)
+			}
+		}
+	}
+	// SA + reader CRBs + execution RBAC cleanup via shared function.
 	if serviceAccount != "" {
-		if spoke != nil {
-			if err := spokeCleanupStep(ctx, spoke, run, serviceAccount, step == "execution"); err != nil {
-				log.Error(err, "cleanup: spoke step cleanup", LogKeyName, serviceAccount)
-			}
-		} else {
-			if err := removeReaderSubject(ctx, m.client, serviceAccount, m.namespace); err != nil {
-				log.Error(err, "cleanup: failed to remove reader subjects", LogKeyName, serviceAccount)
-			}
-			if step == "execution" {
-				if err := cleanupExecutionRBAC(ctx, m.client, run); err != nil {
-					log.Error(err, "cleanup: failed to delete execution RBAC")
-				}
-			}
-			sa := &corev1.ServiceAccount{}
-			sa.Name = serviceAccount
-			sa.Namespace = m.namespace
-			if err := m.client.Delete(ctx, sa); err != nil && !apierrors.IsNotFound(err) {
-				log.Error(err, "cleanup: failed to delete SA", LogKeyName, serviceAccount)
-			}
+		if err := cleanupStepRBAC(ctx, spoke, m.client, m.namespace, run, step); err != nil {
+			log.Error(err, "cleanup: step RBAC cleanup", LogKeyName, serviceAccount)
 		}
 	}
 }
@@ -627,23 +727,24 @@ func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.Agent
 		}
 	}
 
-	saName := sandboxSAName(run, step)
+	// RBAC + SA cleanup via shared function (works for both spoke and hub).
+	if err := cleanupStepRBAC(ctx, spoke, m.client, m.namespace, run, step); err != nil && firstErr == nil {
+		firstErr = err
+	}
 
-	// Spoke cleanup via shared helper. Hub path is unchanged.
-	if spoke != nil {
-		if err := spokeCleanupStep(ctx, spoke, run, saName, step == "execution"); err != nil && firstErr == nil {
+	// Delete the sandbox kubeconfig Secret eagerly. Owner-ref GC would
+	// clean it up when the AgenticRun is deleted, but the Secret contains
+	// a 24h spoke token — no reason to keep it after the step completes.
+	// Use TargetCluster (not spoke != nil) so the Secret is deleted even
+	// when the spoke is unreachable — the Secret is a hub resource.
+	if run.Spec.TargetCluster != "" {
+		kcName := sandboxKubeconfigSecretName(string(run.UID), step)
+		kcSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: kcName, Namespace: m.namespace}}
+		if err := m.client.Delete(ctx, kcSecret); err != nil && !apierrors.IsNotFound(err) && firstErr == nil {
 			firstErr = err
-		}
-	} else {
-		if err := removeReaderSubject(ctx, m.client, saName, m.namespace); err != nil && firstErr == nil {
-			firstErr = err
-		}
-		if step == "execution" {
-			if err := cleanupExecutionRBAC(ctx, m.client, run); err != nil && firstErr == nil {
-				firstErr = err
-			}
 		}
 	}
+
 	return firstErr
 }
 

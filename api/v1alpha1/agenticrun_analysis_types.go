@@ -82,12 +82,13 @@ type DiagnosisResult struct {
 
 // ProposedAction describes a single discrete action the analysis agent
 // recommends as part of its remediation plan. Each action contains an
-// exact executable bash command and is displayed to the user after
-// analysis for review before approval.
+// exact kubectl/oc command or MCP tool call and is displayed to the user
+// after analysis for review before approval.
 type ProposedAction struct {
-	// command is the exact executable bash command using kubectl or oc
-	// (e.g., "kubectl set image deployment/foo container=registry/foo:v1.3 -n production").
-	// Must be a concrete command that can be copy-pasted and run.
+	// command is an exact executable kubectl/oc command (e.g., "kubectl set image
+	// deployment/foo container=registry/foo:v1.3 -n production") or an MCP tool
+	// call with its exact name and JSON arguments (e.g.,
+	// "update_deployment_image({\"namespace\":\"production\"})").
 	// Maximum 4096 characters.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
@@ -100,7 +101,7 @@ type ProposedAction struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=256
 	Type string `json:"type,omitempty"`
-	// description is a Markdown-formatted explanation of what this command
+	// description is a Markdown-formatted explanation of what this action
 	// does and why (e.g., "Increase memory limit from 256Mi to 512Mi").
 	// Maximum 4096 characters.
 	// +required

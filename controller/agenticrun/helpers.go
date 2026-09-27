@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strings"
 	"text/template"
 	"time"
 
@@ -45,6 +46,14 @@ func (w *limitedWriter) String() string {
 	return w.buf.String()
 }
 
+func cleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+}
+
+func preserveFailedSandbox(run *agenticv1alpha1.AgenticRun) bool {
+	return run != nil && strings.EqualFold(strings.TrimSpace(run.Annotations[preserveSandboxAnnotation]), "true")
+}
+
 func renderTemplate(tmpl string, data any) (string, error) {
 	t, err := template.New("custom").Parse(tmpl)
 	if err != nil {
@@ -68,6 +77,9 @@ func readBuiltinTemplate(name string) (string, error) {
 }
 
 const (
+	preserveSandboxAnnotation = "agentic.openshift.io/preserve-sandbox"
+	cleanupTimeout            = 30 * time.Second
+
 	ErrGetAnalysisResult         = "get AnalysisResult"
 	ErrTrimAnalysisResultOptions = "trim AnalysisResult options"
 

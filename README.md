@@ -64,7 +64,7 @@ oc agentic version
 ### Command Reference
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `proposal create` | Create a new proposal (`--request`, `--agent`, `--target-namespaces`) |
 | `proposal list` (`ls`) | List proposals (`-A`, `--phase`, `-o wide\|json\|yaml`) |
 | `proposal get` | Show proposal details (`-o json\|yaml`) |
@@ -79,6 +79,18 @@ oc agentic version
 | `version` | Print plugin version |
 
 Default namespace is `openshift-lightspeed` unless overridden with `-n` or kubeconfig context.
+
+### Preserve a Failed Sandbox for Debugging
+
+To retain the sandbox Pod and associated diagnostic resources after a failed run, add this annotation to the `AgenticRun`:
+
+```yaml
+metadata:
+  annotations:
+    agentic.openshift.io/preserve-sandbox: "true"
+```
+
+This is an opt-in debugging aid. Terminal TTL processing is disabled for the failed run while the annotation is present. Delete the `AgenticRun` when investigation is complete; normal cleanup then removes the preserved sandbox resources.
 
 ## Development
 
@@ -154,7 +166,7 @@ bash scripts/e2e-cluster.sh claude
 `claude` and `gemini` require `VERTEX_PROVIDER_KEY_PATH` and `VERTEX_PROJECT_ID`; `openai` requires `OPENAI_PROVIDER_KEY_PATH`. The runner accepts one or more providers (`claude`, `gemini`, and/or `openai`).
 
 | Variable | Purpose |
-|---|---|
+| --- | --- |
 | `E2E_SCENARIO_TAGS=alert` | Run scenarios carrying the `alert` tag instead of the default `core` tag. Multiple tags are an **AND** filter: `core,alert` requires both. |
 | `E2E_SKIP_SCENARIOS=pending_pvc_alert` | Skip comma-separated scenario directory names. |
 | `E2E_SCENARIO_TIMEOUT=20m` | Per-scenario deadline (default: `20m`). |

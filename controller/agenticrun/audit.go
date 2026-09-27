@@ -193,9 +193,32 @@ func runAttrs(run *agenticv1alpha1.AgenticRun) []attribute.KeyValue {
 	}
 }
 
+// phaseForSpanName returns the canonical AgenticRun phase for an audit span.
+func phaseForSpanName(spanName string) string {
+	switch spanName {
+	case "agenticrun.analyze":
+		return "analysis"
+	case "agenticrun.human_approval":
+		return "approval"
+	case "agenticrun.execute":
+		return "execution"
+	case "agenticrun.verify":
+		return "verification"
+	case "agenticrun.escalate":
+		return "escalation"
+	case "agenticrun.terminal":
+		return "terminal"
+	default:
+		return ""
+	}
+}
+
 // startPhaseSpan creates a new root span for a phase with span link to prior phase.
 func (l *ProductionAuditLogger) startPhaseSpan(ctx context.Context, run *agenticv1alpha1.AgenticRun, spanName string, extraAttrs ...attribute.KeyValue) (context.Context, trace.Span) {
 	attrs := runAttrs(run)
+	if phase := phaseForSpanName(spanName); phase != "" {
+		attrs = append(attrs, attribute.String("agenticrun.phase", phase))
+	}
 	attrs = append(attrs, extraAttrs...)
 
 	opts := []trace.SpanStartOption{

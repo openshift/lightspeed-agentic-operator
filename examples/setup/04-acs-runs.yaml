@@ -113,11 +113,11 @@ spec:
   analysis:
     agent: smart
 ---
-# ACS per-step tools — different skills paths for analysis vs verification
+# ACS run-level tools shared by analysis, execution, and verification
 apiVersion: agentic.openshift.io/v1alpha1
 kind: AgenticRun
 metadata:
-  name: acs-cve-per-step-tools-example
+  name: acs-cve-run-level-tools-example
   namespace: openshift-lightspeed
   labels:
     agentic.openshift.io/source: acs
@@ -126,6 +126,10 @@ spec:
   targetNamespaces:
     - staging
   tools:
+    skills:
+      - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
+        image: quay.io/harpatil/agentic-skills:latest
+        paths: [/skills/acs-remediation, /skills/acs-compliance]
     requiredSecrets:
       - name: acs-api-token
         mountAs:
@@ -134,17 +138,7 @@ spec:
             name: ACS_API_TOKEN
   analysis:
     agent: smart
-    tools:
-      skills:
-        - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
-        image: quay.io/harpatil/agentic-skills:latest
-          paths: [/skills/acs-remediation, /skills/acs-compliance]
   execution:
     agent: default
   verification:
     agent: fast
-    tools:
-      skills:
-        - # TODO: Replace with Konflux-built image when available for https://github.com/openshift/agentic-skills
-        image: quay.io/harpatil/agentic-skills:latest
-          paths: [/skills/acs-compliance]

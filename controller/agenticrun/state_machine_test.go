@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,7 +41,7 @@ func testPolicy(analysis, execution, verification agenticv1alpha1.ApprovalMode) 
 func newReconcilerWithPolicy(t *testing.T, run *agenticv1alpha1.AgenticRun, agent *testAgentCaller, policy *agenticv1alpha1.ApprovalPolicy, extraObjs ...client.Object) (*AgenticRunReconciler, client.WithWatch) {
 	t.Helper()
 	scheme := testScheme()
-	objs := []client.Object{run, testDefaultAgent(), testLLM("smart")}
+	objs := []client.Object{run, testDefaultAgent(), testLLM("smart"), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "llm-secret", Namespace: "default"}}}
 	if policy != nil {
 		objs = append(objs, policy)
 	}
@@ -410,7 +411,7 @@ func TestNoPolicy_DefaultsToManual(t *testing.T) {
 
 	scheme := testScheme()
 	// No ApprovalPolicy object at all
-	objs := []client.Object{run, testDefaultAgent(), testLLM("smart")}
+	objs := []client.Object{run, testDefaultAgent(), testLLM("smart"), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "llm-secret", Namespace: "default"}}}
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 	agent.withClient(t, fc, "default")
@@ -973,6 +974,52 @@ func TestEscalation_InProgressIsIdempotent(t *testing.T) {
 	if len(p.Status.Steps.Escalation.Results) != resultCount {
 		t.Fatalf("re-reconcile created duplicate results: got %d, want %d",
 			len(p.Status.Steps.Escalation.Results), resultCount)
+	}
+}
+
+func TestEscalation_WaitingForSandboxIsIdempotent(t *testing.T) {
+	run := testAgenticRun()
+	agent := newTestAgentCaller()
+	agent.verifyResult = &VerificationOutput{
+		Success: false,
+		Summary: "Pod still crashing",
+		Checks:  []agenticv1alpha1.VerifyCheck{{Name: "pod-running", Result: agenticv1alpha1.CheckResultFailed}},
+	}
+	policy := testPolicy(agenticv1alpha1.ApprovalModeManual, agenticv1alpha1.ApprovalModeManual, agenticv1alpha1.ApprovalModeManual)
+	policy.Spec.Stages = append(policy.Spec.Stages, agenticv1alpha1.ApprovalPolicyStage{
+		Name: agenticv1alpha1.SandboxStepEscalation, Approval: agenticv1alpha1.ApprovalModeManual,
+	})
+	r, fc := newReconcilerWithPolicy(t, run, agent, policy)
+
+	approveAnalysis(t, fc, run.Name)
+	reconcileOnce(r, run.Name)
+	approveExecution(t, fc, run.Name, 0)
+	reconcileOnce(r, run.Name)
+	approveVerification(t, fc, run.Name)
+	reconcileOnce(r, run.Name)
+	approveEscalation(t, fc, run.Name)
+
+	var current agenticv1alpha1.AgenticRun
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: run.Name, Namespace: "default"}, &current); err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	base := current.DeepCopy()
+	meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+		Type:               agenticv1alpha1.AgenticRunConditionEscalated,
+		Status:             metav1.ConditionUnknown,
+		Reason:             ReasonWaitingForSandbox,
+		Message:            "Sandbox pod WaitingForSandbox",
+		ObservedGeneration: current.Generation,
+	})
+	if err := fc.Status().Patch(context.Background(), &current, client.MergeFrom(base)); err != nil {
+		t.Fatalf("patch waiting escalation: %v", err)
+	}
+
+	if _, err := reconcileOnce(r, run.Name); err != nil {
+		t.Fatalf("reconcile while escalation sandbox is pending: %v", err)
+	}
+	if agent.escalateCalls != 0 {
+		t.Fatalf("escalation relaunched %d times while sandbox was pending", agent.escalateCalls)
 	}
 }
 

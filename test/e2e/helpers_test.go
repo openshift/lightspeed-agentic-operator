@@ -70,6 +70,12 @@ func buildClient() (client.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build kubeconfig: %w", err)
 	}
+	// E2E polling intentionally issues bursts of requests while several
+	// sandboxes are being created. Do not let client-go throttling mask the
+	// result of the test.
+	cfg.QPS = 0
+	cfg.Burst = 0
+	cfg.RateLimiter = nil
 
 	s := scheme.Scheme
 	utilruntime.Must(agenticv1alpha1.AddToScheme(s))
@@ -165,6 +171,11 @@ func createAgenticRun(t *testing.T, c client.Client, name string) *agenticv1alph
 // request string. Embed mock failure keywords (MOCK_CRASH, MOCK_TIMEOUT, etc.)
 // in the request to trigger failure modes.
 func createAgenticRunWithRequest(t *testing.T, c client.Client, name, request string) *agenticv1alpha1.AgenticRun {
+	return createAgenticRunWithSkills(t, c, name, request,
+		"quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent", "/skills")
+}
+
+func createAgenticRunWithSkills(t *testing.T, c client.Client, name, request, image, skillPath string) *agenticv1alpha1.AgenticRun {
 	t.Helper()
 	ctx := context.Background()
 
@@ -173,7 +184,7 @@ func createAgenticRunWithRequest(t *testing.T, c client.Client, name, request st
 		Spec: agenticv1alpha1.AgenticRunSpec{
 			Request:          request,
 			TargetNamespaces: []string{"staging"},
-			Tools:            agenticv1alpha1.ToolsSpec{Skills: []agenticv1alpha1.SkillsSource{{Image: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent", Paths: []string{"/skills"}}}},
+			Tools:            agenticv1alpha1.ToolsSpec{Skills: []agenticv1alpha1.SkillsSource{{Image: image, Paths: []string{skillPath}}}},
 			Analysis:         agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
 			Execution:        agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
 			Verification:     agenticv1alpha1.AgenticRunStep{Agent: "e2e-agent"},
@@ -772,41 +783,6 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 	return &e2eFixtures{LLM: llm, Agent: agent, Policy: policy, Secret: secret}
 }
 
-// ensureCrashLoopPod creates the crash-loop pod if it doesn't already exist.
-func ensureCrashLoopPod(t *testing.T, c client.Client) {
-	t.Helper()
-	ctx := context.Background()
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "e2e-crasher", Namespace: "staging", Labels: map[string]string{"app": "e2e-crasher"}},
-		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyAlways,
-			Containers:    []corev1.Container{{Name: "crasher", Image: "busybox:latest", Command: []string{"sh", "-c", "exit 1"}}},
-		},
-	}
-	if err := c.Create(ctx, pod); err != nil {
-		var existing corev1.Pod
-		if getErr := c.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, &existing); getErr != nil {
-			t.Fatalf("create crash-loop pod: %v", err)
-		}
-	}
-	err := wait.PollUntilContextTimeout(ctx, 2*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
-		var p corev1.Pod
-		if err := c.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, &p); err != nil {
-			return false, nil
-		}
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.RestartCount > 0 {
-				return true, nil
-			}
-		}
-		return false, nil
-	})
-	if err != nil {
-		t.Fatalf("crash-loop pod never restarted: %v", err)
-	}
-	t.Log("crash-loop pod is CrashLoopBackOff in staging namespace")
-}
-
 func deleteSandboxClaim(t *testing.T, c client.Client, name, ns string) {
 	t.Helper()
 	t.Logf("deleteSandboxClaim %s/%s: no-op (bare-pod mode)", ns, name)
@@ -1107,14 +1083,6 @@ func savePodLogs(ctx context.Context, clientset kubernetes.Interface, podName, a
 	} else {
 		t.Logf("savePodLogs: saved %s (%d bytes)", outPath, buf.Len())
 	}
-}
-
-// createFixtures creates real provider fixtures and ensures the crash-loop pod exists.
-func createFixtures(t *testing.T, c client.Client) *e2eFixtures {
-	t.Helper()
-	f := createRealProviderFixtures(t, c)
-	ensureCrashLoopPod(t, c)
-	return f
 }
 
 // createTroubleshootingFixtures creates real provider fixtures with a fully

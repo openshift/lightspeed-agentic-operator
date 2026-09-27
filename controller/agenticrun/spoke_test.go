@@ -2,11 +2,13 @@ package agenticrun
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -14,6 +16,7 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	k8stesting "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -461,53 +464,122 @@ func TestSpokeLabels_HubResourcesNotLabeled(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// spokeCleanupStep
+// cleanupStepRBAC (spoke path)
 // ---------------------------------------------------------------------------
 
-func TestSpokeCleanupStep_DeletesSAAndRemovesReaderSubject(t *testing.T) {
+func TestCleanupStepRBAC_Spoke_DeletesSAAndPerRunCRBs(t *testing.T) {
+	ctx := context.Background()
+	runUID := "uid-123"
+	step := "analysis"
 	saName := "ls-anl-uid-123"
+
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: spokeManagedNamespace},
 	}
-	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: spokeReaderBindingNames[0]},
-		Subjects: []rbacv1.Subject{{
-			Kind:      rbacv1.ServiceAccountKind,
-			Name:      saName,
-			Namespace: spokeManagedNamespace,
-		}},
-		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "reader"},
+
+	// Create source CRBs and per-run CRBs.
+	srcBindings := spokeReaderBindings()
+	objs := []client.Object{sa, srcBindings[0], srcBindings[1]}
+	for i := range spokeReaderBindingNames {
+		objs = append(objs, &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   perRunCRBName(runUID, step, i),
+				Labels: rbacLabels(runUID, "reader-rbac"),
+			},
+			RoleRef:  srcBindings[i].RoleRef,
+			Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: saName, Namespace: spokeManagedNamespace}},
+		})
 	}
 
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(sa, crb).Build()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).Build()
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{UID: types.UID(runUID)},
+		Spec:       agenticv1alpha1.AgenticRunSpec{TargetCluster: "test-spoke"},
+	}
 	spoke := &SpokeAccess{Client: fc, Namespace: spokeManagedNamespace}
-	run := &agenticv1alpha1.AgenticRun{ObjectMeta: metav1.ObjectMeta{UID: "uid-123"}}
 
-	if err := spokeCleanupStep(context.Background(), spoke, run, saName, false); err != nil {
+	if err := cleanupStepRBAC(ctx, spoke, fc, spokeManagedNamespace, run, step); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// SA should be deleted.
 	var got corev1.ServiceAccount
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: saName, Namespace: spokeManagedNamespace}, &got); err == nil {
+	if err := fc.Get(ctx, types.NamespacedName{Name: saName, Namespace: spokeManagedNamespace}, &got); err == nil {
 		t.Error("expected SA to be deleted")
 	}
 
-	var gotCRB rbacv1.ClusterRoleBinding
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: spokeReaderBindingNames[0]}, &gotCRB); err != nil {
-		t.Fatalf("CRB lookup: %v", err)
+	// Per-run CRBs should be deleted.
+	for i := range spokeReaderBindingNames {
+		crbName := perRunCRBName(runUID, step, i)
+		var crb rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: crbName}, &crb); err == nil {
+			t.Fatalf("per-run CRB %s should be deleted", crbName)
+		}
 	}
-	if len(gotCRB.Subjects) != 0 {
-		t.Errorf("expected 0 subjects, got %d", len(gotCRB.Subjects))
+
+	// Source CRBs should still exist untouched.
+	for _, name := range spokeReaderBindingNames {
+		var crb rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
+			t.Fatalf("source CRB %s should still exist: %v", name, err)
+		}
 	}
 }
 
-func TestSpokeCleanupStep_IdempotentWhenMissing(t *testing.T) {
+func TestCleanupStepRBAC_Spoke_IdempotentWhenMissing(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
-	spoke := &SpokeAccess{Client: fc, Namespace: spokeManagedNamespace}
 	run := &agenticv1alpha1.AgenticRun{ObjectMeta: metav1.ObjectMeta{UID: "uid-gone"}}
 
-	if err := spokeCleanupStep(context.Background(), spoke, run, "ls-anl-uid-gone", false); err != nil {
+	spoke := &SpokeAccess{Client: fc, Namespace: spokeManagedNamespace}
+
+	if err := cleanupStepRBAC(context.Background(), spoke, fc, spokeManagedNamespace, run, "analysis"); err != nil {
 		t.Fatalf("expected no error for missing resources, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cleanupStepRBAC (hub path)
+// ---------------------------------------------------------------------------
+
+func TestCleanupStepRBAC_Hub_RemovesSubjectAndDeletesSA(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+
+	saName := "ls-anl-uid-hub"
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: "default"},
+	}
+	// Create per-run reader CRBs (Boris's per-run model).
+	perRunCRB := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ls-reader-anl-uid-hub-0",
+			Labels: map[string]string{
+				LabelRun:       "uid-hub",
+				LabelStep:      "analysis",
+				LabelComponent: "reader-rbac",
+			},
+		},
+		RoleRef:  rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-reader"},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: saName, Namespace: "default"}},
+	}
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(sa, perRunCRB).Build()
+	run := &agenticv1alpha1.AgenticRun{ObjectMeta: metav1.ObjectMeta{UID: "uid-hub"}}
+
+	if err := cleanupStepRBAC(ctx, nil, fc, "default", run, "analysis"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// SA should be deleted.
+	var gotSA corev1.ServiceAccount
+	if err := fc.Get(ctx, types.NamespacedName{Name: saName, Namespace: "default"}, &gotSA); err == nil {
+		t.Error("expected SA to be deleted")
+	}
+
+	// Per-run reader CRB should be deleted.
+	var crb rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: "ls-reader-anl-uid-hub-0"}, &crb); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected per-run CRB to be deleted, got: %v", err)
 	}
 }
 
@@ -558,7 +630,210 @@ func TestRequestSpokeToken_Error(t *testing.T) {
 	}
 }
 
-// contains is a simple helper to avoid importing strings in tests.
+// ---------------------------------------------------------------------------
+// buildSandboxKubeconfig
+// ---------------------------------------------------------------------------
+
+func TestBuildSandboxKubeconfig_Basic(t *testing.T) {
+	spoke := &SpokeAccess{
+		Config: &rest.Config{
+			Host: "https://api.spoke.example.com:6443",
+			TLSClientConfig: rest.TLSClientConfig{
+				CAData: []byte("ca-data-here"),
+			},
+		},
+	}
+
+	data, err := buildSandboxKubeconfig(spoke, "test-token-123")
+	if err != nil {
+		t.Fatalf("buildSandboxKubeconfig: %v", err)
+	}
+
+	// Parse the generated kubeconfig.
+	kc, err := clientcmd.Load(data)
+	if err != nil {
+		t.Fatalf("parse kubeconfig: %v", err)
+	}
+	if kc.CurrentContext != "spoke" {
+		t.Fatalf("current-context = %q, want spoke", kc.CurrentContext)
+	}
+	cluster := kc.Clusters["spoke"]
+	if cluster == nil {
+		t.Fatal("cluster 'spoke' not found")
+	}
+	if cluster.Server != "https://api.spoke.example.com:6443" {
+		t.Fatalf("server = %q", cluster.Server)
+	}
+	if string(cluster.CertificateAuthorityData) != "ca-data-here" {
+		t.Fatalf("CA data = %q", cluster.CertificateAuthorityData)
+	}
+	if cluster.ProxyURL != "" {
+		t.Fatalf("proxy-url should be empty, got %q", cluster.ProxyURL)
+	}
+	authInfo := kc.AuthInfos["sandbox"]
+	if authInfo == nil {
+		t.Fatal("authInfo 'sandbox' not found")
+	}
+	if authInfo.Token != "test-token-123" {
+		t.Fatalf("token = %q", authInfo.Token)
+	}
+}
+
+func TestBuildSandboxKubeconfig_WithProxyURL(t *testing.T) {
+	spoke := &SpokeAccess{
+		Config: &rest.Config{
+			Host: "https://api.spoke.example.com:6443",
+			TLSClientConfig: rest.TLSClientConfig{
+				CAData: []byte("ca-data"),
+			},
+		},
+		ProxyURL: "http://cluster-proxy.hub.svc:8090",
+	}
+
+	data, err := buildSandboxKubeconfig(spoke, "token-abc")
+	if err != nil {
+		t.Fatalf("buildSandboxKubeconfig: %v", err)
+	}
+
+	kc, err := clientcmd.Load(data)
+	if err != nil {
+		t.Fatalf("parse kubeconfig: %v", err)
+	}
+	cluster := kc.Clusters["spoke"]
+	if cluster.ProxyURL != "http://cluster-proxy.hub.svc:8090" {
+		t.Fatalf("proxy-url = %q, want http://cluster-proxy.hub.svc:8090", cluster.ProxyURL)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sandboxKubeconfigSecretName
+// ---------------------------------------------------------------------------
+
+func TestSandboxKubeconfigSecretName(t *testing.T) {
+	name := sandboxKubeconfigSecretName("abc-123-uid", "analysis")
+	// Step abbreviation comes before run UID: prefix + stepAbbrev + "-" + runUID
+	if name != "ls-sandbox-kubeconfig-anl-abc-123-uid" {
+		t.Fatalf("name = %q, want ls-sandbox-kubeconfig-anl-abc-123-uid", name)
+	}
+
+	// UIDs are fixed-length (36 chars) so truncation shouldn't happen in
+	// practice, but verify it's still safe.
+	longUID := strings.Repeat("x", 50)
+	longName := sandboxKubeconfigSecretName(longUID, "execution")
+	if len(longName) > 63 {
+		t.Fatalf("name exceeds 63 chars: %d", len(longName))
+	}
+	// Step discriminator must survive truncation.
+	if !strings.Contains(longName, "-exe-") {
+		t.Fatalf("step discriminator lost after truncation: %q", longName)
+	}
+
+	// Two steps of the same run must produce different names.
+	analysisName := sandboxKubeconfigSecretName(longUID, "analysis")
+	executionName := sandboxKubeconfigSecretName(longUID, "execution")
+	if analysisName == executionName {
+		t.Fatalf("name collision between steps: both = %q", analysisName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// spokeAccessForRun — ProxyURL extraction
+// ---------------------------------------------------------------------------
+
+func TestSpokeAccessForRun_ExtractsProxyURL(t *testing.T) {
+	orig := NewClientFromConfig
+	NewClientFromConfig = fakeNewClient
+	t.Cleanup(func() { NewClientFromConfig = orig })
+
+	kubeconfig := []byte(`
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://api.spoke.example.com:6443
+    proxy-url: http://cluster-proxy.hub.svc:8090
+  name: spoke
+contexts:
+- context:
+    cluster: spoke
+    user: spoke-user
+  name: spoke
+current-context: spoke
+users:
+- name: spoke-user
+  user:
+    token: test-token
+`)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spoke-kubeconfig-mce-spoke",
+			Namespace: testOperatorNS,
+		},
+		Data: map[string][]byte{kubeconfigKey: kubeconfig},
+	}
+	hubClient := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(secret).Build()
+
+	run := &agenticv1alpha1.AgenticRun{
+		Spec: agenticv1alpha1.AgenticRunSpec{TargetCluster: "mce-spoke"},
+	}
+
+	sa, err := spokeAccessForRun(context.Background(), hubClient, run, testOperatorNS)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sa.ProxyURL != "http://cluster-proxy.hub.svc:8090" {
+		t.Fatalf("ProxyURL = %q, want http://cluster-proxy.hub.svc:8090", sa.ProxyURL)
+	}
+}
+
+func TestSpokeAccessForRun_NoProxyURL(t *testing.T) {
+	orig := NewClientFromConfig
+	NewClientFromConfig = fakeNewClient
+	t.Cleanup(func() { NewClientFromConfig = orig })
+
+	kubeconfig := []byte(`
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://api.spoke.example.com:6443
+  name: spoke
+contexts:
+- context:
+    cluster: spoke
+    user: spoke-user
+  name: spoke
+current-context: spoke
+users:
+- name: spoke-user
+  user:
+    token: test-token
+`)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spoke-kubeconfig-direct-spoke",
+			Namespace: testOperatorNS,
+		},
+		Data: map[string][]byte{kubeconfigKey: kubeconfig},
+	}
+	hubClient := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(secret).Build()
+
+	run := &agenticv1alpha1.AgenticRun{
+		Spec: agenticv1alpha1.AgenticRunSpec{TargetCluster: "direct-spoke"},
+	}
+
+	sa, err := spokeAccessForRun(context.Background(), hubClient, run, testOperatorNS)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sa.ProxyURL != "" {
+		t.Fatalf("ProxyURL = %q, want empty", sa.ProxyURL)
+	}
+}
+
+// contains is a simple helper.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

@@ -236,15 +236,8 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 	// the RBAC unconditionally to prevent leaks.
 	if !executionReleased {
 		// spoke already resolved above.
-		if spoke != nil {
-			exeSA := sandboxSAName(run, "execution")
-			if err := spokeCleanupStep(ctx, spoke, run, exeSA, true); err != nil && firstErr == nil {
-				firstErr = err
-			}
-		} else {
-			if err := cleanupExecutionRBAC(ctx, s.K8sClient, run); err != nil && firstErr == nil {
-				firstErr = err
-			}
+		if err := cleanupStepRBAC(ctx, spoke, s.K8sClient, s.Namespace, run, "execution"); err != nil && firstErr == nil {
+			firstErr = err
 		}
 	}
 	return firstErr

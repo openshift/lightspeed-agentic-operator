@@ -24,10 +24,12 @@ type mockSandboxProvider struct {
 	releaseErr   error
 	claimCalls   int
 	releaseCalls int
+	tools        *agenticv1alpha1.ToolsSpec
 }
 
-func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ time.Duration, _ *agentContext) (string, error) {
+func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, _ time.Duration, _ *agentContext) (string, error) {
 	m.claimCalls++
+	m.tools = tools
 	if len(m.claimErrors) > 0 {
 		idx := m.claimCalls - 1
 		if idx >= len(m.claimErrors) {
@@ -124,16 +126,22 @@ func TestSandboxAgentCaller_Verify_CreatesSandbox(t *testing.T) {
 	}
 }
 
-func TestSandboxAgentCaller_Escalate_CreatesSandbox(t *testing.T) {
+func TestSandboxAgentCaller_Escalate_CreatesSandboxWithRunLevelTools(t *testing.T) {
 	sandbox := &mockSandboxProvider{claimName: "ls-escalation-fix-crash"}
-	caller := newTestSandboxAgentCaller(sandbox)
+	run := testSandboxAgenticRun()
+	caller := newTestSandboxAgentCallerWithAgenticRun(sandbox, run)
+	step := testSandboxStep()
+	step.Tools = &run.Spec.Tools
 
-	err := caller.Escalate(context.Background(), testSandboxAgenticRun(), testSandboxStep())
+	err := caller.Escalate(context.Background(), run, step)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if sandbox.claimCalls != 1 {
 		t.Errorf("expected 1 Create call, got %d", sandbox.claimCalls)
+	}
+	if sandbox.tools != &run.Spec.Tools {
+		t.Fatal("escalation sandbox must receive the run-level tools")
 	}
 }
 

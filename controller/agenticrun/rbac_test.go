@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -11,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -1002,31 +1004,64 @@ func TestRBACLabels(t *testing.T) {
 // addReaderSubject / removeReaderSubject / resolveReaderBindings
 // ---------------------------------------------------------------------------
 
+func TestAddReaderSubject_ConcurrentRunsUseIndependentBindings(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding()).Build()
+
+	const runs = 10
+	errs := make(chan error, runs)
+	var wg sync.WaitGroup
+	for i := 0; i < runs; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- addReaderSubject(ctx, fc, fmt.Sprintf("uid-%02d", i), "analysis", fmt.Sprintf("ls-anl-uid-%02d", i), "default")
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent reader binding creation failed: %v", err)
+		}
+	}
+
+	var shared rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: defaultReaderClusterRoleBinding}, &shared); err != nil {
+		t.Fatalf("get shared binding: %v", err)
+	}
+	if len(shared.Subjects) != 1 || shared.Subjects[0].Name != defaultSandboxSA {
+		t.Fatalf("shared binding was modified: %+v", shared.Subjects)
+	}
+}
+
 func TestAddReaderSubject_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	resetReaderBindings()
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding()).Build()
 
-	if err := addReaderSubject(ctx, fc, "ls-exec-test", "default"); err != nil {
+	if err := addReaderSubject(ctx, fc, "uid-test", "execution", "ls-exec-test", "default"); err != nil {
 		t.Fatalf("first add: %v", err)
 	}
-	if err := addReaderSubject(ctx, fc, "ls-exec-test", "default"); err != nil {
+	if err := addReaderSubject(ctx, fc, "uid-test", "execution", "ls-exec-test", "default"); err != nil {
 		t.Fatalf("second add: %v", err)
 	}
 
-	var crb rbacv1.ClusterRoleBinding
-	if err := fc.Get(ctx, types.NamespacedName{Name: defaultReaderClusterRoleBinding}, &crb); err != nil {
-		t.Fatalf("get binding: %v", err)
+	var shared rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: defaultReaderClusterRoleBinding}, &shared); err != nil {
+		t.Fatalf("get shared binding: %v", err)
 	}
-
-	count := 0
-	for _, s := range crb.Subjects {
-		if s.Name == "ls-exec-test" {
-			count++
-		}
+	if len(shared.Subjects) != 1 || shared.Subjects[0].Name != defaultSandboxSA {
+		t.Fatalf("shared binding was modified: %+v", shared.Subjects)
 	}
-	if count != 1 {
-		t.Fatalf("expected 1 subject entry, got %d", count)
+	var binding rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: readerBindingName("uid-test", "execution", defaultReaderClusterRoleBinding)}, &binding); err != nil {
+		t.Fatalf("get per-run binding: %v", err)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != "ls-exec-test" {
+		t.Fatalf("unexpected per-run subjects: %+v", binding.Subjects)
 	}
 }
 
@@ -1045,25 +1080,88 @@ func TestAddReaderSubject_MultipleBindings(t *testing.T) {
 	}
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding(), monitoringBinding).Build()
 
-	if err := addReaderSubject(ctx, fc, "ls-exec-test", "default"); err != nil {
+	if err := addReaderSubject(ctx, fc, "uid-test", "execution", "ls-exec-test", "default"); err != nil {
 		t.Fatalf("addReaderSubject: %v", err)
 	}
 
-	for _, name := range []string{defaultReaderClusterRoleBinding, "lightspeed-agent-monitoring-view"} {
-		var crb rbacv1.ClusterRoleBinding
-		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
-			t.Fatalf("get %s: %v", name, err)
+	for _, sourceName := range []string{defaultReaderClusterRoleBinding, "lightspeed-agent-monitoring-view"} {
+		var source rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: sourceName}, &source); err != nil {
+			t.Fatalf("get %s: %v", sourceName, err)
 		}
-		found := false
-		for _, s := range crb.Subjects {
-			if s.Name == "ls-exec-test" {
-				found = true
-				break
-			}
+		if len(source.Subjects) != 1 || source.Subjects[0].Name != defaultSandboxSA {
+			t.Fatalf("shared binding %s was modified: %+v", sourceName, source.Subjects)
 		}
-		if !found {
-			t.Fatalf("subject ls-exec-test not added to %s", name)
+		var binding rbacv1.ClusterRoleBinding
+		name := readerBindingName("uid-test", "execution", sourceName)
+		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &binding); err != nil {
+			t.Fatalf("get per-run binding %s: %v", name, err)
 		}
+		if len(binding.Subjects) != 1 || binding.Subjects[0].Name != "ls-exec-test" {
+			t.Fatalf("unexpected subjects in %s: %+v", name, binding.Subjects)
+		}
+	}
+}
+
+func TestAddReaderSubject_CleansUpAfterPartialFailure(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+
+	monitoringBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-agent-monitoring-view"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-monitoring-view"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: defaultSandboxSA, Namespace: "default"}},
+	}
+	conflictingBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: readerBindingName("uid-partial-failure", "execution", monitoringBinding.Name)},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "unexpected"},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding(), monitoringBinding, conflictingBinding).Build()
+
+	err := addReaderSubject(ctx, fc, "uid-partial-failure", "execution", "ls-exec-partial-failure", "default")
+	if err == nil {
+		t.Fatal("expected second binding creation to fail")
+	}
+
+	firstName := readerBindingName("uid-partial-failure", "execution", defaultReaderClusterRoleBinding)
+	var firstBinding rbacv1.ClusterRoleBinding
+	if getErr := fc.Get(ctx, types.NamespacedName{Name: firstName}, &firstBinding); !apierrors.IsNotFound(getErr) {
+		t.Fatalf("partially created binding should be cleaned up, got error: %v", getErr)
+	}
+
+	var shared rbacv1.ClusterRoleBinding
+	if getErr := fc.Get(ctx, types.NamespacedName{Name: defaultReaderClusterRoleBinding}, &shared); getErr != nil {
+		t.Fatalf("get shared reader binding: %v", getErr)
+	}
+	if len(shared.Subjects) != 1 || shared.Subjects[0].Name != defaultSandboxSA {
+		t.Fatalf("shared reader binding was modified: %+v", shared.Subjects)
+	}
+}
+
+func TestAddReaderSubject_CleansUpWithCancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	resetReaderBindings()
+
+	monitoringBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-agent-monitoring-view"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-monitoring-view"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: defaultSandboxSA, Namespace: "default"}},
+	}
+	conflictingBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: readerBindingName("uid-cancelled-cleanup", "execution", monitoringBinding.Name)},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "unexpected"},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding(), monitoringBinding, conflictingBinding).Build()
+
+	if err := addReaderSubject(ctx, fc, "uid-cancelled-cleanup", "execution", "ls-exec-cancelled-cleanup", "default"); err == nil {
+		t.Fatal("expected second binding creation to fail")
+	}
+
+	firstName := readerBindingName("uid-cancelled-cleanup", "execution", defaultReaderClusterRoleBinding)
+	var firstBinding rbacv1.ClusterRoleBinding
+	if getErr := fc.Get(context.Background(), types.NamespacedName{Name: firstName}, &firstBinding); !apierrors.IsNotFound(getErr) {
+		t.Fatalf("partially created binding should be cleaned up with cancelled context, got error: %v", getErr)
 	}
 }
 
@@ -1072,7 +1170,7 @@ func TestRemoveReaderSubject_NotPresent(t *testing.T) {
 	resetReaderBindings()
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding()).Build()
 
-	if err := removeReaderSubject(ctx, fc, "ls-exec-nonexistent", "default"); err != nil {
+	if err := removeReaderSubject(ctx, fc, "uid-nonexistent", "execution", "default"); err != nil {
 		t.Fatalf("remove non-existent subject should no-op, got: %v", err)
 	}
 }
@@ -1085,30 +1183,28 @@ func TestRemoveReaderSubject_MultipleBindings(t *testing.T) {
 	monitoringBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-agent-monitoring-view"},
 		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "cluster-monitoring-view"},
-		Subjects: []rbacv1.Subject{
-			{Kind: rbacv1.ServiceAccountKind, Name: defaultSandboxSA, Namespace: "default"},
-			{Kind: rbacv1.ServiceAccountKind, Name: saName, Namespace: "default"},
-		},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: defaultSandboxSA, Namespace: "default"}},
 	}
-	readerWithExec := readerBinding()
-	readerWithExec.Subjects = append(readerWithExec.Subjects, rbacv1.Subject{
-		Kind: rbacv1.ServiceAccountKind, Name: saName, Namespace: "default",
-	})
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerWithExec, monitoringBinding).Build()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(readerBinding(), monitoringBinding).Build()
 
-	if err := removeReaderSubject(ctx, fc, saName, "default"); err != nil {
+	if err := addReaderSubject(ctx, fc, "uid-remove-test", "execution", saName, "default"); err != nil {
+		t.Fatalf("addReaderSubject: %v", err)
+	}
+	if err := removeReaderSubject(ctx, fc, "uid-remove-test", "execution", "default"); err != nil {
 		t.Fatalf("removeReaderSubject: %v", err)
 	}
 
-	for _, name := range []string{defaultReaderClusterRoleBinding, "lightspeed-agent-monitoring-view"} {
+	for _, sourceName := range []string{defaultReaderClusterRoleBinding, "lightspeed-agent-monitoring-view"} {
 		var crb rbacv1.ClusterRoleBinding
-		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
-			t.Fatalf("get %s: %v", name, err)
+		if err := fc.Get(ctx, types.NamespacedName{Name: sourceName}, &crb); err != nil {
+			t.Fatalf("get %s: %v", sourceName, err)
 		}
-		for _, s := range crb.Subjects {
-			if s.Name == saName {
-				t.Fatalf("subject %s should have been removed from %s", saName, name)
-			}
+		if len(crb.Subjects) != 1 || crb.Subjects[0].Name != defaultSandboxSA {
+			t.Fatalf("shared binding %s was modified: %+v", sourceName, crb.Subjects)
+		}
+		var binding rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: readerBindingName("uid-remove-test", "execution", sourceName)}, &binding); !apierrors.IsNotFound(err) {
+			t.Fatalf("per-run binding %s still exists: err=%v", sourceName, err)
 		}
 	}
 }
@@ -1178,6 +1274,100 @@ func TestResolveReaderBindings_MultipleMatches(t *testing.T) {
 	}
 }
 
+func TestAddReaderSubject_RefreshesStaleReaderCache(t *testing.T) {
+	ctx := context.Background()
+	resetReaderBindings()
+
+	oldBinding := readerBinding()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(oldBinding).Build()
+	if _, err := resolveReaderBindings(ctx, fc, "default"); err != nil {
+		t.Fatalf("initial resolve: %v", err)
+	}
+	if err := fc.Delete(ctx, oldBinding); err != nil {
+		t.Fatalf("delete stale binding: %v", err)
+	}
+	replacement := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "replacement-reader"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "replacement-reader-role"},
+		Subjects:   []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: defaultSandboxSA, Namespace: "default"}},
+	}
+	if err := fc.Create(ctx, replacement); err != nil {
+		t.Fatalf("create replacement binding: %v", err)
+	}
+	if err := addReaderSubject(ctx, fc, "uid-refresh-cache", "analysis", "ls-anl-refresh-cache", "default"); err != nil {
+		t.Fatalf("addReaderSubject should refresh stale cache: %v", err)
+	}
+	var perRun rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: readerBindingName("uid-refresh-cache", "analysis", replacement.Name)}, &perRun); err != nil {
+		t.Fatalf("get replacement per-run binding: %v", err)
+	}
+	if perRun.RoleRef.Name != replacement.RoleRef.Name {
+		t.Fatalf("per-run binding used role %q, want %q", perRun.RoleRef.Name, replacement.RoleRef.Name)
+	}
+}
+
+func TestReaderBindingReferencesServiceAccount(t *testing.T) {
+	relevant := readerBinding()
+	unrelated := relevant.DeepCopy()
+	unrelated.Subjects = []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "other-sa", Namespace: "default"}}
+	deleted := toolscache.DeletedFinalStateUnknown{Key: relevant.Name, Obj: relevant}
+
+	tests := []struct {
+		name string
+		obj  interface{}
+		want bool
+	}{
+		{name: "relevant binding", obj: relevant, want: true},
+		{name: "unrelated binding", obj: unrelated, want: false},
+		{name: "value tombstone", obj: deleted, want: true},
+		{name: "pointer tombstone", obj: &deleted, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := readerBindingReferencesServiceAccount(tt.obj, "default"); got != tt.want {
+				t.Fatalf("readerBindingReferencesServiceAccount() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInvalidateReaderBindings(t *testing.T) {
+	readerBindings.Store([]string{"cached-reader"})
+	invalidateReaderBindings()
+	if got := readerBindings.Load().([]string); len(got) != 0 {
+		t.Fatalf("cache was not invalidated: %v", got)
+	}
+}
+
+func TestReaderBindingEventHandlersInvalidateCache(t *testing.T) {
+	relevant := readerBinding()
+	unrelated := relevant.DeepCopy()
+	unrelated.Subjects = []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, Name: "other-sa", Namespace: "default"}}
+	handlers := readerBindingEventHandlers("default")
+
+	t.Run("unrelated add does not invalidate", func(t *testing.T) {
+		readerBindings.Store([]string{"cached-reader"})
+		handlers.AddFunc(unrelated)
+		if got := readerBindings.Load().([]string); len(got) != 1 {
+			t.Fatalf("unrelated add invalidated cache: %v", got)
+		}
+	})
+	t.Run("relevant update invalidates", func(t *testing.T) {
+		readerBindings.Store([]string{"cached-reader"})
+		handlers.UpdateFunc(relevant, unrelated)
+		if got := readerBindings.Load().([]string); len(got) != 0 {
+			t.Fatalf("relevant update did not invalidate cache: %v", got)
+		}
+	})
+	t.Run("relevant delete tombstone invalidates", func(t *testing.T) {
+		readerBindings.Store([]string{"cached-reader"})
+		handlers.DeleteFunc(toolscache.DeletedFinalStateUnknown{Key: relevant.Name, Obj: relevant})
+		if got := readerBindings.Load().([]string); len(got) != 0 {
+			t.Fatalf("relevant delete did not invalidate cache: %v", got)
+		}
+	})
+}
+
 func TestResolveReaderBindings_Cached(t *testing.T) {
 	ctx := context.Background()
 	resetReaderBindings()
@@ -1219,35 +1409,85 @@ func spokeReaderBindings() []*rbacv1.ClusterRoleBinding {
 	}
 }
 
-func TestAddReaderSubjectOnSpoke(t *testing.T) {
+func TestAddReaderSubjectOnSpoke_CreatesPerRunCRBs(t *testing.T) {
 	ctx := context.Background()
 	bindings := spokeReaderBindings()
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
 
-	if err := addReaderSubjectOnSpoke(ctx, fc, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+	runUID := "uid-spoke-1"
+	step := "analysis"
+	extraLabels := map[string]string{LabelSpokeCluster: "prod-spoke", LabelAgenticRun: "my-run"}
+
+	if err := addReaderSubjectOnSpoke(ctx, fc, runUID, step, "ls-anl-uid-spoke-1", spokeManagedNamespace, extraLabels); err != nil {
 		t.Fatalf("addReaderSubjectOnSpoke: %v", err)
 	}
 
-	// Verify both CRBs have the new subject.
-	for _, name := range spokeReaderBindingNames {
+	// Verify per-run CRBs created, one per source.
+	for i, sourceName := range spokeReaderBindingNames {
+		crbName := perRunCRBName(runUID, step, i)
 		var crb rbacv1.ClusterRoleBinding
-		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
-			t.Fatalf("get %s: %v", name, err)
+		if err := fc.Get(ctx, types.NamespacedName{Name: crbName}, &crb); err != nil {
+			t.Fatalf("per-run CRB %s not found: %v", crbName, err)
 		}
-		found := false
-		for _, s := range crb.Subjects {
-			if s.Name == "ls-anl-uid1" && s.Namespace == "openshift-lightspeed-managed" {
-				found = true
-				break
+		// Single subject.
+		if len(crb.Subjects) != 1 {
+			t.Fatalf("CRB %s: expected 1 subject, got %d", crbName, len(crb.Subjects))
+		}
+		if crb.Subjects[0].Name != "ls-anl-uid-spoke-1" {
+			t.Fatalf("CRB %s: subject = %q, want ls-anl-uid-spoke-1", crbName, crb.Subjects[0].Name)
+		}
+		if crb.Subjects[0].Namespace != spokeManagedNamespace {
+			t.Fatalf("CRB %s: subject ns = %q, want %q", crbName, crb.Subjects[0].Namespace, spokeManagedNamespace)
+		}
+		// RoleRef copied from source.
+		var source rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: sourceName}, &source); err != nil {
+			t.Fatalf("get source %s: %v", sourceName, err)
+		}
+		if crb.RoleRef != source.RoleRef {
+			t.Fatalf("CRB %s: RoleRef mismatch: got %+v, want %+v", crbName, crb.RoleRef, source.RoleRef)
+		}
+		// Labels include run + component + spoke extras.
+		if crb.Labels[LabelRun] != runUID {
+			t.Errorf("CRB %s: run label = %q, want %q", crbName, crb.Labels[LabelRun], runUID)
+		}
+		if crb.Labels[LabelComponent] != "reader-rbac" {
+			t.Errorf("CRB %s: component label = %q, want reader-rbac", crbName, crb.Labels[LabelComponent])
+		}
+		if crb.Labels[LabelSpokeCluster] != "prod-spoke" {
+			t.Errorf("CRB %s: spoke-cluster label = %q, want prod-spoke", crbName, crb.Labels[LabelSpokeCluster])
+		}
+	}
+
+	// Source CRBs must NOT be modified.
+	for _, sourceName := range spokeReaderBindingNames {
+		var source rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: sourceName}, &source); err != nil {
+			t.Fatalf("get source %s: %v", sourceName, err)
+		}
+		for _, s := range source.Subjects {
+			if s.Name == "ls-anl-uid-spoke-1" {
+				t.Fatalf("source CRB %s was modified — subject added", sourceName)
 			}
-		}
-		if !found {
-			t.Fatalf("subject ls-anl-uid1 not added to spoke CRB %s", name)
 		}
 	}
 }
 
-func TestAddReaderSubjectOnSpoke_DoesNotPollutHubCache(t *testing.T) {
+func TestAddReaderSubjectOnSpoke_Idempotent(t *testing.T) {
+	ctx := context.Background()
+	bindings := spokeReaderBindings()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
+
+	extraLabels := map[string]string{LabelSpokeCluster: "s"}
+	if err := addReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis", "sa1", spokeManagedNamespace, extraLabels); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if err := addReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis", "sa1", spokeManagedNamespace, extraLabels); err != nil {
+		t.Fatalf("second call (idempotent): %v", err)
+	}
+}
+
+func TestAddReaderSubjectOnSpoke_DoesNotPolluteHubCache(t *testing.T) {
 	ctx := context.Background()
 	resetReaderBindings()
 
@@ -1262,7 +1502,7 @@ func TestAddReaderSubjectOnSpoke_DoesNotPollutHubCache(t *testing.T) {
 	// Set up a spoke client with spoke CRBs.
 	bindings := spokeReaderBindings()
 	spokeFC := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
-	if err := addReaderSubjectOnSpoke(ctx, spokeFC, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+	if err := addReaderSubjectOnSpoke(ctx, spokeFC, "uid1", "analysis", "ls-anl-uid1", spokeManagedNamespace, nil); err != nil {
 		t.Fatalf("spoke add: %v", err)
 	}
 
@@ -1278,47 +1518,97 @@ func TestAddReaderSubjectOnSpoke_DoesNotPollutHubCache(t *testing.T) {
 	}
 }
 
-func TestRemoveReaderSubjectOnSpoke(t *testing.T) {
+func TestAddReaderSubjectOnSpoke_SourceCRBNotFound(t *testing.T) {
+	ctx := context.Background()
+	// No source CRBs exist.
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
+
+	err := addReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis", "sa1", spokeManagedNamespace, nil)
+	if err == nil {
+		t.Fatal("expected error when source CRB is missing")
+	}
+	if !strings.Contains(err.Error(), ErrAddReaderSubject) {
+		t.Fatalf("error should contain %q, got: %v", ErrAddReaderSubject, err)
+	}
+}
+
+func TestAddReaderSubjectOnSpoke_RollbackOnPartialFailure(t *testing.T) {
 	ctx := context.Background()
 	bindings := spokeReaderBindings()
-	// Pre-add the subject to both bindings.
-	for _, b := range bindings {
-		b.Subjects = append(b.Subjects, rbacv1.Subject{
-			Kind: rbacv1.ServiceAccountKind, Name: "ls-anl-uid1", Namespace: "openshift-lightspeed-managed",
-		})
+	// Only first source CRB exists — second is missing, which triggers rollback.
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0]).Build()
+
+	err := addReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis", "sa1", spokeManagedNamespace, nil)
+	if err == nil {
+		t.Fatal("expected error when second source CRB is missing")
 	}
+
+	// First per-run CRB should have been rolled back.
+	crbName := perRunCRBName("uid1", "analysis", 0)
+	var crb rbacv1.ClusterRoleBinding
+	if err := fc.Get(ctx, types.NamespacedName{Name: crbName}, &crb); err == nil {
+		t.Fatalf("per-run CRB %s should have been cleaned up on rollback", crbName)
+	}
+}
+
+func TestRemoveReaderSubjectOnSpoke_DeletesPerRunCRBs(t *testing.T) {
+	ctx := context.Background()
+	bindings := spokeReaderBindings()
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1]).Build()
 
-	if err := removeReaderSubjectOnSpoke(ctx, fc, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
+	// Create per-run CRBs first.
+	if err := addReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis", "sa1", spokeManagedNamespace, nil); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// Remove them.
+	if err := removeReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis"); err != nil {
 		t.Fatalf("removeReaderSubjectOnSpoke: %v", err)
 	}
 
+	// Per-run CRBs should be gone.
+	for i := range spokeReaderBindingNames {
+		crbName := perRunCRBName("uid1", "analysis", i)
+		var crb rbacv1.ClusterRoleBinding
+		if err := fc.Get(ctx, types.NamespacedName{Name: crbName}, &crb); err == nil {
+			t.Fatalf("per-run CRB %s should be deleted", crbName)
+		}
+	}
+
+	// Source CRBs should still exist.
 	for _, name := range spokeReaderBindingNames {
 		var crb rbacv1.ClusterRoleBinding
 		if err := fc.Get(ctx, types.NamespacedName{Name: name}, &crb); err != nil {
-			t.Fatalf("get %s: %v", name, err)
-		}
-		for _, s := range crb.Subjects {
-			if s.Name == "ls-anl-uid1" {
-				t.Fatalf("subject ls-anl-uid1 should have been removed from %s", name)
-			}
+			t.Fatalf("source CRB %s should still exist: %v", name, err)
 		}
 	}
 }
 
-func TestRemoveReaderSubjectOnSpoke_BindingGone(t *testing.T) {
+func TestRemoveReaderSubjectOnSpoke_IdempotentWhenGone(t *testing.T) {
 	ctx := context.Background()
-	// Only one of the two CRBs exists — the other was already deleted.
-	bindings := spokeReaderBindings()
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0]).Build()
+	// No per-run CRBs exist.
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
 
-	// Should not error — missing CRB is tolerated by removeSubjectFromBinding.
-	if err := removeReaderSubjectOnSpoke(ctx, fc, "ls-anl-uid1", "openshift-lightspeed-managed"); err != nil {
-		t.Fatalf("expected no error when CRB is gone, got: %v", err)
+	// Should not error — NotFound is tolerated.
+	if err := removeReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis"); err != nil {
+		t.Fatalf("expected no error when CRBs are gone, got: %v", err)
 	}
 }
 
-func TestAddReaderSubject_ConflictRetryExhaustion(t *testing.T) {
+func TestPerRunCRBName(t *testing.T) {
+	name := perRunCRBName("abc-123", "analysis", 0)
+	if name != "ls-reader-anl-abc-123-0" {
+		t.Fatalf("perRunCRBName = %q, want ls-reader-anl-abc-123-0", name)
+	}
+	// Long UID should be truncated.
+	longUID := strings.Repeat("x", 60)
+	longName := perRunCRBName(longUID, "execution", 1)
+	if len(longName) > 63 {
+		t.Fatalf("name exceeds 63 chars: %d", len(longName))
+	}
+}
+
+func TestAddReaderSubject_DoesNotUpdateSharedBinding(t *testing.T) {
 	ctx := context.Background()
 	resetReaderBindings()
 
@@ -1340,15 +1630,12 @@ func TestAddReaderSubject_ConflictRetryExhaustion(t *testing.T) {
 			},
 		}).Build()
 
-	err := addReaderSubject(ctx, fc, "ls-exec-conflict-test", "default")
-	if err == nil {
-		t.Fatal("expected error after conflict retries exhausted")
+	err := addReaderSubject(ctx, fc, "uid-conflict-test", "execution", "ls-exec-conflict-test", "default")
+	if err != nil {
+		t.Fatalf("per-run binding creation should not update shared binding: %v", err)
 	}
-	if !strings.Contains(err.Error(), "conflict after retries") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if callCount != 3 {
-		t.Fatalf("expected 3 update attempts, got %d", callCount)
+	if callCount != 0 {
+		t.Fatalf("expected no shared binding updates, got %d", callCount)
 	}
 }
 

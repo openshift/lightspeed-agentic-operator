@@ -111,10 +111,8 @@ type SecretRequirement struct {
 // ToolsSpec defines the tools available to an agent in its sandbox pod.
 // This includes skills images, MCP servers, and required secrets.
 //
-// ToolsSpec is specified on an AgenticRun either as a shared default
-// (spec.tools) or per-step (spec.analysis.tools, spec.execution.tools,
-// spec.verification.tools). Per-step tools replace the shared default
-// for that step.
+// ToolsSpec is specified only at AgenticRun.spec.tools and applies to every
+// configured workflow step: analysis, execution, verification, and escalation.
 //
 // +kubebuilder:validation:MinProperties=1
 type ToolsSpec struct {

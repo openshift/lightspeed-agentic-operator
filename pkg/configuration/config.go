@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
@@ -38,13 +40,23 @@ type RHOKPConfig struct {
 	CASecretName string
 }
 
+// TLSConfig holds the normalized TLS handoff values from the ConfigMap.
+type TLSConfig struct {
+	Profile      string
+	MinVersion   string
+	CipherSuites string
+}
+
 // Config holds the parsed contents of the lightspeed-agentic-configuration
 // ConfigMap. Nil means the ConfigMap has not been seen yet.
 type Config struct {
-	Sandbox SandboxConfig
-	OTEL    OTELConfig
-	MCP     MCPConfig
-	RHOKP   RHOKPConfig
+	Sandbox                     SandboxConfig
+	TLS                         TLSConfig
+	AdditionalCAConfigMap       string
+	OTEL                        OTELConfig
+	MCP                         MCPConfig
+	RHOKP                       RHOKPConfig
+	ToolOutputInspectionEnabled bool
 }
 
 // Cache is a thread-safe holder for the parsed ConfigMap contents.
@@ -114,11 +126,29 @@ func (c *Cache) update(cm *corev1.ConfigMap) error {
 	return nil
 }
 
+func parseToolOutputInspectionEnabled(data map[string]string) bool {
+	raw, ok := data[KeyToolOutputInspectionEnabled]
+	if !ok {
+		return true
+	}
+	enabled, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
 func parseConfigMap(cm *corev1.ConfigMap) (*Config, error) {
 	cfg := &Config{
 		Sandbox: SandboxConfig{
 			Mode: cm.Data[KeySandboxMode],
 		},
+		TLS: TLSConfig{
+			Profile:      cm.Data[KeyTLSProfile],
+			MinVersion:   cm.Data[KeyTLSMinVersion],
+			CipherSuites: cm.Data[KeyTLSCipherSuites],
+		},
+		AdditionalCAConfigMap: cm.Data[KeyAdditionalCAConfigMap],
 		OTEL: OTELConfig{
 			CollectorEndpoint: cm.Data[KeyOtelCollectorEndpoint],
 			AdminEndpoint:     cm.Data[KeyOtelAdminEndpoint],
@@ -133,6 +163,7 @@ func parseConfigMap(cm *corev1.ConfigMap) (*Config, error) {
 			Endpoint:     cm.Data[KeyRHOKPEndpoint],
 			CASecretName: cm.Data[KeyRHOKPCASecret],
 		},
+		ToolOutputInspectionEnabled: parseToolOutputInspectionEnabled(cm.Data),
 	}
 
 	if podSpecJSON, ok := cm.Data[KeySandboxPodSpec]; ok && podSpecJSON != "" {

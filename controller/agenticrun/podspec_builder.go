@@ -67,8 +67,7 @@ func (b *PodSpecBuilder) Build(
 	agent *agenticv1alpha1.Agent,
 	llm *agenticv1alpha1.LLMProvider,
 	tools *agenticv1alpha1.ToolsSpec,
-	otelCfg *configuration.OTELConfig,
-	rhokpCfg *configuration.RHOKPConfig,
+	cfg *configuration.Config,
 	step string,
 	runUID string,
 	serviceAccount string,
@@ -108,6 +107,13 @@ func (b *PodSpecBuilder) Build(
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENT_TIMEOUT_SECONDS", Value: strconv.Itoa(timeoutSeconds)},
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENT_MAX_TURNS", Value: strconv.Itoa(maxTurns)},
 	)
+	if cfg != nil {
+		container.Env = append(container.Env,
+			corev1.EnvVar{Name: "LIGHTSPEED_TLS_PROFILE", Value: cfg.TLS.Profile},
+			corev1.EnvVar{Name: "LIGHTSPEED_TLS_MIN_VERSION", Value: cfg.TLS.MinVersion},
+			corev1.EnvVar{Name: "LIGHTSPEED_TLS_CIPHER_SUITES", Value: cfg.TLS.CipherSuites},
+		)
+	}
 	b.addProviderSpecificEnv(container, llm)
 
 	if len(agent.Spec.ReasoningConfig) > 0 {
@@ -178,8 +184,34 @@ func (b *PodSpecBuilder) Build(
 		container.Env = append(container.Env, secEnv...)
 	}
 
-	appendOTELEnvVars(container, &volumes, otelCfg, runUID)
+	var otelCfg *configuration.OTELConfig
+	var mcpCfg *configuration.MCPConfig
+	var rhokpCfg *configuration.RHOKPConfig
+	additionalCAConfigMap := ""
+	if cfg != nil {
+		otelCfg = &cfg.OTEL
+		mcpCfg = &cfg.MCP
+		rhokpCfg = &cfg.RHOKP
+		additionalCAConfigMap = cfg.AdditionalCAConfigMap
+	}
+	appendOTELEnvVars(container, &volumes, otelCfg, runUID, step)
+	appendMCPCAVolume(container, &volumes, mcpCfg)
 	appendRHOKPEnvVars(container, &volumes, rhokpCfg)
+	if additionalCAConfigMap != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: additionalCAVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: additionalCAConfigMap},
+				},
+			},
+		})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      additionalCAVolumeName,
+			MountPath: additionalCAMountPath,
+			ReadOnly:  true,
+		})
+	}
 
 	podSpec.Volumes = mergeVolumes(podSpec.Volumes, volumes)
 	container.VolumeMounts = mergeVolumeMounts(container.VolumeMounts)
@@ -239,24 +271,28 @@ func appendTraceEnvVars(container *corev1.Container, traceparent string) {
 }
 
 const (
-	otelCAVolumeName = "otel-ca"
-	otelCAMountPath  = "/var/run/secrets/otel-ca"
-	otelCASecretKey  = "otel-ca.crt"
+	tlsMountRoot           = "/var/run/secrets/lightspeed/tls"
+	additionalCAVolumeName = "additional-ca"
+	additionalCAMountPath  = tlsMountRoot + "/additional-ca"
+	otelCAVolumeName       = "otel-ca"
+	otelCAMountPath        = tlsMountRoot + "/otel"
+	otelCASecretKey        = "otel-ca.crt"
+	mcpCAVolumeName        = "mcp-ca"
+	mcpCAMountPath         = tlsMountRoot + "/mcp"
+	mcpCASecretKey         = "mcp-ca.crt"
 )
 
-func appendOTELEnvVars(container *corev1.Container, volumes *[]corev1.Volume, otelCfg *configuration.OTELConfig, runUID string) {
+func appendOTELEnvVars(container *corev1.Container, volumes *[]corev1.Volume, otelCfg *configuration.OTELConfig, runUID, step string) {
 	if otelCfg == nil || otelCfg.CollectorEndpoint == "" {
 		return
 	}
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_ENDPOINT", Value: otelCfg.CollectorEndpoint},
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENTICRUN_UID", Value: runUID},
+		corev1.EnvVar{Name: "LIGHTSPEED_AGENTICRUN_STEP", Value: step},
 	)
 
 	if otelCfg.CASecretName != "" {
-		container.Env = append(container.Env,
-			corev1.EnvVar{Name: "OTEL_EXPORTER_OTLP_CERTIFICATE", Value: otelCAMountPath + "/" + otelCASecretKey},
-		)
 		*volumes = append(*volumes, corev1.Volume{
 			Name: otelCAVolumeName,
 			VolumeSource: corev1.VolumeSource{
@@ -271,9 +307,26 @@ func appendOTELEnvVars(container *corev1.Container, volumes *[]corev1.Volume, ot
 	}
 }
 
+func appendMCPCAVolume(container *corev1.Container, volumes *[]corev1.Volume, mcpCfg *configuration.MCPConfig) {
+	if mcpCfg == nil || mcpCfg.CASecretName == "" {
+		return
+	}
+	*volumes = append(*volumes, corev1.Volume{
+		Name: mcpCAVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: mcpCfg.CASecretName},
+		},
+	})
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      mcpCAVolumeName,
+		MountPath: mcpCAMountPath,
+		ReadOnly:  true,
+	})
+}
+
 const (
 	rhokpCAVolumeName = "rhokp-ca"
-	rhokpCAMountPath  = "/var/run/secrets/rhokp-ca"
+	rhokpCAMountPath  = tlsMountRoot + "/rhokp"
 	rhokpCASecretKey  = "rhokp-ca.crt"
 )
 

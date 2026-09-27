@@ -169,6 +169,34 @@ func TestHandleTerminalTTL_PresetTTLNotOverwritten(t *testing.T) {
 	}
 }
 
+func TestHandleTerminalTTL_PreservedFailedSandboxDisablesAutoDeletion(t *testing.T) {
+	run := testAgenticRun()
+	run.Annotations = map[string]string{preserveSandboxAnnotation: "true"}
+	run.Spec.TTLAfterTerminal = ptr32(1)
+	now := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	run.Status.TerminalTime = &now
+	run.Status.Conditions = []metav1.Condition{{
+		Type:   agenticv1alpha1.AgenticRunConditionAnalyzed,
+		Status: metav1.ConditionFalse,
+		Reason: reasonFailed,
+	}}
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).
+		WithStatusSubresource(run).Build()
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller(), Namespace: "default"}
+
+	result, requeue, err := r.handleTerminalTTL(context.Background(), run)
+	if err != nil {
+		t.Fatalf("handleTerminalTTL: %v", err)
+	}
+	if requeue || result.RequeueAfter != 0 {
+		t.Fatal("preserved failed sandbox must not requeue for TTL deletion")
+	}
+	if _, err := getAgenticRun(r, "fix-crash"); err != nil {
+		t.Fatalf("preserved run should remain: %v", err)
+	}
+}
+
 func TestHandleTerminalTTL_ZeroDisablesAutoDeletion(t *testing.T) {
 	run := testAgenticRun()
 	run.Spec.TTLAfterTerminal = ptr32(0) // explicitly disable

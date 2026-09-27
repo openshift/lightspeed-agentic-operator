@@ -199,6 +199,7 @@ func TestStartPhaseSpan_StandardAttributes(t *testing.T) {
 		"agenticrun.uid":       string(run.UID),
 		"agenticrun.name":      "test-run",
 		"agenticrun.namespace": "test-ns",
+		"agenticrun.phase":     "analysis",
 	}
 	for key, want := range checks {
 		if got, ok := attrMap[key]; !ok {
@@ -229,14 +230,15 @@ func TestAllPhaseSpanNames(t *testing.T) {
 	run := testRun()
 
 	tests := []struct {
-		name         string
-		startFunc    func(context.Context, *agenticv1alpha1.AgenticRun) (context.Context, trace.Span)
-		expectedName string
+		name          string
+		startFunc     func(context.Context, *agenticv1alpha1.AgenticRun) (context.Context, trace.Span)
+		expectedName  string
+		expectedPhase string
 	}{
-		{"analysis", auditLogger.startAnalysisSpan, "agenticrun.analyze"},
-		{"execution", auditLogger.startExecutionSpan, "agenticrun.execute"},
-		{"verification", auditLogger.startVerificationSpan, "agenticrun.verify"},
-		{"escalation", auditLogger.startEscalationSpan, "agenticrun.escalate"},
+		{"analysis", auditLogger.startAnalysisSpan, "agenticrun.analyze", "analysis"},
+		{"execution", auditLogger.startExecutionSpan, "agenticrun.execute", "execution"},
+		{"verification", auditLogger.startVerificationSpan, "agenticrun.verify", "verification"},
+		{"escalation", auditLogger.startEscalationSpan, "agenticrun.escalate", "escalation"},
 	}
 
 	for _, tc := range tests {
@@ -249,10 +251,16 @@ func TestAllPhaseSpanNames(t *testing.T) {
 		t.Fatalf("Expected 4 spans, got %d", len(spans))
 	}
 
-	expectedNames := []string{"agenticrun.analyze", "agenticrun.execute", "agenticrun.verify", "agenticrun.escalate"}
 	for i, span := range spans {
-		if span.Name() != expectedNames[i] {
-			t.Errorf("Span %d: expected name %s, got %s", i, expectedNames[i], span.Name())
+		if span.Name() != tests[i].expectedName {
+			t.Errorf("Span %d: expected name %s, got %s", i, tests[i].expectedName, span.Name())
+		}
+		attrs := make(map[string]string)
+		for _, attr := range span.Attributes() {
+			attrs[string(attr.Key)] = attr.Value.Emit()
+		}
+		if attrs["agenticrun.phase"] != tests[i].expectedPhase {
+			t.Errorf("Span %d: expected agenticrun.phase %s, got %s", i, tests[i].expectedPhase, attrs["agenticrun.phase"])
 		}
 	}
 }
@@ -294,6 +302,13 @@ func TestEmitApprovalSpan_ShortLived(t *testing.T) {
 	}
 	if spans[0].Name() != "agenticrun.human_approval" {
 		t.Errorf("Expected span name 'agenticrun.human_approval', got %s", spans[0].Name())
+	}
+	spanAttrs := make(map[string]string)
+	for _, a := range spans[0].Attributes() {
+		spanAttrs[string(a.Key)] = a.Value.Emit()
+	}
+	if spanAttrs["agenticrun.phase"] != "approval" {
+		t.Errorf("Expected agenticrun.phase='approval', got %q", spanAttrs["agenticrun.phase"])
 	}
 
 	events := spans[0].Events()
@@ -354,6 +369,9 @@ func TestEmitTerminalSpan_ShortLived(t *testing.T) {
 	attrMap := make(map[string]string)
 	for _, a := range spans[0].Attributes() {
 		attrMap[string(a.Key)] = a.Value.Emit()
+	}
+	if attrMap["agenticrun.phase"] != "terminal" {
+		t.Errorf("Expected agenticrun.phase='terminal', got %q", attrMap["agenticrun.phase"])
 	}
 	if attrMap["phase"] != "Completed" {
 		t.Errorf("Expected phase='Completed', got %q", attrMap["phase"])

@@ -23,10 +23,8 @@ package v1alpha1
 //     by the secret field. Use this for API keys and tokens.
 //   - "ServiceAccountToken" — The operator injects a Kubernetes service account
 //     token automatically (for MCP servers that accept K8s auth).
-//   - "Client"     — The value is provided by the calling client at
-//     runtime (e.g., forwarded from a user session).
 //
-// +kubebuilder:validation:Enum=Secret;ServiceAccountToken;Client
+// +kubebuilder:validation:Enum=Secret;ServiceAccountToken
 type MCPHeaderSourceType string
 
 const (
@@ -34,8 +32,6 @@ const (
 	MCPHeaderSourceTypeSecret MCPHeaderSourceType = "Secret"
 	// MCPHeaderSourceTypeServiceAccountToken uses an auto-injected Kubernetes SA token.
 	MCPHeaderSourceTypeServiceAccountToken MCPHeaderSourceType = "ServiceAccountToken"
-	// MCPHeaderSourceTypeClient expects the value to be provided by the caller.
-	MCPHeaderSourceTypeClient MCPHeaderSourceType = "Client"
 )
 
 // MCPHeaderValueSource defines where to obtain the value for an MCP header.
@@ -47,8 +43,6 @@ type MCPHeaderValueSource struct {
 	//     API keys and tokens). Requires the secret field to be set.
 	//   - "ServiceAccountToken" — auto-injects a Kubernetes service account token
 	//     (for MCP servers that accept K8s auth).
-	//   - "Client"     — the value is provided by the calling client at
-	//     runtime (e.g., forwarded from a user session).
 	// +required
 	Type MCPHeaderSourceType `json:"type,omitempty"`
 
