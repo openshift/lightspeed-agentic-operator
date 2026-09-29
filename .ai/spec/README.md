@@ -28,6 +28,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
 | Understand product e2e testing | `what/product-e2e-testing.md` |
 | Understand Agentic data collection traces | `what/data-collection.md` |
+| Understand disconnected Gemma 4 product-e2e | `how/disconnected-product-e2e.md` |
 | Navigate the project layout | `how/project-structure.md` |
 | Understand the kill switch / system config | `what/system-config.md` |
 | Navigate the controller codebase | `how/reconciler.md` |
@@ -57,6 +58,6 @@ AI agents. Content is optimized for precision and machine consumption.
 
 ## Project Context
 
-This operator watches `AgenticRun` CRs and drives them through a multi-phase workflow (analysis, execution, verification) with human approval gates. It executes each agent step as a batch sandbox: the operator writes an input ConfigMap, creates a Pod or SandboxClaim, and observes the Result CR created by the sandbox. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
+This operator watches `AgenticRun` CRs and drives them through a multi-phase workflow (analysis, execution, verification). It launches ephemeral batch sandbox Pods, delivers input through a ConfigMap, and observes Result CRs written by the sandbox. The console plugin provides the human-facing UI. Skills are mounted as OCI image volumes.
 
 Jira tracking: Feature OCPSTRAT-3095, Epic OLS-2894, Kill Switch OLS-3018.
