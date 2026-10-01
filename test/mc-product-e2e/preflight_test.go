@@ -158,6 +158,8 @@ func checkPrerequisites(t *testing.T) clusters {
 		{hub, "agentic.openshift.io", "agenticruns", "get", hubNamespace},
 		{hub, "agentic.openshift.io", "agenticruns", "delete", hubNamespace},
 		{hub, "agentic.openshift.io", "analysisresults", "get", hubNamespace},
+		{hub, "agentic.openshift.io", "executionresults", "get", hubNamespace},
+		{hub, "agentic.openshift.io", "verificationresults", "get", hubNamespace},
 		{hub, "apps", "deployments", "get", hubNamespace},
 		{hub, "apps", "deployments", "list", ""},
 		{hub, "", "secrets", "get", hubNamespace},

@@ -4,6 +4,7 @@ package mcproducte2e
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -57,7 +58,7 @@ func checkToken(ctx context.Context, secret *corev1.Secret) error {
 	if err != nil || server.Scheme != "https" || server.Host == "" || cfg.Insecure {
 		return errors.New("sandbox kubeconfig must have a verified HTTPS API server")
 	}
-	if cfg.BearerToken != auth.Token {
+	if subtle.ConstantTimeCompare([]byte(cfg.BearerToken), []byte(auth.Token)) != 1 {
 		return errors.New("sandbox kubeconfig REST client has unexpected credentials")
 	}
 	api, err := kubernetes.NewForConfig(cfg)

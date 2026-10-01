@@ -8,7 +8,6 @@ import "testing"
 func TestCrossClusterRun(t *testing.T) {
 	c := checkPrerequisites(t)
 	observer := newObserver(t, c)
-	t.Cleanup(observer.stop)
 
 	f := createFixture(t, c, observer)
 	// keep one provider-backed run, named subtests report its independent checks

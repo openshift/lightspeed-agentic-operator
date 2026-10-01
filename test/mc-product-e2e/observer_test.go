@@ -72,6 +72,8 @@ func newObserver(t *testing.T, c clusters) *observer {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	o := &observer{ctx: ctx, cancel: cancel, steps: map[string]*stepEvidence{}}
+	// stop watches and cancel the context even if a later step fails here or in bind
+	t.Cleanup(o.stop)
 	for _, item := range []struct {
 		path string
 		set  **kubernetes.Clientset
@@ -334,7 +336,14 @@ func (o *observer) checkAccess(step string) {
 		ctx, cancel := context.WithTimeout(o.ctx, 20*time.Second)
 		err := wait.PollUntilContextTimeout(ctx, pollInterval, 20*time.Second, true, func(ctx context.Context) (bool, error) {
 			review := &authorizationv1.SubjectAccessReview{Spec: authorizationv1.SubjectAccessReviewSpec{
-				User: user, ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: tc.namespace, Verb: tc.verb, Resource: tc.resource},
+				User: user,
+				// evaluate the identity the real SA token carries, including its groups
+				Groups: []string{
+					"system:serviceaccounts",
+					"system:serviceaccounts:" + managedNamespace,
+					"system:authenticated",
+				},
+				ResourceAttributes: &authorizationv1.ResourceAttributes{Namespace: tc.namespace, Verb: tc.verb, Resource: tc.resource},
 			}}
 			result, err := o.spokeAPI.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 			if err != nil {
@@ -486,6 +495,9 @@ func (o *observer) artifactsReleased(ctx context.Context) error {
 	o.mu.Lock()
 	f := o.f
 	o.mu.Unlock()
+	if f == nil {
+		return errors.New("observer not bound to a fixture")
+	}
 	selector := client.MatchingLabels{runLabel: string(f.run.UID)}
 	return wait.PollUntilContextTimeout(ctx, pollInterval, deleteTimeout, true, func(ctx context.Context) (bool, error) {
 		// check the names seen in-flight, not only label selectors which could miss a stripped label
