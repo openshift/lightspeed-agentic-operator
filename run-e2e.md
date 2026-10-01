@@ -1,17 +1,15 @@
-# End-to-End Testing
-
-## Local checkout workflow
+# E2E Testing with Local Checkout Repositories
 
 Run end-to-end tests on an OpenShift cluster using locally built images for the operator, sandbox, and console.
 
-### Prerequisites
+## Prerequisites
 
 - `oc` CLI logged into an OpenShift cluster with cluster-admin
 - `podman` (or `docker`) on PATH
 - Local checkouts of the repositories you want to test
 - An LLM API key (for real agent tests) or the mock agent image (for automated e2e)
 
-### Setup: Build and Push Local Images
+## Setup: Build and Push Local Images
 
 ```bash
 export KUBECONFIG=/path/to/kubeconfig
@@ -49,7 +47,7 @@ podman build -t $REGISTRY/openshift-lightspeed/agentic-console:latest .
 podman push $REGISTRY/openshift-lightspeed/agentic-console:latest --tls-verify=false
 ```
 
-### Option A: Full Deployment with Quickstart
+## Option A: Full Deployment with Quickstart
 
 Deploy the operator, console, and webhook in-cluster using the quickstart script with local images:
 
@@ -66,7 +64,7 @@ bash hack/quickstart/install.sh
 
 To skip console deployment, set `CONSOLE_IMAGE=""`.
 
-### Option B: Operator Runs Locally (Faster Iteration)
+## Option B: Operator Runs Locally (Faster Iteration)
 
 Skip building/pushing the operator image. The operator runs on your workstation and connects to the cluster via KUBECONFIG:
 
@@ -83,31 +81,31 @@ IMAGE_PULL_POLICY=Always \
 make run
 ```
 
-### Configure LLM Provider
+## Configure LLM Provider
 
 Pick one provider and configure it:
 
-#### OpenAI
+### OpenAI
 ```bash
 oc create secret generic llm-creds-openai -n openshift-lightspeed \
   --from-literal=OPENAI_API_KEY=sk-...
 oc apply -f hack/quickstart/examples/openai.yaml
 ```
 
-#### Anthropic (via Vertex AI)
+### Anthropic (via Vertex AI)
 ```bash
 oc create secret generic llm-creds-vertex -n openshift-lightspeed \
   --from-file=GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa-key.json
 oc apply -f hack/quickstart/examples/vertex-anthropic.yaml
 ```
 
-### Submit a Test AgenticRun
+## Submit a Test AgenticRun
 
 ```bash
 oc apply -f hack/quickstart/examples/deploy-test-workload.yaml
 ```
 
-### Watch the Lifecycle
+## Watch the Lifecycle
 
 Open separate terminals:
 
@@ -129,7 +127,7 @@ oc agentic run logs deploy-test-workload -f
 oc agentic run get deploy-test-workload
 ```
 
-#### Expected Phase Timeline
+### Expected Phase Timeline
 
 ```
 Pending → Analyzing (sandbox pod runs analysis agent)
@@ -139,7 +137,7 @@ Pending → Analyzing (sandbox pod runs analysis agent)
        → Completed
 ```
 
-### Automated E2E Tests (Mock Agent, No Real LLM)
+## Automated E2E Tests (Mock Agent, No Real LLM)
 
 For CI or automated testing, use the pre-built mock agent image instead of a real LLM:
 
@@ -152,7 +150,7 @@ make run &
 make test-e2e
 ```
 
-### Cleanup
+## Cleanup
 
 ```bash
 # Delete the test run
@@ -163,7 +161,7 @@ bash hack/quickstart/uninstall.sh
 # Or: make undeploy
 ```
 
-### Environment Variables Reference
+## Environment Variables Reference
 
 | Variable | Default | Description |
 |---|---|---|
@@ -182,10 +180,14 @@ bash hack/quickstart/uninstall.sh
 
 ## Multicluster E2E (developer preview)
 
-Use this to check that changes haven't broken the hub-to-spoke AgenticRun flow.
-Have a working multicluster setup with at least one registered spoke and a real
-LLM provider. Run preflight to check the remaining prerequisites before the test
-creates anything.
+For Developer Preview, `make mc-product-e2e` runs a live-cluster integration
+test with a real LLM provider. More thorough testing strategies, including
+mocked E2E tests and CI integration, are planned for Technology Preview (TP)
+and General Availability (GA).
+
+A configured multicluster deployment with at least one registered spoke is
+required. Run preflight to check the remaining prerequisites before running
+the test:
 
 ```bash
 export MC_HUB_KUBECONFIG=/path/to/hub.kubeconfig
@@ -194,9 +196,9 @@ make mc-product-e2e-preflight
 make mc-product-e2e
 ```
 
-The test runs Analysis, Execution and Verification against the spoke, checks
-its proof and cleans up its own run and namespace. If preflight finds multiple
-matching spokes, set `MC_SPOKE_NAME` to select one. For self-spoke testing, use the
-same kubeconfig for both variables; that checks the workflow, not connectivity
-between separate clusters. If cleanup fails, inspect the reported resources
-rather than deleting shared prerequisites.
+The test verifies Analysis, Execution and Verification against the spoke,
+checks a spoke-side proof, and cleans up its own run and namespace. If preflight
+finds multiple matching spokes, set `MC_SPOKE_NAME` to select one. Self-spoke
+runs can use the same kubeconfig for both variables, but do not validate
+connectivity between separate clusters. If cleanup fails, inspect the reported
+resources rather than deleting shared prerequisites.
