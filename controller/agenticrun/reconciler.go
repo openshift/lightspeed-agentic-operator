@@ -22,6 +22,7 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
+	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 const (
@@ -51,9 +52,11 @@ type AgenticRunReconciler struct {
 	Namespace string
 	Audit     AuditLogger
 	TempLog   TempLogCleaner
+	Version   *ocpversion.Gate
 }
 
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
+// +kubebuilder:rbac:groups=config.openshift.io,resources=clusterversions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns/finalizers,verbs=update
@@ -102,6 +105,16 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if controllerutil.ContainsFinalizer(&run, templogCleanupFinalizer) {
 			return r.handleTemplogCleanup(ctx, &run)
 		}
+		return ctrl.Result{}, nil
+	}
+
+	// Deletion must finish even if a version lookup fails. For active work,
+	// retry transient read failures so a completed upgrade event is not lost.
+	enabled, versionErr := r.Version.Check(ctx)
+	if versionErr != nil {
+		return ctrl.Result{}, versionErr
+	}
+	if !enabled {
 		return ctrl.Result{}, nil
 	}
 
@@ -269,6 +282,8 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}
 	fanOutToActiveRuns := func(ctx context.Context, _ client.Object) []ctrl.Request {
+		// Always enqueue on a version event. Reconcile retries a transient
+		// read failure instead of silently dropping the only completion event.
 		var runs agenticv1alpha1.AgenticRunList
 		if err := r.List(ctx, &runs); err != nil {
 			return nil
@@ -303,6 +318,7 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 				return obj.GetNamespace() == r.Namespace
 			}))).
+		Watches(ocpversion.Object(), handler.EnqueueRequestsFromMapFunc(fanOutToActiveRuns)).
 		Watches(&agenticv1alpha1.ApprovalPolicy{}, handler.EnqueueRequestsFromMapFunc(fanOutToActiveRuns)).
 		Watches(&agenticv1alpha1.AgenticOLSConfig{}, handler.EnqueueRequestsFromMapFunc(fanOutToActiveRuns)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(

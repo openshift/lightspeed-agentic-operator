@@ -29,14 +29,19 @@ func (r *AgenticRunReconciler) isSandboxClaimMode() bool {
 // runTimeoutLoop dispatches to the mode-appropriate timeout handler.
 // Stopped when ctx is cancelled (manager shutdown).
 func (r *AgenticRunReconciler) runTimeoutLoop(ctx context.Context) error {
-	if err := r.sweepExpiredRuns(ctx); err != nil {
-		logf.FromContext(ctx).Error(err, "failed to sweep expired AgenticRuns")
+	if r.Version.Enabled(ctx) {
+		if err := r.sweepExpiredRuns(ctx); err != nil {
+			logf.FromContext(ctx).Error(err, "failed to sweep expired AgenticRuns")
+		}
 	}
 	for i := 1; ; i++ {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-time.After(sandboxTimeoutCheckInterval):
+			if !r.Version.Enabled(ctx) {
+				continue
+			}
 			r.handlePodTimeEvent(ctx)
 			if i%60 == 0 {
 				if err := r.sweepExpiredRuns(ctx); err != nil {

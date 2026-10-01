@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -13,11 +14,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 var suiteClient client.Client
@@ -27,6 +30,33 @@ func TestMain(m *testing.M) {
 	suiteClient, err = buildClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "FATAL: build client: %v\n", err)
+		os.Exit(1)
+	}
+
+	// The Konflux scenarios currently provision OpenShift 4.x. Test the
+	// fail-closed behavior there rather than setting up fixtures that the
+	// correctly gated admission webhook must reject. On completed 5.x
+	// clusters the full AgenticRun workflow suite still runs unchanged.
+	cv := ocpversion.Object()
+	if err := suiteClient.Get(context.Background(), client.ObjectKey{Name: "version"}, cv); err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: read ClusterVersion for e2e suite: %v\n", err)
+		os.Exit(1)
+	}
+	version, found, err := unstructured.NestedString(cv.Object, "status", "desired", "version")
+	if err != nil || !found {
+		fmt.Fprintf(os.Stderr, "FATAL: unreadable ClusterVersion desired version for e2e suite: %v\n", err)
+		os.Exit(1)
+	}
+	if strings.HasPrefix(version, "4.") {
+		fmt.Fprintf(os.Stderr, "OpenShift %s: testing the disabled agentic path\n", version)
+		if err := flag.Set("test.run", "^TestInactiveOnUnsupportedOCP$"); err != nil {
+			fmt.Fprintf(os.Stderr, "FATAL: select inactive e2e tests: %v\n", err)
+			os.Exit(1)
+		}
+		os.Exit(m.Run())
+	}
+	if !(&ocpversion.Gate{Reader: suiteClient}).Enabled(context.Background()) {
+		fmt.Fprintf(os.Stderr, "FATAL: completed OpenShift 5+ release required for workflow e2e (desired %s)\n", version)
 		os.Exit(1)
 	}
 
@@ -43,6 +73,34 @@ func TestMain(m *testing.M) {
 	}
 
 	os.Exit(code)
+}
+
+// TestInactiveOnUnsupportedOCP checks the actual admission and runtime
+// boundaries against the OpenShift 4.x clusters provisioned by Konflux.
+func TestInactiveOnUnsupportedOCP(t *testing.T) {
+	ctx := context.Background()
+	if (&ocpversion.Gate{Reader: suiteClient}).Enabled(ctx) {
+		t.Fatal("agentic gate unexpectedly enabled on an OpenShift 4.x cluster")
+	}
+	agent := &agenticv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "e2e-agent-version-gate"},
+		Spec: agenticv1alpha1.AgentSpec{
+			LLMProvider: agenticv1alpha1.LLMProviderReference{Name: "e2e-llm"},
+			Model:       "claude-opus-4-6",
+		},
+	}
+	err := suiteClient.Create(ctx, agent)
+	if err == nil {
+		_ = suiteClient.Delete(ctx, agent)
+		t.Fatal("agentic admission accepted an Agent on OpenShift 4.x")
+	}
+	if !strings.Contains(err.Error(), "agentic operations require a readable OpenShift version >= 5.0") {
+		t.Fatalf("expected version-gated admission denial, got: %v", err)
+	}
+	sa := &corev1.ServiceAccount{}
+	if err := suiteClient.Get(ctx, client.ObjectKey{Name: "lightspeed-agent", Namespace: testNS}, sa); !apierrors.IsNotFound(err) {
+		t.Fatalf("runtime agent ServiceAccount must not exist on OpenShift 4.x: %v", err)
+	}
 }
 
 // fixtureStubs returns lightweight stubs (name/namespace only) for teardown.
