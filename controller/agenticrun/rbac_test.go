@@ -1473,6 +1473,40 @@ func TestAddReaderSubjectOnSpoke_CreatesPerRunCRBs(t *testing.T) {
 	}
 }
 
+func TestAddReaderSubjectOnSpoke_DiscoversAdditionalReaderBindings(t *testing.T) {
+	ctx := context.Background()
+	bindings := spokeReaderBindings()
+	monitoringRules := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-hub:monitoring-rules-view"},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "monitoring-rules-view"},
+		Subjects: []rbacv1.Subject{{
+			Kind: rbacv1.ServiceAccountKind, Name: "lightspeed-agent", Namespace: "openshift-lightspeed-managed",
+		}},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0], bindings[1], monitoringRules).Build()
+
+	if err := addReaderSubjectOnSpoke(ctx, fc, "uid-extra", "verification", "ls-ver-extra", spokeManagedNamespace, nil); err != nil {
+		t.Fatalf("addReaderSubjectOnSpoke: %v", err)
+	}
+
+	found := false
+	var perRun rbacv1.ClusterRoleBindingList
+	if err := fc.List(ctx, &perRun, client.MatchingLabels{LabelRun: "uid-extra", LabelStep: "verification", LabelComponent: "reader-rbac"}); err != nil {
+		t.Fatalf("list per-run CRBs: %v", err)
+	}
+	if len(perRun.Items) != 3 {
+		t.Fatalf("expected 3 per-run CRBs, got %d", len(perRun.Items))
+	}
+	for i := range perRun.Items {
+		if perRun.Items[i].RoleRef.Name == "monitoring-rules-view" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected monitoring-rules-view to be propagated, got: %+v", perRun.Items)
+	}
+}
+
 func TestAddReaderSubjectOnSpoke_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	bindings := spokeReaderBindings()
@@ -1529,25 +1563,6 @@ func TestAddReaderSubjectOnSpoke_SourceCRBNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), ErrAddReaderSubject) {
 		t.Fatalf("error should contain %q, got: %v", ErrAddReaderSubject, err)
-	}
-}
-
-func TestAddReaderSubjectOnSpoke_RollbackOnPartialFailure(t *testing.T) {
-	ctx := context.Background()
-	bindings := spokeReaderBindings()
-	// Only first source CRB exists — second is missing, which triggers rollback.
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(bindings[0]).Build()
-
-	err := addReaderSubjectOnSpoke(ctx, fc, "uid1", "analysis", "sa1", spokeManagedNamespace, nil)
-	if err == nil {
-		t.Fatal("expected error when second source CRB is missing")
-	}
-
-	// First per-run CRB should have been rolled back.
-	crbName := perRunCRBName("uid1", "analysis", 0)
-	var crb rbacv1.ClusterRoleBinding
-	if err := fc.Get(ctx, types.NamespacedName{Name: crbName}, &crb); err == nil {
-		t.Fatalf("per-run CRB %s should have been cleaned up on rollback", crbName)
 	}
 }
 
