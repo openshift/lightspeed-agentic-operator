@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 const (
@@ -50,6 +51,7 @@ const (
 type Reconciler struct {
 	client.Client
 	EventRecorder record.EventRecorder
+	Version       *ocpversion.Gate
 }
 
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticolsconfigs,verbs=get;list;watch
@@ -58,6 +60,13 @@ type Reconciler struct {
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns,verbs=list
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	enabled, err := r.Version.Check(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !enabled {
+		return ctrl.Result{}, nil
+	}
 	var config agenticv1alpha1.AgenticOLSConfig
 	if err := r.Get(ctx, req.NamespacedName, &config); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -159,6 +168,12 @@ func isTerminal(phase agenticv1alpha1.AgenticRunPhase) bool {
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&agenticv1alpha1.AgenticOLSConfig{}).
+		Watches(ocpversion.Object(), handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+			if obj.GetName() != "version" {
+				return nil
+			}
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "cluster"}}}
+		})).
 		Watches(
 			&agenticv1alpha1.AgenticRun{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {

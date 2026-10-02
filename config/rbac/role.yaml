@@ -125,6 +125,14 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - config.openshift.io
+  resources:
+  - clusterversions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - extensions.agents.x-k8s.io
   resources:
   - sandboxclaims
