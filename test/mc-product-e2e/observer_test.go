@@ -347,7 +347,12 @@ func (o *observer) checkAccess(step string) {
 			}}
 			result, err := o.spokeAPI.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 			if err != nil {
-				return false, err
+				// preflight already proved SAR create works, so a mid-test auth failure is a
+				// real regression; retry transient errors (network, 5xx, rate-limit)
+				if apierrors.IsUnauthorized(err) || apierrors.IsForbidden(err) {
+					return false, err
+				}
+				return false, nil
 			}
 			return result.Status.EvaluationError == "" && result.Status.Allowed == tc.allowed, nil
 		})

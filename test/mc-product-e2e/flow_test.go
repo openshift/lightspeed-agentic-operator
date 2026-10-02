@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	pollInterval  = 2 * time.Second
-	phaseTimeout  = 12 * time.Minute
-	deleteTimeout = 2 * time.Minute
-	ownedLabel    = "agentic.openshift.io/mc-e2e"
+	pollInterval      = 2 * time.Second
+	phaseTimeout      = 12 * time.Minute
+	deleteTimeout     = 2 * time.Minute
+	resultReadTimeout = 30 * time.Second
+	ownedLabel        = "agentic.openshift.io/mc-e2e"
 )
 
 type fixture struct {

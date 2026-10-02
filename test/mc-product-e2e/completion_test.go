@@ -44,13 +44,17 @@ func (f *fixture) waitForCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("wait for completed run: %v", err)
 	}
+	// the result CRs already exist; read them under a fresh short timeout
+	// independent of the completion budget consumed above
+	readCtx, readCancel := context.WithTimeout(context.Background(), resultReadTimeout)
+	defer readCancel()
 	for _, step := range []struct {
 		condition string
 		ref       string
 	}{
-		{agenticv1alpha1.AgenticRunConditionAnalyzed, firstResult(run.Status.Steps.Analysis.Results)},
-		{agenticv1alpha1.AgenticRunConditionExecuted, firstResult(run.Status.Steps.Execution.Results)},
-		{agenticv1alpha1.AgenticRunConditionVerified, firstResult(run.Status.Steps.Verification.Results)},
+		{agenticv1alpha1.AgenticRunConditionAnalyzed, latestSucceededResult(run.Status.Steps.Analysis.Results)},
+		{agenticv1alpha1.AgenticRunConditionExecuted, latestSucceededResult(run.Status.Steps.Execution.Results)},
+		{agenticv1alpha1.AgenticRunConditionVerified, latestSucceededResult(run.Status.Steps.Verification.Results)},
 	} {
 		cond := meta.FindStatusCondition(run.Status.Conditions, step.condition)
 		if cond == nil || cond.Status != metav1.ConditionTrue || strings.EqualFold(cond.Reason, "Skipped") || step.ref == "" {
@@ -59,13 +63,13 @@ func (f *fixture) waitForCompletion(t *testing.T) {
 	}
 
 	var analysis agenticv1alpha1.AnalysisResult
-	mustGet(t, ctx, f.clusters.hub, types.NamespacedName{Namespace: hubNamespace, Name: firstResult(run.Status.Steps.Analysis.Results)}, &analysis)
+	mustGet(t, readCtx, f.clusters.hub, types.NamespacedName{Namespace: hubNamespace, Name: latestSucceededResult(run.Status.Steps.Analysis.Results)}, &analysis)
 	if !ownedBy(&analysis, f.run) || analysis.Spec.AgenticRunName != f.run.Name {
 		t.Fatal("analysis result does not belong to this run")
 	}
 
 	var execution agenticv1alpha1.ExecutionResult
-	mustGet(t, ctx, f.clusters.hub, types.NamespacedName{Namespace: hubNamespace, Name: firstResult(run.Status.Steps.Execution.Results)}, &execution)
+	mustGet(t, readCtx, f.clusters.hub, types.NamespacedName{Namespace: hubNamespace, Name: latestSucceededResult(run.Status.Steps.Execution.Results)}, &execution)
 	if !ownedBy(&execution, f.run) || execution.Spec.AgenticRunName != f.run.Name {
 		t.Fatal("execution result does not belong to this run")
 	}
@@ -80,7 +84,7 @@ func (f *fixture) waitForCompletion(t *testing.T) {
 		t.Fatal("execution result contains no successful action")
 	}
 	var verification agenticv1alpha1.VerificationResult
-	mustGet(t, ctx, f.clusters.hub, types.NamespacedName{Namespace: hubNamespace, Name: firstResult(run.Status.Steps.Verification.Results)}, &verification)
+	mustGet(t, readCtx, f.clusters.hub, types.NamespacedName{Namespace: hubNamespace, Name: latestSucceededResult(run.Status.Steps.Verification.Results)}, &verification)
 	if !ownedBy(&verification, f.run) || verification.Spec.AgenticRunName != f.run.Name || len(verification.Status.Checks) == 0 {
 		t.Fatal("verification result is missing, empty or belongs to another run")
 	}
@@ -88,12 +92,12 @@ func (f *fixture) waitForCompletion(t *testing.T) {
 		t.Fatal("verification contains a non-passed check")
 	}
 	var proof corev1.ConfigMap
-	mustGet(t, ctx, f.clusters.spoke, types.NamespacedName{Namespace: f.namespace.Name, Name: f.proofName}, &proof)
+	mustGet(t, readCtx, f.clusters.spoke, types.NamespacedName{Namespace: f.namespace.Name, Name: f.proofName}, &proof)
 	if proof.Labels[ownedLabel] != f.proofValue || proof.Data["proof"] != f.proofValue {
 		t.Fatal("independent spoke client found no matching labeled proof ConfigMap")
 	}
 	var hubProof corev1.ConfigMap
-	if err := f.clusters.hub.Get(ctx, types.NamespacedName{Namespace: hubNamespace, Name: f.proofName}, &hubProof); !apierrors.IsNotFound(err) {
+	if err := f.clusters.hub.Get(readCtx, types.NamespacedName{Namespace: hubNamespace, Name: f.proofName}, &hubProof); !apierrors.IsNotFound(err) {
 		t.Fatalf("proof ConfigMap must not exist in the hub operator namespace (get: %v)", err)
 	}
 }
@@ -110,9 +114,14 @@ func verificationChecksPassed(checks []agenticv1alpha1.VerifyCheck) bool {
 	return true
 }
 
-func firstResult(refs []agenticv1alpha1.StepResultRef) string {
-	if len(refs) != 1 {
-		return ""
+// latestSucceededResult returns the name of the newest Succeeded result ref.
+// Results are appended newest last, so a retried step has its successful attempt
+// at the end; returns empty when no attempt succeeded.
+func latestSucceededResult(refs []agenticv1alpha1.StepResultRef) string {
+	for i := len(refs) - 1; i >= 0; i-- {
+		if refs[i].Outcome == agenticv1alpha1.ActionOutcomeSucceeded {
+			return refs[i].Name
+		}
 	}
-	return refs[0].Name
+	return ""
 }
