@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -347,18 +348,18 @@ func (o *observer) checkAccess(step string) {
 			}}
 			result, err := o.spokeAPI.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
 			if err != nil {
-				// preflight already proved SAR create works, so a mid-test auth failure is a
-				// real regression; retry transient errors (network, 5xx, rate-limit)
-				if apierrors.IsUnauthorized(err) || apierrors.IsForbidden(err) {
-					return false, err
+				// retry only transient errors (network, 5xx, throttling); surface auth
+				// and other permanent errors immediately with their detail
+				if transientAPIError(err) {
+					return false, nil
 				}
-				return false, nil
+				return false, err
 			}
 			return result.Status.EvaluationError == "" && result.Status.Allowed == tc.allowed, nil
 		})
 		cancel()
 		if err != nil {
-			o.problem(fmt.Errorf("spoke %s SA %s %s permission in %s does not match expected scope", step, tc.verb, tc.resource, tc.namespace))
+			o.problem(fmt.Errorf("spoke %s SA %s %s permission in %s does not match expected scope: %w", step, tc.verb, tc.resource, tc.namespace, err))
 			return
 		}
 	}
@@ -366,6 +367,22 @@ func (o *observer) checkAccess(step string) {
 	defer o.mu.Unlock()
 	s, _ := o.step(step)
 	s.accessOK = true
+}
+
+// transientAPIError reports whether a Kubernetes API error is likely to succeed
+// on retry (server timeouts, throttling, temporary unavailability, network
+// errors). Permanent errors, including auth failures, are not transient.
+func transientAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
+		apierrors.IsTooManyRequests(err) || apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsInternalError(err) || apierrors.IsConflict(err) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 func (o *observer) onSecret(obj interface{}) {
