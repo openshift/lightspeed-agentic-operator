@@ -17,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -25,14 +26,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticolsconfig"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticrun"
+	"github.com/openshift/lightspeed-agentic-operator/controller/webhookpolicy"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configwatch"
+	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 var scheme = runtime.NewScheme()
@@ -86,6 +90,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	versionGate := &ocpversion.Gate{Reader: mgr.GetAPIReader()}
+
 	// Initialize configuration cache and OTEL provider
 	telemetryProvider := configuration.NewProvider(&agenticrun.AgenticRunIDGenerator{})
 	telemetryProvider.SetSecretSource(mgr.GetAPIReader(), namespace)
@@ -110,16 +116,23 @@ func main() {
 
 	// Eagerly read ConfigMap if it already exists (operator restart).
 	// Non-fatal if missing — the watcher will pick it up when it appears.
-	if err := configwatch.TryLoad(
-		context.Background(), mgr.GetAPIReader(), namespace,
-		configuration.ConfigMapName, cfgCache.OnConfigMapChange,
-	); err != nil {
-		log.Info("ConfigMap not available at startup, telemetry disabled until it appears", "name", configuration.ConfigMapName, "reason", err.Error())
+	if versionGate.Enabled(context.Background()) {
+		if err := configwatch.TryLoad(
+			context.Background(), mgr.GetAPIReader(), namespace,
+			configuration.ConfigMapName, cfgCache.OnConfigMapChange,
+		); err != nil {
+			log.Info("ConfigMap not available at startup, telemetry disabled until it appears", "name", configuration.ConfigMapName, "reason", err.Error())
+		}
 	}
 
 	// Watch for ConfigMap changes at runtime
 	cmWatcher := configwatch.New(mgr.GetClient(), namespace,
-		configwatch.Registration{Name: configuration.ConfigMapName, Handler: cfgCache.OnConfigMapChange},
+		configwatch.Registration{Name: configuration.ConfigMapName, Handler: func(ctx context.Context, cm *corev1.ConfigMap) error {
+			if versionGate.Enabled(ctx) {
+				return cfgCache.OnConfigMapChange(ctx, cm)
+			}
+			return nil
+		}},
 	)
 	if err := cmWatcher.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up ConfigMap watcher")
@@ -149,14 +162,16 @@ func main() {
 	}
 
 	// --- Register controllers ---
-	if err := (&agenticrun.AgenticRunReconciler{
+	runReconciler := &agenticrun.AgenticRunReconciler{
 		Client:    mgr.GetClient(),
 		Agent:     agentCaller,
 		Config:    cfgCache,
 		Namespace: namespace,
 		Audit:     auditLogger,
 		TempLog:   telemetryProvider,
-	}).SetupWithManager(mgr); err != nil {
+		Version:   versionGate,
+	}
+	if err := runReconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticRun controller")
 		os.Exit(1)
 	}
@@ -164,28 +179,64 @@ func main() {
 	if err := (&agenticolsconfig.Reconciler{
 		Client:        mgr.GetClient(),
 		EventRecorder: mgr.GetEventRecorderFor("agenticolsconfig-controller"),
+		Version:       versionGate,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticOLSConfig controller")
 		os.Exit(1)
 	}
 
-	// Ensure the default sandbox ServiceAccount exists (idempotent).
-	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "lightspeed-agent",
-			Namespace: namespace,
-		},
+	// The webhook Service is installed on both 4.x and 5.x. Its NetworkPolicy
+	// must not depend on agentic activation or on an AgenticOLSConfig existing.
+	if err := (&webhookpolicy.Reconciler{Client: mgr.GetClient(), Namespace: namespace}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to set up webhook NetworkPolicy controller")
+		os.Exit(1)
 	}
-	if err := mgr.GetClient().Create(context.Background(), sa); err != nil && !apierrors.IsAlreadyExists(err) {
-		log.Error(err, "unable to ensure lightspeed-agent ServiceAccount")
+
+	// The ClusterVersion controller runs on the initial watch/list and every
+	// transition. It must not create an operand before version detection succeeds.
+	if err := ctrl.NewControllerManagedBy(mgr).For(ocpversion.Object()).Named("agentic-activation").Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+		if req.NamespacedName != (types.NamespacedName{Name: "version"}) {
+			return reconcile.Result{}, nil
+		}
+		enabled, err := versionGate.Check(ctx)
+		if err != nil {
+			return reconcile.Result{}, err // retry the completed-version event after a transient read failure
+		}
+		if !enabled {
+			return reconcile.Result{}, nil
+		}
+		// The controller may have started on 4.x before Sandbox CRDs existed.
+		// Recheck on activation and keep polling if they arrive after completion.
+		sandboxClaimsAvailable := sandboxCRDInstalled(cfg)
+		if sandboxClaimsAvailable {
+			cfgCache.EnableSandboxClaims()
+		}
+		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-agent", Namespace: namespace}}
+		if err := mgr.GetClient().Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+			return reconcile.Result{}, err
+		}
+		// Load pre-existing handoff even when it did not change during activation.
+		if err := configwatch.TryLoad(ctx, mgr.GetAPIReader(), namespace, configuration.ConfigMapName, cfgCache.OnConfigMapChange); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return reconcile.Result{}, err // an existing handoff must not be lost on a transient read error
+			}
+			log.V(1).Info("handoff not available yet", "reason", err.Error())
+			return reconcile.Result{RequeueAfter: time.Minute}, nil
+		}
+		if !sandboxClaimsAvailable && !sandboxCRDs {
+			return reconcile.Result{RequeueAfter: time.Minute}, nil
+		}
+		return reconcile.Result{}, nil
+	})); err != nil {
+		log.Error(err, "unable to watch ClusterVersion")
 		os.Exit(1)
 	}
 
 	mgr.GetWebhookServer().Register("/mutate-agenticrunapproval", &admission.Webhook{
-		Handler: &agenticrun.AgenticRunApprovalMutator{},
+		Handler: ocpversion.Admission{Gate: versionGate, Next: &agenticrun.AgenticRunApprovalMutator{}},
 	})
 	mgr.GetWebhookServer().Register("/validate-agent", &admission.Webhook{
-		Handler: &agenticrun.AgentValidator{},
+		Handler: ocpversion.Admission{Gate: versionGate, Next: &agenticrun.AgentValidator{}},
 	})
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

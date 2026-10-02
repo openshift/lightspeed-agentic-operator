@@ -68,9 +68,18 @@ type Config struct {
 // Components that need to react to config changes (e.g. OTEL provider)
 // are registered via SetOTELProvider and invoked from OnConfigMapChange.
 type Cache struct {
-	config        atomic.Pointer[Config]
-	otelProvider  *Provider
-	ForceBareMode bool
+	config                 atomic.Pointer[Config]
+	otelProvider           *Provider
+	ForceBareMode          bool
+	sandboxClaimsAvailable atomic.Bool
+}
+
+// EnableSandboxClaims allows the mode selected by the handoff to take effect
+// if Sandbox CRDs appeared after this controller started on OpenShift 4.x.
+// ForceBareMode is immutable after construction; this override is safe to
+// update alongside the ConfigMap watcher.
+func (c *Cache) EnableSandboxClaims() {
+	c.sandboxClaimsAvailable.Store(true)
 }
 
 // Get returns the current config, or nil if the ConfigMap has not been seen.
@@ -119,7 +128,7 @@ func (c *Cache) update(cm *corev1.ConfigMap) error {
 	if err != nil {
 		return err
 	}
-	if c.ForceBareMode && cfg.Sandbox.Mode != "bare-pod" {
+	if c.ForceBareMode && !c.sandboxClaimsAvailable.Load() && cfg.Sandbox.Mode != "bare-pod" {
 		logf.Log.Info("Sandbox CRDs not installed, overriding sandbox-mode to bare-pod", "requested", cfg.Sandbox.Mode)
 		cfg.Sandbox.Mode = "bare-pod"
 	}

@@ -30,6 +30,9 @@ var stepCondMu sync.Mutex
 // the owning AgenticRun using either labels (bare-pod) or the ownership
 // chain Pod → Sandbox → SandboxClaim (sandbox-claim mode).
 func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Object) []ctrl.Request {
+	if !r.Version.Enabled(ctx) {
+		return nil
+	}
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil
