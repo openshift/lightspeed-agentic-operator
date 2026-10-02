@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -379,6 +381,11 @@ func transientAPIError(err error) bool {
 	if apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) ||
 		apierrors.IsTooManyRequests(err) || apierrors.IsServiceUnavailable(err) ||
 		apierrors.IsInternalError(err) || apierrors.IsConflict(err) {
+		return true
+	}
+	// a connection dropped mid-response (EOF, reset, GOAWAY) is transient; IsProbableEOF
+	// unwraps url.Error once, errors.Is covers a deeper wrap chain
+	if utilnet.IsProbableEOF(err) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	var netErr net.Error
