@@ -385,7 +385,7 @@ func transientAPIError(err error) bool {
 	}
 	// a connection dropped mid-response (EOF, reset, GOAWAY) is transient; IsProbableEOF
 	// unwraps url.Error once, errors.Is covers a deeper wrap chain
-	if utilnet.IsProbableEOF(err) || errors.Is(err, io.ErrUnexpectedEOF) {
+	if utilnet.IsProbableEOF(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true
 	}
 	var netErr net.Error
