@@ -33,6 +33,7 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticolsconfig"
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticrun"
+	"github.com/openshift/lightspeed-agentic-operator/controller/webhookpolicy"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configwatch"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
@@ -181,6 +182,13 @@ func main() {
 		Version:       versionGate,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticOLSConfig controller")
+		os.Exit(1)
+	}
+
+	// The webhook Service is installed on both 4.x and 5.x. Its NetworkPolicy
+	// must not depend on agentic activation or on an AgenticOLSConfig existing.
+	if err := (&webhookpolicy.Reconciler{Client: mgr.GetClient(), Namespace: namespace}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "unable to set up webhook NetworkPolicy controller")
 		os.Exit(1)
 	}
 

@@ -37,6 +37,7 @@ rules:
   - ""
   resources:
   - secrets
+  - services
   verbs:
   - get
   - list
@@ -151,6 +152,17 @@ rules:
   - delete
   - get
   - list
+  - update
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - get
+  - list
+  - patch
   - update
   - watch
 - apiGroups:
