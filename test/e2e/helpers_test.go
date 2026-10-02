@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	"github.com/openshift/lightspeed-agentic-operator/test/disconnected"
 )
 
 const pollInterval = 2 * time.Second
@@ -736,6 +737,7 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 		llmSpec = agenticv1alpha1.LLMProviderSpec{
 			Type: agenticv1alpha1.LLMProviderOpenAI,
 			OpenAI: agenticv1alpha1.OpenAIConfig{
+				URL:               os.Getenv("E2E_OPENAI_URL"),
 				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
 			},
 		}
@@ -791,6 +793,11 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 	}
 
 	objs := []client.Object{llm, agent, policy, secret}
+	if os.Getenv("E2E_DISCONNECTED") == "true" {
+		for _, obj := range objs {
+			obj.SetLabels(map[string]string{disconnected.OwnedLabel: os.Getenv("E2E_DISCONNECTED_ID")})
+		}
+	}
 	for _, obj := range objs {
 		cleanup(t, c, obj.DeepCopyObject().(client.Object))
 	}

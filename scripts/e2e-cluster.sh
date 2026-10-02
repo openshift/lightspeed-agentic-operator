@@ -23,6 +23,7 @@
 #   VERTEX_REGION            — default: global
 #   E2E_POLL_TIMEOUT          — default: 20m
 #   E2E_MODEL                — override default model for the provider
+#   E2E_SUITE_TIMEOUT        — Go suite timeout (default: 120m)
 #   ARTIFACT_DIR             — directory for test artifacts
 #   KONFLUX_COMPONENT_NAME   — component name for SNAPSHOT parsing
 #   E2E_OTEL_ENABLED         — deploy persistent OTEL/Postgres collector for
@@ -44,13 +45,26 @@ SCENARIOS_TMPDIR=""
 
 # shellcheck disable=SC2329 # Invoked indirectly by the EXIT trap.
 _cleanup_on_exit() {
+    local rc=$?
+    local cleanup_rc=0
     log_info "Running cleanup..."
+    # Keep the operator alive while aborted runs execute their finalizers.
+    if [[ "${E2E_DISCONNECTED:-false}" == true ]]; then
+        if bash "$SCRIPT_DIR/e2e-disconnected-cleanup.sh"; then
+            if [[ -n "${E2E_DISCONNECTED_CLEANUP_MARKER:-}" ]]; then
+                touch "$E2E_DISCONNECTED_CLEANUP_MARKER" || cleanup_rc=$?
+            fi
+        else
+            cleanup_rc=$?
+        fi
+    fi
     cleanup_e2e_otel "$NAMESPACE"
     cleanup_operator
     if [[ -n "${SCENARIOS_TMPDIR:-}" && -d "$SCENARIOS_TMPDIR" ]]; then
         log_info "Removing scenarios clone: $SCENARIOS_TMPDIR"
         rm -rf "$SCENARIOS_TMPDIR"
     fi
+    if [[ "$rc" -eq 0 && "$cleanup_rc" -ne 0 ]]; then exit "$cleanup_rc"; fi
 }
 trap _cleanup_on_exit EXIT
 
@@ -125,6 +139,10 @@ run_provider() {
     )
 
     local test_rc=0
+    local output_filter=(tee /dev/null)
+    if [[ "${E2E_DISCONNECTED:-false}" == true ]]; then
+        output_filter=(python3 "$SCRIPT_DIR/e2e-redact.py")
+    fi
 
     # Product e2e (troubleshooting scenarios against real LLMs).
     # Mock-only tests (failure_test.go etc.) run in precommit CI via `make test-e2e`.
@@ -133,15 +151,17 @@ run_provider() {
         if [[ -n "${ARTIFACT_DIR:-}" ]]; then
             mkdir -p "$ARTIFACT_DIR/$provider"
             env "${e2e_env[@]}" E2E_SCENARIOS_DIR="$E2E_SCENARIOS_DIR" \
-                go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout 120m \
-                2>&1 | tee "$ARTIFACT_DIR/$provider/product-e2e-output.log" || test_rc=$?
+                go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout "${E2E_SUITE_TIMEOUT:-120m}" \
+                2>&1 | "${output_filter[@]}" | tee "$ARTIFACT_DIR/$provider/product-e2e-output.log" || test_rc=$?
         else
             env "${e2e_env[@]}" E2E_SCENARIOS_DIR="$E2E_SCENARIOS_DIR" \
-                go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout 120m || test_rc=$?
+                go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout "${E2E_SUITE_TIMEOUT:-120m}" 2>&1 | "${output_filter[@]}" || test_rc=$?
         fi
     fi
 
-    collect_artifacts "$provider"
+    # Disconnected diagnostics are collected/redacted by the product harness
+    # and timeout fallback; the connected collector writes unredacted logs.
+    if [[ "${E2E_DISCONNECTED:-false}" != true ]]; then collect_artifacts "$provider"; fi
 
     return "$test_rc"
 }

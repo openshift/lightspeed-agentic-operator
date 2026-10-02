@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	"github.com/openshift/lightspeed-agentic-operator/test/disconnected"
 )
 
 func TestTroubleshooting_PhaseTransitions(t *testing.T) {
@@ -24,11 +25,15 @@ func TestTroubleshooting_PhaseTransitions(t *testing.T) {
 	}
 
 	c := newClient(t)
-	createTroubleshootingFixtures(t, c)
-	stopWatcher := watchAndCaptureSandboxLogs(t)
-	t.Cleanup(stopWatcher)
-
 	scenarios := discoverScenarios(t, scenariosDir)
+	if os.Getenv("E2E_DISCONNECTED") == "true" {
+		prepareDisconnected(t, c, scenarios)
+	}
+	createTroubleshootingFixtures(t, c)
+	if os.Getenv("E2E_DISCONNECTED") != "true" {
+		stopWatcher := watchAndCaptureSandboxLogs(t)
+		t.Cleanup(stopWatcher)
+	}
 
 	scenarioTimeout := 20 * time.Minute
 	if v := os.Getenv("E2E_SCENARIO_TIMEOUT"); v != "" {
@@ -37,6 +42,14 @@ func TestTroubleshooting_PhaseTransitions(t *testing.T) {
 		}
 	}
 
+	if os.Getenv("E2E_DISCONNECTED") == "true" {
+		if deadline, ok := t.Deadline(); ok {
+			required := time.Duration(len(scenarios))*(scenarioTimeout+2*time.Minute) + 10*time.Minute
+			if time.Until(deadline) < required {
+				t.Fatalf("E2E_SUITE_TIMEOUT must exceed %s for %d scenarios", required, len(scenarios))
+			}
+		}
+	}
 	for _, sc := range scenarios {
 		t.Run(sc.Name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), scenarioTimeout)
@@ -83,7 +96,13 @@ func TestTroubleshooting_PhaseTransitions(t *testing.T) {
 			// Registered after createTroubleshootingRun's cleanup, so this runs
 			// first and exports templogs before the AgenticRun finalizer deletes
 			// them from the collector.
-			t.Cleanup(func() { archiveRunTemplogs(t, run) })
+			t.Cleanup(func() {
+				if os.Getenv("E2E_DISCONNECTED") == "true" {
+					disconnected.ArchiveRun(t, run.Namespace, run.Name, string(run.UID))
+				} else {
+					archiveRunTemplogs(t, run)
+				}
+			})
 
 			deadline, _ := ctx.Deadline()
 			remaining := time.Until(deadline)
@@ -110,9 +129,13 @@ func TestTroubleshooting_PhaseTransitions(t *testing.T) {
 func createTroubleshootingRun(t *testing.T, c client.Client, name, request string, tools agenticv1alpha1.ToolsSpec) *agenticv1alpha1.AgenticRun {
 	t.Helper()
 	ctx := context.Background()
+	labels := map[string]string{}
+	if os.Getenv("E2E_DISCONNECTED") == "true" {
+		labels[disconnected.OwnedLabel] = os.Getenv("E2E_DISCONNECTED_ID")
+	}
 
 	run := &agenticv1alpha1.AgenticRun{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS, Labels: labels},
 		Spec: agenticv1alpha1.AgenticRunSpec{
 			Request:      request,
 			Tools:        tools,
