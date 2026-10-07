@@ -7,7 +7,7 @@ spec:
   description: |
     Runs lightspeed-agentic-operator e2e tests on a Konflux HyperShift ephemeral OpenShift cluster.
     Provisions the cluster, deploys the operator from the SNAPSHOT image with a fixed mock agent,
-    runs make test-e2e, then deprovisions
+    runs make test-e2e, and exports logs for retention.
   params:
     - name: SNAPSHOT
       description: 'The JSON string representing the snapshot of the application under test.'
@@ -252,21 +252,6 @@ spec:
         - name: namespace
           value: "$(params.namespace)"
   finally:
-    - name: deprovision-ephemeral-cluster
-      taskRef:
-        resolver: git
-        params:
-          - name: url
-            value: https://github.com/openshift/konflux-tasks
-          - name: revision
-            value: main
-          - name: pathInRepo
-            value: tasks/deprovision-ephemeral-cluster/0.1/deprovision-ephemeral-cluster.yaml
-      params:
-        - name: testPlatformClusterClaimName
-          value: $(tasks.provision-ephemeral-cluster.results.testPlatformClusterClaimName)
-        - name: testPlatformClusterClaimNamespace
-          value: $(tasks.provision-ephemeral-cluster.results.testPlatformClusterClaimNamespace)
     - name: export-logs-for-retention
       taskRef:
         resolver: git
