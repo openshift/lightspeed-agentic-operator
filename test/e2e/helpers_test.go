@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	"github.com/openshift/lightspeed-agentic-operator/test/disconnected"
 )
 
 const pollInterval = 2 * time.Second
@@ -220,7 +221,11 @@ func waitForPhase(t *testing.T, c client.Client, name string, target agenticv1al
 
 func waitForPhaseWithTimeout(t *testing.T, c client.Client, name string, target agenticv1alpha1.AgenticRunPhase, timeout time.Duration) agenticv1alpha1.AgenticRun {
 	t.Helper()
-	ctx := context.Background()
+	return waitForPhaseWithContext(context.Background(), t, c, name, target, timeout)
+}
+
+func waitForPhaseWithContext(ctx context.Context, t *testing.T, c client.Client, name string, target agenticv1alpha1.AgenticRunPhase, timeout time.Duration) agenticv1alpha1.AgenticRun {
+	t.Helper()
 	var updated agenticv1alpha1.AgenticRun
 
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
@@ -238,6 +243,9 @@ func waitForPhaseWithTimeout(t *testing.T, c client.Client, name string, target 
 		return false, nil
 	})
 	if err != nil {
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		}
 		phase := agenticv1alpha1.DerivePhase(updated.Status.Conditions)
 		t.Fatalf("waiting for phase %s failed: %v; current=%s conditions=%v", target, err, phase, updated.Status.Conditions)
 	}
@@ -736,6 +744,7 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 		llmSpec = agenticv1alpha1.LLMProviderSpec{
 			Type: agenticv1alpha1.LLMProviderOpenAI,
 			OpenAI: agenticv1alpha1.OpenAIConfig{
+				URL:               os.Getenv("E2E_OPENAI_URL"),
 				CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
 			},
 		}
@@ -791,6 +800,11 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 	}
 
 	objs := []client.Object{llm, agent, policy, secret}
+	if os.Getenv("E2E_DISCONNECTED") == "true" {
+		for _, obj := range objs {
+			obj.SetLabels(map[string]string{disconnected.OwnedLabel: os.Getenv("E2E_DISCONNECTED_ID")})
+		}
+	}
 	for _, obj := range objs {
 		cleanup(t, c, obj.DeepCopyObject().(client.Object))
 	}

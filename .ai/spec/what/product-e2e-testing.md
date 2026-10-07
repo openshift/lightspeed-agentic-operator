@@ -1,145 +1,115 @@
 # Product E2E testing
 
-Behavioral specification for **product-level end-to-end tests** that exercise
-the full AgenticRun lifecycle against real OpenShift clusters with real LLM
-providers. Distinct from `test/e2e/` mock-agent tests (`make test-e2e`) which
-validate operator logic in isolation.
+Behavioral specification for product-level tests exercising the AgenticRun
+lifecycle on real OpenShift clusters with real LLM providers. Distinct from
+`make test-e2e` mock-agent tests, which validate operator logic in isolation.
 
 ## Relationship to other specs
 
 | Spec | Relationship |
 |------|-------------|
-| [run-lifecycle.md](run-lifecycle.md) | Product-e2e validates the phase transitions defined there |
-| [sandbox-execution.md](sandbox-execution.md) | Product-e2e exercises the sandbox wiring end-to-end |
-| [approval.md](approval.md) | Tests use automatic approval policies |
+| [run-lifecycle.md](run-lifecycle.md) | Defines the workflow phases and terminal outcomes |
+| [sandbox-execution.md](sandbox-execution.md) | Defines sandbox wiring and stable run labels |
+| [approval.md](approval.md) | Product tests use automatic approval |
+| [../how/disconnected-product-e2e.md](../how/disconnected-product-e2e.md) | Restricted-network implementation and provisioning contract |
 
-## Existing product-e2e (`make product-e2e`)
+## Standard product E2E (`make product-e2e`)
 
-`scripts/e2e-cluster.sh` deploys the operator, iterates over providers (claude,
-gemini, openai), creates real LLM fixtures, and runs `make test-e2e` per
-provider. This exercises the mock-agent Go e2e tests with real provider
-credentials.
+`scripts/e2e-cluster.sh` deploys/reuses the operator, clones
+`rhobs/troubleshooting-scenarios`, and runs the `product_e2e`-tagged suite per
+selected real provider. It does not invoke the mock-agent suite.
 
-## Troubleshooting scenario tests (OLS-3739)
+Scenario discovery reads `evals/scenarios/*/evals.yaml`. Membership is defined
+by scenario tags, not a fixed scenario count. `E2E_SCENARIO_TAGS` defaults to
+`core` and is a comma-separated AND filter. Standard connected runs may use
+`E2E_SKIP_SCENARIOS`; the disconnected variant must not.
 
-### Scope
+### Scenario flow (OLS-3739)
 
-- **In scope:** Phase transition verification for AgenticRun CRs created with
-  troubleshooting prompts against clusters with injected broken states. Asserts
-  that the run completes the full lifecycle (Pending → Analyzing → Proposed →
-  Executing → Verifying → Completed) with real LLM providers.
-- **Out of scope:** Sandbox output quality verification (sandbox repo
-  responsibility), behavioral correctness of fixes (future work).
+1. Register scenario cleanup before setup so it also runs after setup failure.
+2. Run `setup.sh` to inject broken state.
+3. Create an AgenticRun with the scenario request, target namespaces and skills,
+   using the real-provider fixtures and automatic approval policy.
+4. Wait for the scenario's expected terminal phase (default `Completed`).
+5. For completed runs, assert AnalysisResult, ExecutionResult and
+   VerificationResult existence/owner references and no failed workflow
+   conditions. Other expected terminal outcomes require an AnalysisResult.
+6. Archive available diagnostics before deleting the run, then execute cleanup
+   before the next scenario.
 
-### Build tag
+Tests are sequential to avoid state interference. Result quality, LLM judges
+and behavioral correctness of fixes remain out of scope.
 
-Tests are gated behind the `product_e2e` build tag, separate from the `e2e`
-tag used by mock-agent tests. They are only invoked via `make product-e2e`,
-never via `make test-e2e`.
+### Inputs
 
-```go
-//go:build product_e2e
-```
+- `E2E_PROVIDER`, `E2E_MODEL`, provider credentials: real-provider fixtures.
+- `E2E_OPENAI_URL`: optional custom OpenAI-compatible API root, passed to
+  `LLMProvider.spec.openAI.url`; unset preserves the provider default.
+- `E2E_SCENARIOS_DIR`: checkout containing `evals/scenarios`.
+- `E2E_SCENARIO_TIMEOUT`: per-scenario deadline, default 20m.
+- `E2E_SUITE_TIMEOUT`: runner's Go test deadline, default 120m for connected
+  runs; configure above the selected scenario count times its deadline plus
+  setup/cleanup overhead.
+- `ARTIFACT_DIR`: provider logs, run records and sandbox diagnostics.
 
-### Test file
+## Disconnected Gemma product E2E (OLS-4226)
 
-`test/e2e/troubleshooting_test.go` — one parametrized test function covering
-all 11 troubleshooting scenarios.
+1. `make product-e2e-disconnected` MUST provide a connected provisioning phase
+   followed by restricted runtime execution. It MUST clone `lightspeed-service`
+   at a required, verified full commit SHA. The operator caller MUST orchestrate
+   that checkout's individual RHOAI scripts/manifests and select its existing
+   `gemma-4-31b` profile, following the service calling-script pattern. Reused
+   provisioning assets MUST NOT be copied here; no separate service provisioning
+   entrypoint is required. The operator MUST discover the internal Service
+   endpoint/ports/selector and confirm the exact model with an authenticated
+   models request, producing the handoff for restricted execution.
+2. Gemma MUST reuse the existing OpenAI provider, with its exact model ID and
+   cluster-internal `/v1` URL returned by provisioning. No new provider type.
+3. The suite MUST reuse standard `product_e2e` discovery and assertions with
+   `E2E_SCENARIO_TAGS=core`, without a disconnected scenario allowlist or skips.
+4. The variant MUST use bare-pod sandbox mode. All configured sandbox images
+   and every selected scenario's skill image MUST be validated/replaced with
+   cluster-local pullspecs before scenario setup, fixtures and AgenticRuns are
+   created. Public or unresolved references MUST fail; kubelet pulls are not
+   constrained by Pod NetworkPolicy.
+5. Temporary egress policies MUST select all sandbox run Pods and the exact
+   actual inference backing-Pod set. They MUST deny external egress and allow
+   only discovered single-address DNS/API peers and sandbox-to-vLLM traffic.
+   Pre-existing additive egress policies MUST cause setup failure.
+6. Before tests, policy-selected probes MUST prove working DNS, authenticated
+   Kubernetes API access and authenticated vLLM `/v1/models` access with the
+   expected model. A certificate-verified HTTPS canary MUST work before policy
+   installation and its proven-reachable IPs MUST be denied afterward from both
+   runtime policy sets. DNS failure alone MUST NOT count as egress denial.
+7. During tests, sandbox Pod inspection MUST fail on missing stable run labels,
+   external container/skill pullspecs, host networking, image-pull failures or
+   lost inspection coverage. Normal watch reconnects MUST retain the last
+   resourceVersion; expired event history MUST fail. Unrecoverable watch
+   failures or boundary violations MUST cancel active scenario work and abort
+   remaining scenarios, while preserving diagnostics and registered cleanup.
+   Intentional watcher shutdown during cleanup MUST NOT fail the suite.
+8. Failures after restriction MUST remain failures. The harness MUST NOT
+   restore external access and retry. Cleanup MUST preserve the original exit
+   status and remove only harness-created policies/probes/temporary credentials.
+9. Diagnostics MUST be collected before destructive cleanup and redact known
+   CI credentials. Include per-run conditions/results, sandbox status/logs,
+   inference status/logs, events, policies and selector evidence. Do not archive
+   Secret contents.
+10. The disconnected suite timeout MUST exceed all selected per-scenario
+    deadlines plus cleanup/preflight overhead; the default is 12h. Too-short
+    deadlines MUST fail clearly before scenario execution.
 
-### Test flow per scenario
+### Constraints and exclusions
 
-1. Register `cleanup.sh` via `t.Cleanup` **before** running `setup.sh`, so
-   cleanup runs even if setup fails and always before the next scenario starts
-2. Run scenario `setup.sh` via `os/exec` to inject broken cluster state
-3. Create AgenticRun CR with the scenario's request text, pointing at the real
-   provider's Agent/LLMProvider fixtures (from `createRealProviderFixtures`)
-4. Observe the phase progression in order (Pending → Analyzing → Proposed →
-   Executing → Verifying → Completed) — record phase history via the watch/poll
-   helper and assert each intermediate phase was seen, not only the terminal
-   `AgenticRunPhaseCompleted`
-5. Assert: AnalysisResult, ExecutionResult, VerificationResult CRs exist with
-   owner references
-6. Assert: no `Failed` conditions on the AgenticRun
-
-### Scenario script access
-
-Troubleshooting scenario scripts are owned by `lightspeed-agentic-sandbox`
-under `scenarios/troubleshooting/`. The operator accesses them at CI time by
-extracting from the sandbox container image.
-
-`e2e-cluster.sh` changes:
-- Before running tests, extract `scenarios/` from the sandbox image to a temp
-  directory
-- Export `E2E_SCENARIOS_DIR` pointing at the extracted path
-- The Go test reads `E2E_SCENARIOS_DIR` to locate setup/cleanup scripts and
-  `scenario_metadata.yaml` for scenario parameters
-
-### Scenarios
-
-The 11 scenarios and their metadata are defined in the sandbox repo. See
-`lightspeed-agentic-sandbox/.ai/spec/what/e2e-testing.md` for the full
-scenario table.
-
-### e2e-cluster.sh extension
-
-After running the existing `make test-e2e` (mock-agent tests) per provider,
-the script runs:
-
-```bash
-E2E_PROVIDER="$provider" \
-  E2E_MODEL="$model" \
-  E2E_PROVIDER_KEY_PATH="$key_path" \
-  E2E_POLL_TIMEOUT="${E2E_POLL_TIMEOUT:-20m}" \
-  E2E_SCENARIOS_DIR="$scenarios_dir" \
-  VERTEX_PROJECT_ID="${VERTEX_PROJECT_ID:-}" \
-  VERTEX_REGION="${VERTEX_REGION:-global}" \
-  TEST_NAMESPACE="$NAMESPACE" \
-  go test -tags=product_e2e ./test/e2e/... -count=1 -v -timeout 240m
-```
-
-The provider configuration MUST be exported for the `go test` invocation so it
-is available during `createRealProviderFixtures`; this mirrors the per-provider
-env block already set in `scripts/e2e-cluster.sh`.
-
-The suite timeout MUST exceed `11 * E2E_POLL_TIMEOUT` plus per-scenario
-setup/cleanup overhead — 11 scenarios run sequentially, each polling up to
-`E2E_POLL_TIMEOUT` (default 20m ⇒ up to 220m of polling). Keep `-timeout` above
-that whenever `E2E_POLL_TIMEOUT` changes.
-
-With environment:
-- `E2E_PROVIDER`, `E2E_MODEL`, `E2E_PROVIDER_KEY_PATH` — from existing flow
-- `E2E_SCENARIOS_DIR` — extracted scenario scripts path
-- `E2E_POLL_TIMEOUT` — default 20m per scenario (longer than mock-agent tests)
-
-### Assertions
-
-Phase transition:
-- AgenticRun passes through each phase in order (Pending → Analyzing → Proposed
-  → Executing → Verifying → Completed), verified against recorded phase history
-- AgenticRun reaches `Completed` phase (derived from conditions)
-- `Analyzed=True`, `Executed=True`, `Verified=True` conditions present
-- AnalysisResult CR exists with owner reference to AgenticRun
-- ExecutionResult CR exists with owner reference to AgenticRun
-- VerificationResult CR exists with owner reference to AgenticRun
-- No `False`-status conditions with failure reasons
-
-No assertions on result content quality — that is the sandbox repo's
-responsibility via LLM judge.
-
-### Constraints
-
-- Requires a live OpenShift cluster with the operator deployed
-- Requires real LLM provider credentials
-- Scenario setup/cleanup scripts must be idempotent
-- Tests run sequentially (one scenario at a time) to avoid cluster state
-  interference
-
-### Future work
-
-- [PLANNED] Behavioral correctness assertions: verify ExecutionResult actions
-  match expected fix patterns per scenario
-- [PLANNED] Failure scenario tests: verify graceful handling when the LLM
-  cannot diagnose the problem (phase reaches Failed or Escalated)
+- Requires a GPU OpenShift test cluster with enforceable NetworkPolicy and
+  internal-registry image access, plus connected model preparation.
+- CI owns image mirroring, the cluster/job and provisioning-resource teardown.
+  Service owns reusable GPU/model-serving scripts, manifests and model profiles;
+  the operator owns their orchestration and the restricted-test handoff.
+- Probe images must provide Python 3. This variant permits DNS/API/vLLM only;
+  optional OTEL/MCP/RHOKP dependencies require future explicit policy extensions.
+- Out of scope: LSEval, LLM judges, new Gemma adapters, sandbox-claim coverage,
+  disconnected-only scenario membership and classic-operator bundle changes.
 
 ## Multicluster e2e (agentic-operator share)
 
@@ -194,4 +164,6 @@ tests. It MAY be skipped otherwise (Prow `run_if_changed`; regex lives in
 make test          # unit tests (no cluster, no credentials)
 make test-e2e      # mock-agent e2e (cluster + operator, no real LLM)
 make product-e2e   # full product e2e including troubleshooting scenarios
+make product-e2e-disconnected # provision Gemma, then restricted core product e2e
+make test-product-e2e-unit # cluster-free product harness tests
 ```

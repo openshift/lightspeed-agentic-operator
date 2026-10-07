@@ -188,6 +188,78 @@ artifacts/<provider>/
 
 The runner configures the collector with its Postgres backend, because the default `nop` pipeline drops records and does not expose the admin API used to export per-run records. Direct pod-log capture is best effort: sandbox pods may be removed immediately after completion, so persisted OTEL records are the primary diagnostic source.
 
+### Disconnected Gemma product E2E
+
+`make product-e2e-disconnected` clones `lightspeed-service` at a verified full
+commit SHA. Its own calling script orchestrates that checkout's existing RHOAI
+scripts/manifests with `VLLM_MODEL_PROFILE=gemma-4-31b`, then runs the existing
+core product suite under temporary sandbox/vLLM egress
+NetworkPolicies. Model/image/template preparation happens while connected;
+there is no unrestricted retry after the boundary is installed.
+
+```bash
+LIGHTSPEED_SERVICE_REF=<full-40-character-commit-with-compatible-Gemma-RHOAI-assets> \
+HUGGING_FACE_HUB_TOKEN=<CI-secret> VLLM_API_KEY=<CI-secret> \
+IMG=<operator-pullspec> \
+SANDBOX_IMAGE=image-registry.openshift-image-registry.svc:5000/tests/sandbox:gemma \
+E2E_SKILL_IMAGE_MAP="$PWD/mirrored-skills.json" \
+ARTIFACT_DIR="$PWD/artifacts" \
+make product-e2e-disconnected
+```
+
+Supply credentials through the CI secret environment, not checked-in files.
+CI must mirror the sandbox and core-scenario skill images beforehand.
+`mirrored-skills.json` maps original skill pullspecs to internal ones:
+
+```json
+{
+  "quay.io/example/skills:v1": "image-registry.openshift-image-registry.svc:5000/tests/skills:v1"
+}
+```
+
+Unmapped references must already be internal; public references fail before
+scenario setup or run creation. The actual configuration ConfigMap must use
+`bare-pod` mode and local images. Use dedicated namespaces with no existing
+egress policies or optional OTEL/MCP/RHOKP endpoints. The mirrored sandbox
+image must include Python 3 for authenticated preflight probes.
+
+`E2E_EGRESS_CANARY` optionally overrides the baseline HTTPS URL (default
+`https://example.com/`). `E2E_SUITE_TIMEOUT` defaults to `12h`; the test rejects
+a timeout too short for the discovered core scenarios. Scenario skips and
+non-core tags are rejected. Policies and probe resources are removed after
+redacted diagnostics are saved in `artifacts/disconnected/`. An invocation-labelled
+shell cleanup path handles both normal teardown and hard test timeouts/INT/TERM.
+A private run-UID journal keeps lingering sandboxes discoverable after run CR
+removal. Cleanup archives run conditions/results and sandbox status/logs before
+deletion, stops runs, waits for their sandbox Pods, and checks for residual Pods
+before removing policies. Recovery snapshots use separate `fallback/retry.*`
+directories to preserve initial evidence. The outer runner undeploys the operator
+only after resource cleanup succeeds; failed recovery retains the operator/CRDs
+and remaining policies, while preserving the original failure. The runner requires
+Python 3, `setsid` (util-linux), `curl`, `envsubst` and GNU `timeout` (coreutils)
+as well as the standard E2E tools. CI retains responsibility for GPU and model-serving resource teardown.
+
+The pinned service commit must contain compatible `tests/rhoai/` assets:
+`model-profile.sh` with `gemma-4-31b`, `bootstrap.sh`, `gpu-setup.sh`,
+`fetch-vllm-image.sh`, `deploy-vllm.sh`, `get-vllm-pod-info.sh`, and their manifests.
+Missing assets or incompatible profile settings fail clearly rather than falling
+back to Llama or LSEval. There is no dependency on a separate service provisioning
+entrypoint.
+
+The operator-owned `scripts/e2e-rhoai.sh` creates the provisioning handoff from
+actual Service/Pod data and an authenticated models request inside the inference
+container using the caller's current API key via stdin. Existing inference
+Deployments are restarted so their Pods pick up updated Secret-backed credentials.
+The helper uses the Service port for the internal `/v1` URL and resolves the Pod
+target port separately for NetworkPolicy. `E2E_RHOAI_READY_TIMEOUT` controls
+rollout/InferenceService readiness waiting (default `60m`).
+`E2E_RHOAI_PROVISION_TIMEOUT` bounds provisioning scripts and their children
+(default `120m`); expiration preserves exit status 124 and saves redacted
+inference logs alongside the failure diagnostics.
+
+Cluster-free harness tests: `make test` and `make test-product-e2e-unit`.
+See [the implementation contract](.ai/spec/how/disconnected-product-e2e.md).
+
 For noisy debugging: **`go test ./controller/agenticrun/... -v`**, **`go test ./api/... -v`**, **`go test ./cli/... -v`**.
 
 ### API lint (Kube API linter)
