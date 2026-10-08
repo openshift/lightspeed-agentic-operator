@@ -68,16 +68,13 @@ type AgenticOLSConfigStatus struct {
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'cluster'",message="AgenticOLSConfig must be named 'cluster' (singleton)"
 
-// AgenticOLSConfig is a cluster-scoped singleton and explicit opt-in for
-// system-wide agentic behavior. The cluster admin creates a single
-// AgenticOLSConfig named "cluster". Agentic work remains inactive until this
-// CR exists and the cluster reports a completed supported OCP version. An
-// incomplete or unreadable version state pauses new work without draining
-// in-flight runs; confirmed disablement drains runs and prevents automatic
-// resumption. When spec.suspended is true, all non-terminal agentic runs are
-// terminated and no new workflow steps are started.
+// AgenticOLSConfig is a cluster-scoped singleton that controls system-wide
+// agentic behavior. The cluster admin creates a single AgenticOLSConfig
+// named "cluster". When spec.suspended is true, all non-terminal agentic runs
+// are terminated and no new workflow steps are started.
 //
-// Deleting the CR disables Agentic and drains in-flight runs.
+// When no AgenticOLSConfig CR exists, the system behaves as if
+// suspended is false — the CR is not required for normal operation.
 //
 // Example:
 //

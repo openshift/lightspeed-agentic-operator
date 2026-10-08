@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"syscall"
 	"time"
@@ -18,18 +17,14 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -38,7 +33,6 @@ import (
 	"github.com/openshift/lightspeed-agentic-operator/controller/agenticrun"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configwatch"
-	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 var scheme = runtime.NewScheme()
@@ -92,8 +86,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	versionGate := &ocpversion.Gate{Reader: mgr.GetAPIReader()}
-
 	// Initialize configuration cache and OTEL provider
 	telemetryProvider := configuration.NewProvider(&agenticrun.AgenticRunIDGenerator{})
 	telemetryProvider.SetSecretSource(mgr.GetAPIReader(), namespace)
@@ -118,18 +110,16 @@ func main() {
 
 	// Eagerly read ConfigMap if it already exists (operator restart).
 	// Non-fatal if missing — the watcher will pick it up when it appears.
-	if versionGate.Enabled(context.Background()) {
-		if err := configwatch.TryLoad(
-			context.Background(), mgr.GetAPIReader(), namespace,
-			configuration.ConfigMapName, cfgCache.OnConfigMapChange,
-		); err != nil {
-			log.Info("ConfigMap not available at startup, telemetry disabled until it appears", "name", configuration.ConfigMapName, "reason", err.Error())
-		}
+	if err := configwatch.TryLoad(
+		context.Background(), mgr.GetAPIReader(), namespace,
+		configuration.ConfigMapName, cfgCache.OnConfigMapChange,
+	); err != nil {
+		log.Info("ConfigMap not available at startup, telemetry disabled until it appears", "name", configuration.ConfigMapName, "reason", err.Error())
 	}
 
 	// Watch for ConfigMap changes at runtime
 	cmWatcher := configwatch.New(mgr.GetClient(), namespace,
-		configwatch.Registration{Name: configuration.ConfigMapName, Handler: gatedConfigMapHandler(cfgCache, versionGate)},
+		configwatch.Registration{Name: configuration.ConfigMapName, Handler: cfgCache.OnConfigMapChange},
 	)
 	if err := cmWatcher.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up ConfigMap watcher")
@@ -159,16 +149,14 @@ func main() {
 	}
 
 	// --- Register controllers ---
-	runReconciler := &agenticrun.AgenticRunReconciler{
+	if err := (&agenticrun.AgenticRunReconciler{
 		Client:    mgr.GetClient(),
 		Agent:     agentCaller,
 		Config:    cfgCache,
 		Namespace: namespace,
 		Audit:     auditLogger,
 		TempLog:   telemetryProvider,
-		Version:   versionGate,
-	}
-	if err := runReconciler.SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticRun controller")
 		os.Exit(1)
 	}
@@ -176,68 +164,28 @@ func main() {
 	if err := (&agenticolsconfig.Reconciler{
 		Client:        mgr.GetClient(),
 		EventRecorder: mgr.GetEventRecorderFor("agenticolsconfig-controller"),
-		Version:       versionGate,
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticOLSConfig controller")
 		os.Exit(1)
 	}
 
-	// Runtime activation requires both a completed supported OCP version and an
-	// explicit AgenticOLSConfig. Reconcile both inputs so creation/deletion of
-	// the config activates or drains the Agentic runtime without a version event.
-	activationRequest := func(context.Context, client.Object) []reconcile.Request {
-		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "version"}}}
+	// Ensure the default sandbox ServiceAccount exists (idempotent).
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lightspeed-agent",
+			Namespace: namespace,
+		},
 	}
-	if err := ctrl.NewControllerManagedBy(mgr).
-		For(ocpversion.Object()).
-		Watches(&agenticv1alpha1.AgenticOLSConfig{}, handler.EnqueueRequestsFromMapFunc(activationRequest)).
-		Named("agentic-activation").Complete(reconcile.Func(func(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
-		if req.NamespacedName != (types.NamespacedName{Name: "version"}) {
-			return reconcile.Result{}, nil
-		}
-		eligibility, err := versionGate.State(ctx)
-		if err != nil {
-			return reconcile.Result{}, err // retry without deactivating on an Unknown read
-		}
-		switch eligibility {
-		case ocpversion.EligibilityUnknown:
-			return reconcile.Result{RequeueAfter: ocpversion.ClusterVersionRequeueInterval}, nil
-		case ocpversion.EligibilityDisabled:
-			return reconcile.Result{}, deactivateAgentic(ctx, runReconciler, cfgCache, mgr.GetClient(), namespace)
-		}
-		// The controller may have started on 4.x before Sandbox CRDs existed.
-		// Recheck on activation and keep polling if they arrive after completion.
-		sandboxClaimsAvailable := sandboxCRDInstalled(cfg)
-		if sandboxClaimsAvailable {
-			cfgCache.EnableSandboxClaims()
-		}
-		sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-agent", Namespace: namespace}}
-		if err := mgr.GetClient().Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-			return reconcile.Result{}, err
-		}
-		// Load pre-existing handoff even when it did not change during activation.
-		available, err := reloadHandoff(ctx, mgr.GetAPIReader(), namespace, cfgCache)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if !available {
-			log.V(1).Info("handoff not available yet")
-			return reconcile.Result{RequeueAfter: time.Minute}, nil
-		}
-		if !sandboxClaimsAvailable && !sandboxCRDs {
-			return reconcile.Result{RequeueAfter: time.Minute}, nil
-		}
-		return reconcile.Result{}, nil
-	})); err != nil {
-		log.Error(err, "unable to watch Agentic activation inputs")
+	if err := mgr.GetClient().Create(context.Background(), sa); err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Error(err, "unable to ensure lightspeed-agent ServiceAccount")
 		os.Exit(1)
 	}
 
 	mgr.GetWebhookServer().Register("/mutate-agenticrunapproval", &admission.Webhook{
-		Handler: ocpversion.Admission{Gate: versionGate, Next: &agenticrun.AgenticRunApprovalMutator{}},
+		Handler: &agenticrun.AgenticRunApprovalMutator{},
 	})
 	mgr.GetWebhookServer().Register("/validate-agent", &admission.Webhook{
-		Handler: ocpversion.Admission{Gate: versionGate, Next: &agenticrun.AgentValidator{}},
+		Handler: &agenticrun.AgentValidator{},
 	})
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -260,44 +208,6 @@ func main() {
 		cancel()
 		os.Exit(1)
 	}
-}
-
-// A deletion must invalidate the cached handoff even when eligibility is
-// Unknown; otherwise the next supported version could resume with stale config.
-func gatedConfigMapHandler(cache *configuration.Cache, gate *ocpversion.Gate) configwatch.Handler {
-	return func(ctx context.Context, cm *corev1.ConfigMap) error {
-		if cm == nil {
-			return cache.Clear(ctx)
-		}
-		if gate.Enabled(ctx) {
-			return cache.OnConfigMapChange(ctx, cm)
-		}
-		return nil
-	}
-}
-
-// reloadHandoff also invalidates a stale handoff if the ConfigMap deletion
-// was missed while eligibility was Unknown. Other read errors remain retryable.
-func reloadHandoff(ctx context.Context, reader client.Reader, namespace string, cache *configuration.Cache) (bool, error) {
-	err := configwatch.TryLoad(ctx, reader, namespace, configuration.ConfigMapName, cache.OnConfigMapChange)
-	if apierrors.IsNotFound(err) {
-		return false, cache.Clear(ctx)
-	}
-	return err == nil, err
-}
-
-func deactivateAgentic(ctx context.Context, runs *agenticrun.AgenticRunReconciler, cache *configuration.Cache, c client.Client, namespace string) error {
-	if err := runs.Deactivate(ctx, "Agentic work stopped because explicit opt-in or supported cluster version is absent"); err != nil {
-		return err
-	}
-	if err := cache.Clear(ctx); err != nil {
-		return err
-	}
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "lightspeed-agent", Namespace: namespace}}
-	if err := c.Delete(ctx, sa); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete inactive runtime ServiceAccount: %w", err)
-	}
-	return nil
 }
 
 // sandboxCRDInstalled queries the apiextensions API directly to check

@@ -21,7 +21,6 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
-	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 func TestPreserveFailedSandbox(t *testing.T) {
@@ -998,16 +997,12 @@ func TestDeletion_BothFinalizersInOneReconcile(t *testing.T) {
 	run.DeletionTimestamp = &now
 	run.Finalizers = []string{rbacCleanupFinalizer, templogCleanupFinalizer}
 
-	// A downgrade must not strand either finalizer on an existing run.
-	cv := ocpversion.Object()
-	cv.SetName("version")
-	cv.Object["status"] = map[string]interface{}{"desired": map[string]interface{}{"version": "4.22.0"}}
-	objs := append([]client.Object{run, cv}, defaultObjects()...)
+	objs := append([]client.Object{run}, defaultObjects()...)
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objs...).
 		WithStatusSubresource(run).Build()
 
 	cleaner := &mockTempLogCleaner{}
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default", TempLog: cleaner, Version: &ocpversion.Gate{Reader: fc}}
+	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default", TempLog: cleaner}
 
 	result, err := reconcileOnce(r, "fix-crash")
 	if err != nil {

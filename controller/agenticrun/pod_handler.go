@@ -14,7 +14,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
-	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 const msgSandboxNoResult = "sandbox exited without creating result"
@@ -31,11 +30,6 @@ var stepCondMu sync.Mutex
 // the owning AgenticRun using either labels (bare-pod) or the ownership
 // chain Pod → Sandbox → SandboxClaim (sandbox-claim mode).
 func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Object) []ctrl.Request {
-	eligibility, gateErr := r.Version.State(ctx)
-	if gateErr == nil && eligibility == ocpversion.EligibilityDisabled {
-		return nil
-	}
-	unknown := gateErr != nil || eligibility == ocpversion.EligibilityUnknown
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
 		return nil
@@ -54,11 +48,6 @@ func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Ob
 	var run agenticv1alpha1.AgenticRun
 	if err := r.Get(ctx, client.ObjectKey{Name: runName, Namespace: r.Namespace}, &run); err != nil {
 		return nil
-	}
-	if unknown {
-		// Queue the run reconciler so it can pause safely and retry eligibility;
-		// never advance a step while the gate is Unknown.
-		return []ctrl.Request{{NamespacedName: client.ObjectKeyFromObject(&run)}}
 	}
 
 	condType := stepConditionType(step)
