@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -722,10 +721,10 @@ func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.Agent
 	if err := m.releaseBarePod(ctx, claimName); err != nil {
 		firstErr = err
 	}
-	// Always attempt claim cleanup: the operator may have restarted with no
-	// cached handoff configuration after a downgrade or feature deactivation.
-	if err := m.releaseSandboxClaim(ctx, claimName); err != nil && firstErr == nil {
-		firstErr = err
+	if cfg := m.config.Get(); cfg != nil && cfg.Sandbox.Mode == sandboxModeSandboxClaim {
+		if err := m.releaseSandboxClaim(ctx, claimName); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 
 	// RBAC + SA cleanup via shared function (works for both spoke and hub).
@@ -778,7 +777,7 @@ func (m *SandboxManager) releaseSandboxClaim(ctx context.Context, claimName stri
 	claim.SetName(claimName)
 	claim.SetNamespace(m.namespace)
 
-	if err := m.client.Delete(ctx, claim); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+	if err := m.client.Delete(ctx, claim); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("%s %q: %w", errDeleteSandboxClaim, claimName, err)
 	}
 
@@ -789,7 +788,7 @@ func (m *SandboxManager) releaseSandboxClaim(ctx context.Context, claimName stri
 	pool.SetName(claimName)
 	pool.SetNamespace(m.namespace)
 
-	if err := m.client.Delete(ctx, pool); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+	if err := m.client.Delete(ctx, pool); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete SandboxWarmPool %q: %w", claimName, err)
 	}
 
@@ -800,7 +799,7 @@ func (m *SandboxManager) releaseSandboxClaim(ctx context.Context, claimName stri
 	tmpl.SetName(claimName)
 	tmpl.SetNamespace(m.namespace)
 
-	if err := m.client.Delete(ctx, tmpl); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+	if err := m.client.Delete(ctx, tmpl); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete SandboxTemplate %q: %w", claimName, err)
 	}
 

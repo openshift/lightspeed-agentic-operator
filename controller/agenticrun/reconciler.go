@@ -22,7 +22,6 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
-	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 const (
@@ -52,11 +51,9 @@ type AgenticRunReconciler struct {
 	Namespace string
 	Audit     AuditLogger
 	TempLog   TempLogCleaner
-	Version   *ocpversion.Gate
 }
 
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
-// +kubebuilder:rbac:groups=config.openshift.io,resources=clusterversions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns/finalizers,verbs=update
@@ -119,20 +116,6 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
-	}
-
-	// Deletion must finish even while eligibility is Unknown. Unknown blocks
-	// workflow progress but preserves in-flight state for retry after the gate
-	// resolves; only a confirmed Disabled state drains and terminalizes runs.
-	eligibility, versionErr := r.Version.State(ctx)
-	if versionErr != nil {
-		return ctrl.Result{}, versionErr
-	}
-	switch eligibility {
-	case ocpversion.EligibilityUnknown:
-		return ctrl.Result{RequeueAfter: ocpversion.ClusterVersionRequeueInterval}, nil
-	case ocpversion.EligibilityDisabled:
-		return ctrl.Result{}, r.deactivateAndFinalize(ctx, &run, "Agentic work stopped because explicit opt-in or supported cluster version is absent")
 	}
 
 	// --- Configuration guard (wait for lightspeed-agentic-configuration ConfigMap) ---
@@ -256,110 +239,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
-// Deactivate drains every AgenticRun when the feature becomes ineligible.
-// In-flight runs fail terminally after their sandbox and execution access are removed,
-// so a later reactivation cannot silently relaunch work that was interrupted.
-func (r *AgenticRunReconciler) Deactivate(ctx context.Context, reason string) error {
-	var runs agenticv1alpha1.AgenticRunList
-	if err := r.List(ctx, &runs); err != nil {
-		return fmt.Errorf("list AgenticRuns during deactivation: %w", err)
-	}
-	for i := range runs.Items {
-		if err := r.deactivateAndFinalize(ctx, &runs.Items[i], reason); err != nil {
-			return fmt.Errorf("deactivate AgenticRun %s/%s: %w", runs.Items[i].Namespace, runs.Items[i].Name, err)
-		}
-	}
-	return nil
-}
-
-// deactivateAndFinalize performs cleanup without enabling workflow progress.
-// Use the last loaded TTL policy, or the default if the handoff was never loaded.
-func (r *AgenticRunReconciler) deactivateAndFinalize(ctx context.Context, run *agenticv1alpha1.AgenticRun, reason string) error {
-	wasTerminal := isTerminal(agenticv1alpha1.DerivePhase(run.Status.Conditions))
-	if err := r.DeactivateRun(ctx, run, reason); err != nil {
-		return err
-	}
-	if !run.DeletionTimestamp.IsZero() {
-		return nil // deletion finalizers own cleanup
-	}
-	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
-	if !isTerminal(phase) {
-		return fmt.Errorf("run remains non-terminal after deactivation: %s", phase)
-	}
-	if (run.Labels[terminalTTLLabel] == "true" && run.Status.DeleteAfter != nil) ||
-		(phase == agenticv1alpha1.AgenticRunPhaseFailed && preserveFailedSandbox(run)) {
-		return nil
-	}
-	if phase == agenticv1alpha1.AgenticRunPhaseFailed {
-		if _, err := r.handleFailed(ctx, run); err != nil {
-			return err
-		}
-	}
-	days := configuration.DefaultTerminalTTLDays
-	if r.Config != nil {
-		if cfg := r.Config.Get(); cfg != nil {
-			days = cfg.TerminalTTLDays
-		}
-	}
-	if wasTerminal && (hasSandboxClaims(run) || run.Annotations[rbacNamespacesAnnotation] != "") {
-		// Terminal runs may not yet have reached their regular cleanup path.
-		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
-			return fmt.Errorf("release terminal run sandboxes: %w", err)
-		}
-	}
-	// Non-terminal runs were already released by DeactivateRun.
-	_, err := r.recordTerminalState(ctx, run, phase, days)
-	return err
-}
-
-// DeactivateRun releases recorded sandbox/access state and marks an in-flight
-// run failed so it cannot resume automatically after reactivation.
-func (r *AgenticRunReconciler) DeactivateRun(ctx context.Context, run *agenticv1alpha1.AgenticRun, reason string) error {
-	if !run.DeletionTimestamp.IsZero() {
-		return nil // the normal deletion path remains responsible for its finalizers
-	}
-	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
-	if isTerminal(phase) {
-		return nil
-	}
-	conditionType, err := deactivationConditionType(phase)
-	if err != nil {
-		return err
-	}
-	if hasSandboxClaims(run) || run.Annotations[rbacNamespacesAnnotation] != "" {
-		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
-			return fmt.Errorf("release sandboxes: %w", err)
-		}
-	}
-	base := run.DeepCopy()
-	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
-		Type:               conditionType,
-		Status:             metav1.ConditionFalse,
-		Reason:             "AgenticDisabled",
-		Message:            reason,
-		ObservedGeneration: run.Generation,
-	})
-	if err := r.statusPatch(ctx, run, base); err != nil {
-		return fmt.Errorf("mark run inactive: %w", err)
-	}
-	return nil
-}
-
-func deactivationConditionType(phase agenticv1alpha1.AgenticRunPhase) (string, error) {
-	switch phase {
-	case agenticv1alpha1.AgenticRunPhasePending, agenticv1alpha1.AgenticRunPhaseAnalyzing:
-		return agenticv1alpha1.AgenticRunConditionAnalyzed, nil
-	case agenticv1alpha1.AgenticRunPhaseProposed, agenticv1alpha1.AgenticRunPhaseExecuting:
-		return agenticv1alpha1.AgenticRunConditionExecuted, nil
-	case agenticv1alpha1.AgenticRunPhaseVerifying:
-		return agenticv1alpha1.AgenticRunConditionVerified, nil
-	case agenticv1alpha1.AgenticRunPhaseEscalating:
-		return agenticv1alpha1.AgenticRunConditionEscalated, nil
-	default:
-		return "", fmt.Errorf("cannot deactivate unhandled AgenticRun phase %q", phase)
-	}
-}
-
+// SetupWithManager sets up the controller with the Manager.
 func readerBindingEventHandlers(namespace string) toolscache.ResourceEventHandlerFuncs {
 	return toolscache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -388,11 +268,9 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			maxConcurrent = int(ap.Spec.MaxConcurrentRuns)
 		}
 	}
-	fanOutToActiveRuns := func(ctx context.Context, obj client.Object) []ctrl.Request {
+	fanOutToActiveRuns := func(ctx context.Context, _ client.Object) []ctrl.Request {
 		var runs agenticv1alpha1.AgenticRunList
 		if err := r.List(ctx, &runs); err != nil {
-			logf.FromContext(ctx).Error(err, "failed to list AgenticRuns for watched event; runs were not enqueued",
-				"eventType", fmt.Sprintf("%T", obj), "eventName", obj.GetName())
 			return nil
 		}
 		var reqs []ctrl.Request
@@ -425,7 +303,6 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(obj client.Object) bool {
 				return obj.GetNamespace() == r.Namespace
 			}))).
-		Watches(ocpversion.Object(), handler.EnqueueRequestsFromMapFunc(fanOutToActiveRuns)).
 		Watches(&agenticv1alpha1.ApprovalPolicy{}, handler.EnqueueRequestsFromMapFunc(fanOutToActiveRuns)).
 		Watches(&agenticv1alpha1.AgenticOLSConfig{}, handler.EnqueueRequestsFromMapFunc(fanOutToActiveRuns)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(
@@ -446,15 +323,12 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 // handleTerminalCleanup releases sandboxes, emits audit spans, and records the
 // fixed terminal deadline and label used by the hourly expiry sweep.
 func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 	if hasSandboxClaims(run) {
 		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
-			logf.FromContext(ctx).Error(err, "sandbox cleanup failed at terminal phase")
+			log.Error(err, "sandbox cleanup failed at terminal phase")
 		}
 	}
-	return r.recordTerminalState(ctx, run, phase, ceilingDays)
-}
-
-func (r *AgenticRunReconciler) recordTerminalState(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
 	if r.Audit != nil {
 		r.Audit.EmitTerminalSpan(ctx, run, string(phase), terminalReason(run))
 		r.Audit.Cleanup(run)

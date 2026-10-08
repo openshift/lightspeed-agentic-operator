@@ -14,7 +14,6 @@ import (
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 	"github.com/openshift/lightspeed-agentic-operator/pkg/configuration"
-	"github.com/openshift/lightspeed-agentic-operator/pkg/ocpversion"
 )
 
 func ttlTestCache(t *testing.T, days string) *configuration.Cache {
@@ -188,23 +187,6 @@ func TestSweepExpiredRuns_OnlyDeletesLabeledExpiredRuns(t *testing.T) {
 		} else if err != nil || !got.DeletionTimestamp.IsZero() {
 			t.Errorf("%s should remain, err=%v", tc.name, err)
 		}
-	}
-}
-
-func TestTimeoutTickExpiresRunWhileEligibilityDisabled(t *testing.T) {
-	ctx := context.Background()
-	run := terminalTestRun()
-	run.Status.DeleteAfter = ptrTime(time.Now().Add(-time.Hour))
-	run.Labels = map[string]string{terminalTTLLabel: "true"}
-	r := ttlTestReconciler(t, run, nil)
-	r.Version = &ocpversion.Gate{Reader: r.Client} // no opt-in: Disabled
-	if state, err := r.Version.State(ctx); state != ocpversion.EligibilityDisabled || err != nil {
-		t.Fatalf("eligibility = %q, %v; want Disabled", state, err)
-	}
-	r.handleTimeoutTick(ctx, 60)
-	var got agenticv1alpha1.AgenticRun
-	if err := r.Get(ctx, client.ObjectKeyFromObject(run), &got); client.IgnoreNotFound(err) != nil || (err == nil && got.DeletionTimestamp.IsZero()) {
-		t.Fatalf("expired run was not deleted while eligibility was Disabled: %v", err)
 	}
 }
 

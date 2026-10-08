@@ -25,24 +25,6 @@ func testScheme() *runtime.Scheme {
 	return s
 }
 
-func TestCacheClearDisablesHandoffAndTelemetry(t *testing.T) {
-	ctx := context.Background()
-	cache := &Cache{}
-	cache.SetOTELProvider(NewProvider(&testIDGen{}))
-	if err := cache.OnConfigMapChange(ctx, &corev1.ConfigMap{Data: map[string]string{}}); err != nil {
-		t.Fatal(err)
-	}
-	if !cache.Available() {
-		t.Fatal("config cache was not populated")
-	}
-	if err := cache.Clear(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if cache.Available() {
-		t.Fatal("config cache remained available after deactivation")
-	}
-}
-
 // testCACertPEM returns a minimal self-signed CA certificate PEM for tests.
 func testCACertPEM(t *testing.T) []byte {
 	t.Helper()

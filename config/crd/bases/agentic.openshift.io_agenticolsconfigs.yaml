@@ -24,15 +24,12 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: "AgenticOLSConfig is a cluster-scoped singleton and explicit
-          opt-in for\nsystem-wide agentic behavior. The cluster admin creates a single\nAgenticOLSConfig
-          named \"cluster\". Agentic work remains inactive until this\nCR exists and
-          the cluster reports a completed supported OCP version. An\nincomplete or
-          unreadable version state pauses new work without draining\nin-flight runs;
-          confirmed disablement drains runs and prevents automatic\nresumption. When
-          spec.suspended is true, all non-terminal agentic runs are\nterminated and
-          no new workflow steps are started.\n\nDeleting the CR disables Agentic and
-          drains in-flight runs.\n\nExample:\n\n\tapiVersion: agentic.openshift.io/v1alpha1\n\tkind:
+        description: "AgenticOLSConfig is a cluster-scoped singleton that controls
+          system-wide\nagentic behavior. The cluster admin creates a single AgenticOLSConfig\nnamed
+          \"cluster\". When spec.suspended is true, all non-terminal agentic runs\nare
+          terminated and no new workflow steps are started.\n\nWhen no AgenticOLSConfig
+          CR exists, the system behaves as if\nsuspended is false — the CR is not
+          required for normal operation.\n\nExample:\n\n\tapiVersion: agentic.openshift.io/v1alpha1\n\tkind:
           AgenticOLSConfig\n\tmetadata:\n\t  name: cluster\n\tspec:\n\t  suspended:
           false"
         properties:
