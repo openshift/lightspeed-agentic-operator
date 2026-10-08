@@ -260,6 +260,15 @@ func discoverSpoke(ctx context.Context, hub client.Client, spokeUID types.UID, s
 		if err := hub.Get(ctx, types.NamespacedName{Namespace: hubNamespace, Name: "spoke-kubeconfig-" + name}, &standing); err != nil {
 			return "", fmt.Errorf("get standing kubeconfig for SpokeCluster/%s: %w", name, err)
 		}
+		if proxyKubeconfig(standing.Data["kubeconfig"]) {
+			// Standing kubeconfig routes through an in-cluster proxy
+			// (e.g. MCE cluster-proxy .svc address) that is unreachable
+			// from a workstation. Skip UID verification and match by
+			// SpokeCluster name. The proxy path is validated in-cluster
+			// by the run itself.
+			matches = append(matches, name)
+			continue
+		}
 		uid, err := identify(ctx, standing.Data["kubeconfig"])
 		if err != nil || uid == "" {
 			return "", fmt.Errorf("cannot verify standing kubeconfig for SpokeCluster/%s against supplied spoke cluster", name)
@@ -298,6 +307,20 @@ func spokeReady(registration *unstructured.Unstructured) bool {
 		}
 	}
 	return true
+}
+
+// proxyKubeconfig returns true when the kubeconfig server is an in-cluster
+// service URL (*.svc) that cannot be reached from outside the cluster.
+func proxyKubeconfig(data []byte) bool {
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(data)
+	if err != nil {
+		return false
+	}
+	parsed, err := url.Parse(cfg.Host)
+	if err != nil {
+		return false
+	}
+	return strings.HasSuffix(parsed.Hostname(), ".svc")
 }
 
 func standingClusterUID(ctx context.Context, data []byte) (types.UID, error) {
