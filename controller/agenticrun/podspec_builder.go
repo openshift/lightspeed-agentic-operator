@@ -436,6 +436,13 @@ func (b *PodSpecBuilder) buildSkills(skills []agenticv1alpha1.SkillsSource) ([]c
 				ReadOnly:  true,
 			})
 		}
+	} else {
+		// No specific paths — mount the entire OCI image at /app/skills
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      "skills",
+			MountPath: "/app/skills",
+			ReadOnly:  true,
+		})
 	}
 
 	return []corev1.Volume{vol, workdirVol}, mounts

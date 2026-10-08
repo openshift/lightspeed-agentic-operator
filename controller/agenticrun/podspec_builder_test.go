@@ -130,8 +130,20 @@ func TestBuildSkills_NoPaths(t *testing.T) {
 	if len(vols) != 2 {
 		t.Fatalf("expected 2 volumes, got %d", len(vols))
 	}
-	if len(mounts) != 1 {
-		t.Fatalf("expected 1 mount (workdir only), got %d", len(mounts))
+	if vols[0].Name != "skills" || vols[0].Image == nil {
+		t.Fatal("first volume should be the skills image volume")
+	}
+	if vols[1].Name != "skills-workdir" || vols[1].EmptyDir == nil {
+		t.Fatal("second volume should be the skills-workdir emptyDir")
+	}
+	if len(mounts) != 2 {
+		t.Fatalf("expected 2 mounts (workdir + skills image), got %d", len(mounts))
+	}
+	if mounts[0].Name != "skills-workdir" || mounts[0].MountPath != "/app/skills/.agents" {
+		t.Fatal("first mount should be skills-workdir at /app/skills/.agents")
+	}
+	if mounts[1].Name != "skills" || mounts[1].MountPath != "/app/skills" || !mounts[1].ReadOnly {
+		t.Fatal("second mount should be skills image at /app/skills (read-only)")
 	}
 }
 
