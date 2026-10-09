@@ -86,6 +86,14 @@ test: fmt-check vet ## Run unit tests (main + api + cli modules).
 test-e2e: ## Run e2e tests against a live cluster (operator must be running). See test/e2e/ for prereqs.
 	go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 60m
 
+.PHONY: mc-product-e2e-preflight
+mc-product-e2e-preflight: ## Check two existing OpenShift clusters without creating a test run. See run-e2e.md.
+	go test -tags=mc_product_e2e -run '^TestPrerequisites$$' ./test/mc-product-e2e/ -count=1 -v -timeout 5m
+
+.PHONY: mc-product-e2e
+mc-product-e2e: mc-product-e2e-preflight ## Run the real spoke AgenticRun test after read-only preflight. See run-e2e.md.
+	go test -tags=mc_product_e2e -run '^TestCrossClusterRun$$' ./test/mc-product-e2e/ -count=1 -v -timeout 60m
+
 .PHONY: product-e2e
 product-e2e: ## Run product e2e: deploy operator, run all providers against live LLMs, collect artifacts.
 	bash scripts/e2e-cluster.sh $(PROVIDERS)
