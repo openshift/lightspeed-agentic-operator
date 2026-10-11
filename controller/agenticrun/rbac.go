@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -67,14 +68,38 @@ func readerBindingReferencesServiceAccount(obj interface{}, namespace string) bo
 	return false
 }
 
-// Spoke reader CRB names — created by the hub operator's provisioner during
-// spoke registration (lightspeed-hub/internal/provisioner/spoke.go). Known
-// and stable, so we hardcode them instead of using the process-global
-// discovery cache (which is hub-only). If the hub operator renames these,
-// this must be updated to match.
+// spokeReaderBindingNames names legacy spoke reader CRBs created before spoke
+// reader cleanup used labels. Keep this list for backward-compatible cleanup.
 var spokeReaderBindingNames = []string{
-	"lightspeed-hub:cluster-reader",
 	"lightspeed-hub:cluster-monitoring-view",
+	"lightspeed-hub:cluster-reader",
+}
+
+// resolveSpokeReaderBindings returns all ClusterRoleBindings on a spoke that
+// list the spoke-side lightspeed-agent SA as a subject. The spoke set is
+// discovered on demand instead of using the hub process-global cache because
+// each spoke has its own remote API server and resource set.
+func resolveSpokeReaderBindings(ctx context.Context, spokeClient client.Client, spokeNS string) ([]string, error) {
+	crbList := &rbacv1.ClusterRoleBindingList{}
+	if err := spokeClient.List(ctx, crbList); err != nil {
+		return nil, fmt.Errorf("list spoke ClusterRoleBindings for reader discovery: %w", err)
+	}
+
+	var names []string
+	for i := range crbList.Items {
+		for _, s := range crbList.Items[i].Subjects {
+			if s.Kind == rbacv1.ServiceAccountKind && s.Name == defaultSandboxSA && s.Namespace == spokeNS {
+				names = append(names, crbList.Items[i].Name)
+				break
+			}
+		}
+	}
+	sort.Strings(names)
+
+	if len(names) == 0 {
+		return nil, fmt.Errorf("no spoke ClusterRoleBinding found with subject %s/%s — ensure spoke reader RBAC is provisioned", spokeNS, defaultSandboxSA)
+	}
+	return names, nil
 }
 
 // perRunCRBName returns the name for a per-run ClusterRoleBinding created
@@ -96,8 +121,13 @@ func addReaderSubjectOnSpoke(ctx context.Context, spokeClient client.Client, run
 		Namespace: spokeNS,
 	}
 
+	sourceNames, err := resolveSpokeReaderBindings(ctx, spokeClient, spokeNS)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ErrAddReaderSubject, err)
+	}
+
 	var created []string // track for rollback on partial failure
-	for i, sourceName := range spokeReaderBindingNames {
+	for i, sourceName := range sourceNames {
 		// Read source CRB for its RoleRef.
 		source := &rbacv1.ClusterRoleBinding{}
 		if err := spokeClient.Get(ctx, client.ObjectKey{Name: sourceName}, source); err != nil {
@@ -107,6 +137,7 @@ func addReaderSubjectOnSpoke(ctx context.Context, spokeClient client.Client, run
 
 		crbName := perRunCRBName(runUID, step, i)
 		labels := rbacLabels(runUID, "reader-rbac")
+		labels[LabelStep] = step
 		for k, v := range extraLabels {
 			labels[k] = v
 		}
@@ -150,7 +181,24 @@ func cleanupCreatedCRBs(ctx context.Context, c client.Client, names []string) {
 // addReaderSubjectOnSpoke. Processes all CRBs even if one fails (best-effort
 // cleanup). Idempotent (ignore NotFound).
 func removeReaderSubjectOnSpoke(ctx context.Context, spokeClient client.Client, runUID, step string) error {
+	var bindings rbacv1.ClusterRoleBindingList
+	if err := spokeClient.List(ctx, &bindings, client.MatchingLabels{
+		LabelRun:       runUID,
+		LabelStep:      step,
+		LabelComponent: "reader-rbac",
+	}); err != nil {
+		return fmt.Errorf("%s: list spoke per-run reader bindings: %w", ErrRemoveReaderSubject, err)
+	}
+
 	var firstErr error
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		if err := spokeClient.Delete(ctx, binding); err != nil && !apierrors.IsNotFound(err) && firstErr == nil {
+			firstErr = fmt.Errorf("%s %s: %w", ErrDeleteClusterRoleBinding, binding.Name, err)
+		}
+	}
+	// Backward-compatible cleanup for older per-run CRBs created before the
+	// spoke path added LabelStep. New CRBs are removed by the label selector above.
 	for i := range spokeReaderBindingNames {
 		crbName := perRunCRBName(runUID, step, i)
 		if err := deleteIfExists(ctx, spokeClient, &rbacv1.ClusterRoleBinding{
