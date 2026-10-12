@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -293,4 +294,111 @@ func assertStepConditionOneOf(t *testing.T, conditions []metav1.Condition, condT
 		return
 	}
 	t.Errorf("%s condition not found", condType)
+}
+
+func TestCredentialValidationRejectsIncompleteAzureServicePrincipal(t *testing.T) {
+	t.Log("=== TestCredentialValidationRejectsIncompleteAzureServicePrincipal: validates incomplete Azure Entra ID credentials fail before sandbox creation ===")
+	c := newClient(t)
+
+	updated := createRunWithInvalidProviderSecret(
+		t,
+		c,
+		"e2e-invalid-azure-creds",
+		&agenticv1alpha1.LLMProvider{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-invalid-azure-llm"},
+			Spec: agenticv1alpha1.LLMProviderSpec{
+				Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+				AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+					CredentialsSecret: agenticv1alpha1.SecretReference{Name: "e2e-invalid-azure-secret"},
+					Endpoint:          "https://example.openai.azure.com",
+				},
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-invalid-azure-secret", Namespace: testNS},
+			Data:       map[string][]byte{"client_id": []byte("client-id")},
+		},
+	)
+
+	assertStepCondition(t, updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed,
+		metav1.ConditionFalse, "WorkflowFailed")
+	if !strings.Contains(conditionMessage(updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed), "client_id, tenant_id, client_secret") {
+		t.Fatalf("Analyzed condition message = %q, want Azure credential key guidance", conditionMessage(updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed))
+	}
+}
+
+func TestCredentialValidationRejectsIncompleteBedrockSecret(t *testing.T) {
+	t.Log("=== TestCredentialValidationRejectsIncompleteBedrockSecret: validates incomplete AWS Bedrock credentials fail before sandbox creation ===")
+	c := newClient(t)
+
+	updated := createRunWithInvalidProviderSecret(
+		t,
+		c,
+		"e2e-invalid-bedrock-creds",
+		&agenticv1alpha1.LLMProvider{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-invalid-bedrock-llm"},
+			Spec: agenticv1alpha1.LLMProviderSpec{
+				Type: agenticv1alpha1.LLMProviderAWSBedrock,
+				AWSBedrock: agenticv1alpha1.AWSBedrockConfig{
+					CredentialsSecret: agenticv1alpha1.SecretReference{Name: "e2e-invalid-bedrock-secret"},
+					Region:            "us-east-1",
+				},
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "e2e-invalid-bedrock-secret", Namespace: testNS},
+			Data:       map[string][]byte{"aws_access_key_id": []byte("AKIA")},
+		},
+	)
+
+	assertStepCondition(t, updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed,
+		metav1.ConditionFalse, "WorkflowFailed")
+	if !strings.Contains(conditionMessage(updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed), "aws_access_key_id and aws_secret_access_key") {
+		t.Fatalf("Analyzed condition message = %q, want Bedrock credential key guidance", conditionMessage(updated.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed))
+	}
+}
+
+func createRunWithInvalidProviderSecret(t *testing.T, c client.Client, runName string, llm *agenticv1alpha1.LLMProvider, secret *corev1.Secret) agenticv1alpha1.AgenticRun {
+	t.Helper()
+	ctx := context.Background()
+	agentName := runName + "-agent"
+	agent := &agenticv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: agentName},
+		Spec: agenticv1alpha1.AgentSpec{
+			LLMProvider: agenticv1alpha1.LLMProviderReference{Name: llm.Name},
+			Model:       "e2e-model",
+		},
+	}
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: runName, Namespace: testNS},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request:  "validate provider credentials",
+			Analysis: agenticv1alpha1.AgenticRunStep{Agent: agentName},
+		},
+	}
+
+	objs := []client.Object{llm, agent, secret, run}
+	for _, obj := range objs {
+		cleanup(t, c, obj.DeepCopyObject().(client.Object))
+	}
+	for _, obj := range objs {
+		obj.SetResourceVersion("")
+		obj.SetUID("")
+		if err := c.Create(ctx, obj); err != nil {
+			t.Fatalf("create %T/%s: %v", obj, obj.GetName(), err)
+		}
+		created := obj.DeepCopyObject().(client.Object)
+		t.Cleanup(func() { cleanup(t, c, created) })
+	}
+
+	return waitForPhase(t, c, runName, agenticv1alpha1.AgenticRunPhaseFailed)
+}
+
+func conditionMessage(conditions []metav1.Condition, conditionType string) string {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition.Message
+		}
+	}
+	return ""
 }

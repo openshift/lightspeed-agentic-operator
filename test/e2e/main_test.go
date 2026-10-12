@@ -210,7 +210,10 @@ func setupRealProviderFixtures(c client.Client) error {
 			},
 		}
 	case "azure-openai":
-		secretData = map[string][]byte{"AZURE_OPENAI_API_KEY": []byte(strings.TrimSpace(string(creds)))}
+		secretData = map[string][]byte{
+			"AZURE_OPENAI_API_KEY": []byte(strings.TrimSpace(string(creds))),
+			"apitoken":             []byte(strings.TrimSpace(string(creds))),
+		}
 		llmSpec = agenticv1alpha1.LLMProviderSpec{
 			Type: agenticv1alpha1.LLMProviderAzureOpenAI,
 			AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
@@ -223,7 +226,12 @@ func setupRealProviderFixtures(c client.Client) error {
 		if accessKey == "" || secretKey == "" {
 			return fmt.Errorf("%s requires Bedrock AWS credentials", provider)
 		}
-		secretData = map[string][]byte{"AWS_ACCESS_KEY_ID": []byte(accessKey), "AWS_SECRET_ACCESS_KEY": []byte(secretKey)}
+		secretData = map[string][]byte{
+			"AWS_ACCESS_KEY_ID":     []byte(accessKey),
+			"AWS_SECRET_ACCESS_KEY": []byte(secretKey),
+			"aws_access_key_id":     []byte(accessKey),
+			"aws_secret_access_key": []byte(secretKey),
+		}
 		llmSpec = agenticv1alpha1.LLMProviderSpec{
 			Type: agenticv1alpha1.LLMProviderAWSBedrock,
 			AWSBedrock: agenticv1alpha1.AWSBedrockConfig{

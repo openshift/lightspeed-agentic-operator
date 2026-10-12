@@ -1,6 +1,7 @@
 package agenticrun
 
 import (
+	"bytes"
 	"context"
 	stderrors "errors"
 	"fmt"
@@ -68,6 +69,8 @@ func validateAgentDependencies(ctx context.Context, c client.Client, namespace, 
 					} else {
 						issues = append(issues, fmt.Errorf("get Secret %q for LLMProvider %q: %w", secretName, llmName, err))
 					}
+				} else if err := validateLLMCredentialKeys(llm, secret); err != nil {
+					issues = append(issues, err)
 				}
 			}
 		}
@@ -76,6 +79,33 @@ func validateAgentDependencies(ctx context.Context, c client.Client, namespace, 
 		return nil, nil, issues
 	}
 	return agent, llm, nil
+}
+
+func secretHasNonEmptyKey(secret *corev1.Secret, key string) bool {
+	value, ok := secret.Data[key]
+	return ok && len(bytes.TrimSpace(value)) > 0
+}
+
+func validateLLMCredentialKeys(llm *agenticv1alpha1.LLMProvider, secret *corev1.Secret) error {
+	secretName := credentialsSecretName(llm)
+	switch llm.Spec.Type {
+	case agenticv1alpha1.LLMProviderAzureOpenAI:
+		hasAPIToken := secretHasNonEmptyKey(secret, "apitoken")
+		hasClientID := secretHasNonEmptyKey(secret, "client_id")
+		hasTenantID := secretHasNonEmptyKey(secret, "tenant_id")
+		hasClientSecret := secretHasNonEmptyKey(secret, "client_secret")
+		if hasAPIToken || (hasClientID && hasTenantID && hasClientSecret) {
+			return nil
+		}
+		return fmt.Errorf("LLMProvider %q credentials Secret %q must contain either apitoken or all of client_id, tenant_id, client_secret", llm.Name, secretName)
+	case agenticv1alpha1.LLMProviderAWSBedrock:
+		if secretHasNonEmptyKey(secret, "aws_access_key_id") && secretHasNonEmptyKey(secret, "aws_secret_access_key") {
+			return nil
+		}
+		return fmt.Errorf("LLMProvider %q credentials Secret %q must contain aws_access_key_id and aws_secret_access_key", llm.Name, secretName)
+	default:
+		return nil
+	}
 }
 
 func validateAgenticRun(ctx context.Context, c client.Client, run *agenticv1alpha1.AgenticRun, approval *agenticv1alpha1.AgenticRunApproval, operatorNamespace string) ([]error, map[string]*agenticv1alpha1.Agent, map[string]*agenticv1alpha1.LLMProvider) {

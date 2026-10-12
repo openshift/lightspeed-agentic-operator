@@ -162,8 +162,10 @@ type OpenAIConfig struct {
 // AzureOpenAIConfig contains configuration for the Azure OpenAI Service provider.
 type AzureOpenAIConfig struct {
 	// credentialsSecret references a Secret in the operator namespace
-	// (openshift-lightspeed) containing the Azure OpenAI API credentials.
-	// The Secret must contain the key AZURE_OPENAI_API_KEY.
+	// (openshift-lightspeed) containing Azure OpenAI credentials.
+	// The Secret must contain either apitoken for API-key authentication or
+	// client_id, tenant_id, and client_secret for Entra ID service-principal
+	// authentication.
 	// +required
 	CredentialsSecret SecretReference `json:"credentialsSecret,omitzero"`
 
@@ -211,7 +213,8 @@ type AzureOpenAIConfig struct {
 type AWSBedrockConfig struct {
 	// credentialsSecret references a Secret in the operator namespace
 	// (openshift-lightspeed) containing AWS credentials. The Secret must
-	// contain the keys AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+	// contain the keys aws_access_key_id and aws_secret_access_key. The optional
+	// role_arn key selects STS assume-role credential resolution.
 	// +required
 	CredentialsSecret SecretReference `json:"credentialsSecret,omitzero"`
 

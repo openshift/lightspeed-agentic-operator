@@ -30,6 +30,105 @@ func TestAgentDependencyValidator_VerifiesAgentDependencies(t *testing.T) {
 	}
 }
 
+func TestAgentDependencyValidator_ValidatesProviderCredentialKeys(t *testing.T) {
+	analysisAgent := testDefaultAgent()
+
+	tests := []struct {
+		name       string
+		provider   *agenticv1alpha1.LLMProvider
+		secretData map[string][]byte
+		wantError  string
+	}{
+		{
+			name: "azure service principal requires complete key set",
+			provider: &agenticv1alpha1.LLMProvider{
+				ObjectMeta: metav1.ObjectMeta{Name: "azure"},
+				Spec: agenticv1alpha1.LLMProviderSpec{
+					Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+					AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+						CredentialsSecret: agenticv1alpha1.SecretReference{Name: "azure-secret"},
+						Endpoint:          "https://example.openai.azure.com",
+					},
+				},
+			},
+			secretData: map[string][]byte{"client_id": []byte("client-id")},
+			wantError:  `LLMProvider "azure" credentials Secret "azure-secret" must contain either apitoken or all of client_id, tenant_id, client_secret`,
+		},
+		{
+			name: "azure api token accepted",
+			provider: &agenticv1alpha1.LLMProvider{
+				ObjectMeta: metav1.ObjectMeta{Name: "azure"},
+				Spec: agenticv1alpha1.LLMProviderSpec{
+					Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+					AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+						CredentialsSecret: agenticv1alpha1.SecretReference{Name: "azure-secret"},
+						Endpoint:          "https://example.openai.azure.com",
+					},
+				},
+			},
+			secretData: map[string][]byte{"apitoken": []byte("token")},
+		},
+		{
+			name: "azure complete service principal accepted",
+			provider: &agenticv1alpha1.LLMProvider{
+				ObjectMeta: metav1.ObjectMeta{Name: "azure"},
+				Spec: agenticv1alpha1.LLMProviderSpec{
+					Type: agenticv1alpha1.LLMProviderAzureOpenAI,
+					AzureOpenAI: agenticv1alpha1.AzureOpenAIConfig{
+						CredentialsSecret: agenticv1alpha1.SecretReference{Name: "azure-secret"},
+						Endpoint:          "https://example.openai.azure.com",
+					},
+				},
+			},
+			secretData: map[string][]byte{
+				"client_id":     []byte("client-id"),
+				"tenant_id":     []byte("tenant-id"),
+				"client_secret": []byte("client-secret"),
+			},
+		},
+		{
+			name: "bedrock requires secret key",
+			provider: &agenticv1alpha1.LLMProvider{
+				ObjectMeta: metav1.ObjectMeta{Name: "bedrock"},
+				Spec: agenticv1alpha1.LLMProviderSpec{
+					Type: agenticv1alpha1.LLMProviderAWSBedrock,
+					AWSBedrock: agenticv1alpha1.AWSBedrockConfig{
+						CredentialsSecret: agenticv1alpha1.SecretReference{Name: "bedrock-secret"},
+						Region:            "us-east-1",
+					},
+				},
+			},
+			secretData: map[string][]byte{"aws_access_key_id": []byte("AKIA")},
+			wantError:  `LLMProvider "bedrock" credentials Secret "bedrock-secret" must contain aws_access_key_id and aws_secret_access_key`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			agent := analysisAgent.DeepCopy()
+			agent.Spec.LLMProvider.Name = tt.provider.Name
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: credentialsSecretName(tt.provider), Namespace: "default"},
+				Data:       tt.secretData,
+			}
+
+			_, _, errs := validateAgentDependencies(context.Background(), buildFakeClient(agent, tt.provider, secret), "default", agent.Name)
+			if tt.wantError == "" {
+				if len(errs) != 0 {
+					t.Fatalf("validate returned errors: %v", errs)
+				}
+				return
+			}
+			if len(errs) != 1 {
+				t.Fatalf("validate returned %d errors %v, want 1", len(errs), errs)
+			}
+			if !strings.Contains(errs[0].Error(), tt.wantError) {
+				t.Fatalf("error = %q, want substring %q", errs[0], tt.wantError)
+			}
+		})
+	}
+}
+
 func TestAgentDependencyValidator_ReportsMissingDependencies(t *testing.T) {
 	tests := []struct {
 		name       string
