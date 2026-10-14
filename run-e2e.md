@@ -177,3 +177,28 @@ bash hack/quickstart/uninstall.sh
 | `E2E_PROVIDER` | *(empty = mock)* | `claude`, `gemini`, or `openai` for real LLM |
 | `E2E_MODEL` | - | Required with `E2E_PROVIDER` |
 | `E2E_PROVIDER_KEY_PATH` | - | Credentials file, required with `E2E_PROVIDER` |
+
+## Multicluster E2E (developer preview)
+
+For Developer Preview, `make mc-product-e2e` runs a live-cluster integration
+test with a real LLM provider. More thorough testing strategies, including
+mocked E2E tests and CI integration, are planned for Technology Preview (TP)
+and General Availability (GA).
+
+A configured multicluster deployment with at least one registered spoke is
+required. Run preflight to check the remaining prerequisites before running
+the test:
+
+```bash
+export MC_HUB_KUBECONFIG=/path/to/hub.kubeconfig
+export MC_SPOKE_KUBECONFIG=/path/to/spoke.kubeconfig
+make mc-product-e2e-preflight
+make mc-product-e2e
+```
+
+The test verifies Analysis, Execution and Verification against the spoke,
+checks a spoke-side proof, and cleans up its own run and namespace. If preflight
+finds multiple matching spokes, set `MC_SPOKE_NAME` to select one. Self-spoke
+runs can use the same kubeconfig for both variables, but do not validate
+connectivity between separate clusters. If cleanup fails, inspect the reported
+resources rather than deleting shared prerequisites.
