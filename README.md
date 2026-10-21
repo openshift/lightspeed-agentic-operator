@@ -122,6 +122,53 @@ make install-agent-sandbox   # optional; also run automatically before make run 
 
 Upstream install details: [Agent Sandbox installation](https://agent-sandbox.sigs.k8s.io/docs/getting_started/install_prerequisites/). The Makefile target applies **`manifest.yaml`** and **`extensions.yaml`** for **`AGENT_SANDBOX_VERSION`** (default pinned in the Makefile). You still need a **`SandboxTemplate`** named like **`TEMPLATE_NAME`** (default `lightspeed-agent`) in **`OPERATOR_NAMESPACE`** — usually from Lightspeed / your platform, not from this target.
 
+### Leader election and metrics
+
+The deployed manager enables `--leader-elect` using an agentic-specific Lease in
+its install namespace. A namespaced Role/RoleBinding grants election
+permissions. Local `make run` keeps election disabled and HTTP metrics on
+`:18080`.
+
+The default install requires OpenShift service-ca and the Prometheus Operator
+ServiceMonitor CRD. Metrics are served over HTTPS on `:8443` using the TLS
+certificate and private key from the `agentic-operator-metrics-certs` Secret.
+OpenShift service-ca creates and rotates this Secret at the metrics Service's
+request; the Deployment mounts it at `/etc/tls/private`. Controller-runtime
+reloads rotated certificates. The ServiceMonitor validates the service-ca chain
+and Service DNS name; a NetworkPolicy allows metrics ingress only from cluster
+Prometheus pods in the `openshift-monitoring` namespace. Like the classic
+operator, metrics require client mTLS using the CA certificate in the
+`client-ca.crt` data key of the `metrics-client-ca` ConfigMap in the
+`openshift-monitoring` namespace. The ServiceMonitor presents the certificate
+and private key from Prometheus's `metrics-client-certs` Secret. The install
+namespace is labelled for cluster monitoring. A namespace-scoped discovery Role
+and RoleBinding allow the `prometheus-k8s` ServiceAccount in the
+`openshift-monitoring` namespace to read Services, Pods, Endpoints, and
+EndpointSlices in the operator namespace.
+
+Metrics consume the effective TLS policy from the `tls-profile`,
+`tls-min-version`, and `tls-cipher-suites` data keys in the
+`lightspeed-agentic-configuration` ConfigMap; only the classic operator resolves
+OLSConfig overrides and cluster defaults. The agentic operator neither reads
+those policy APIs nor depends on their Go types.
+
+Missing, deleted, or invalid handoff TLS policy rejects new metrics TLS
+handshakes without blocking manager startup or health probes. Valid policy
+arriving later (or changing) applies safely to new connections without
+restarting the manager. Existing connections are not forcibly closed. A
+dedicated metrics-policy watcher runs on all replicas, including leader-election
+standbys, independently of potentially blocking sandbox/telemetry
+reconfiguration. It does not eagerly publish an API-read snapshot before its
+informer starts, avoiding stale policy after startup deletion. Go-unsupported
+ciphers are logged and omitted; TLS 1.3 cipher suites are managed by Go.
+Missing/invalid monitoring client CA fails secure startup; client CA changes
+require a restart. Serving-certificate rotation is reloaded automatically.
+
+The `config/metrics/` and `config/prometheus/` kustomize directories are
+included by the `config/default/` kustomization for downstream bundle tooling.
+The monitor's TLS server-name namespace follows the Service namespace through a
+kustomize replacement.
+
 ### CRDs and manifests
 
 Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make manifests`**.
@@ -136,7 +183,7 @@ Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by 
 make manifests # controller-gen → config/crd/bases + config/rbac/role.yaml
 make test      # fmt-check + vet + go test (root + api module)
 make install   # kubectl apply CRDs from config/crd only
-make run       # install + install-agent-sandbox + vet + go run ./cmd/main.go
+make run       # install + install-agent-sandbox + vet + go run ./cmd
 make uninstall # kubectl delete CRDs from config/crd (optional: ignore-not-found=true)
 
 make deploy         # apply only; IMG must be pullable (CI / released image)
@@ -149,7 +196,54 @@ make api-lint       # Kube API linter on api/ (golangci-lint custom + plugin; se
 
 **`make test`** runs **`fmt-check`** (fails if any file needs reformatting — run **`make fmt`** to fix), **`vet`**, root-module tests, and **`cd api && GOWORK=off go test ./... -count=1`** (the API tree is a separate module; **`GOWORK=off`** avoids a repo-root **`go.work`** hijacking module choice). The **`test/e2e`** package is excluded from this target — it requires **`-tags=e2e`** and a running mock agent.
 
-**`make test-e2e`** runs **`go test -tags=e2e ./test/e2e/...`** against a live cluster with the operator running. Prerequisites: **`make run TEMPLATE_NAME=lightspeed-agent-mock`** (or deployed operator with **`--template-name=lightspeed-agent-mock`**) and mock agent SandboxTemplate applied (**`kubectl apply -k test/agent/sandboxtemplate`**). See `test/e2e/` package doc for details.
+**`make test-e2e`** runs the configuration failover tests first, then **`go test -tags=e2e ./test/e2e/...`** against a live cluster with the operator running. Prerequisites: **`make run TEMPLATE_NAME=lightspeed-agent-mock`** (or deployed operator with **`--template-name=lightspeed-agent-mock`**) and mock agent SandboxTemplate applied (**`kubectl apply -k test/agent/sandboxtemplate`**). See `test/e2e/` package doc for details.
+
+### Configuration failover E2E
+
+`make test-configwatch-e2e` starts two managers against a cluster with a shared
+leader-election Lease in a temporary namespace. It verifies that the standby
+loads the initial `lightspeed-agentic-configuration` ConfigMap, processes updates
+and deletion before promotion, and cannot create a sandbox Pod after promotion
+without configuration. The managers and temporary namespace are cleaned up.
+The test requires permission to create/delete namespaces and read/write
+ConfigMaps and Leases in the temporary namespace; it creates no workflow fixtures.
+
+Each replica's configuration cache starts unavailable. Its ConfigMap watcher
+runs regardless of leadership, and workflow reconciliation is blocked until the
+cache has configuration. There is no separate startup read that could leave
+stale configuration outside the watcher's event history.
+
+### Metrics E2E
+
+`make test-metrics-e2e` tests an installed operator without creating workflow
+fixtures. It requires OpenShift cluster monitoring, the metrics Service and
+ServiceMonitor, a ready operator Pod, and a valid TLS policy in the
+`lightspeed-agentic-configuration` ConfigMap. Set `TEST_NAMESPACE` if the operator
+is not installed in the default `openshift-lightspeed` namespace.
+
+The tests verify the service-ca serving-certificate Secret, HTTPS access to
+`/metrics` using Prometheus's client certificate, rejection of requests without a
+client certificate, and fresh `up` and `go_goroutines` samples in cluster Prometheus.
+The direct HTTPS checks use port-forwarding; the Prometheus checks exercise
+ServiceMonitor discovery, mTLS, and the NetworkPolicy path.
+
+The test user needs permission to get Services and list Pods in the operator and
+`openshift-monitoring` namespaces, get the operator's serving Secret, and get the
+`metrics-client-certs` Secret and `serving-certs-ca-bundle` ConfigMap in the
+`openshift-monitoring` namespace. The user also needs permission to create Pod
+port-forwards in both namespaces, create/delete a temporary ServiceAccount in the
+operator namespace, create its token through the `serviceaccounts/token`
+subresource, and create/delete a ClusterRoleBinding granting the
+`cluster-monitoring-view` ClusterRole. Granting that role requires RBAC `bind`
+authorization or equivalent existing privileges. The tests
+query the `thanos-querier` Service in the `openshift-monitoring` namespace with a
+short-lived token for that ServiceAccount. TLS certificate verification remains
+enabled. Temporary RBAC resources are removed on completion.
+
+`make test-metrics-e2e-build` compiles these tests without contacting a cluster.
+`make test` runs their Prometheus-response parsing unit tests, but not the
+live-cluster checks. These tests are separate from `make test-e2e`, whose workflow
+suite creates and deletes shared agent and approval-policy fixtures.
 
 ### Product E2E (real providers)
 

@@ -9,6 +9,8 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 1. The operator MUST watch `AgenticRun` resources across all namespaces and reconcile them through the run lifecycle defined in `run-lifecycle.md`.
 2. The operator MUST run as a single-replica controller-runtime manager in a designated operator namespace, not in workload namespaces.
 3. The operator MUST register health (`/healthz`) and readiness (`/readyz`) probes.
+3a. Deployed managers MUST enable Lease-based leader election in the operator namespace, using a lock distinct from the classic operator. Only the leader reconciles resources; local development MAY disable election.
+3b. Deployed metrics MUST use HTTPS on port 8443 with a service-ca serving certificate. A metrics Service and ServiceMonitor MUST enable cluster monitoring with CA and Service DNS verification. Metrics ingress MUST be restricted to cluster Prometheus pods in the `openshift-monitoring` namespace. The endpoint MUST require client mTLS trusted by the CA certificate in the `client-ca.crt` data key of the `metrics-client-ca` ConfigMap in the `openshift-monitoring` namespace; the ServiceMonitor MUST present the certificate and private key from Prometheus's `metrics-client-certs` Secret. Metrics MUST consume the effective TLS policy from the `tls-profile`, `tls-min-version`, and `tls-cipher-suites` data keys of the `lightspeed-agentic-configuration` ConfigMap, not resolve OLSConfig or APIServer policy themselves. Missing, deleted, or invalid policy MUST reject new metrics TLS handshakes without blocking manager startup or health probes. Valid policy updates MUST apply safely to new connections on all replicas, including standbys, independently of sandbox/telemetry parsing failures. Each handshake MUST see a complete policy, never partially updated settings. Existing connections are not forcibly closed. Missing/invalid monitoring client trust MUST fail secure startup; client-CA updates require a restart.
 4. The operator MUST accept its namespace via `--namespace` flag or `POD_NAMESPACE` environment variable; it MUST exit if neither is provided.
 
 ### Component Inventory
@@ -46,12 +48,16 @@ The lightspeed-agentic-operator is a Kubernetes operator that watches `AgenticRu
 |---|---|---|---|
 | `--namespace` / `POD_NAMESPACE` | string | (required) | Operator install namespace |
 | `--metrics-bind-address` | string | `:8080` | Metrics endpoint bind address |
+| `--leader-elect` | bool | `false` | Enable leader election (enabled in Deployment) |
+| `--secure-metrics-server` | bool | `false` | Enable HTTPS metrics (enabled in Deployment) |
+| `--cert-dir` | string | `/etc/tls/private` | Metrics serving certificate directory (`tls.crt`, `tls.key`) |
 | `--health-probe-bind-address` | string | `:8081` | Health probe endpoint bind address |
 | `lightspeed-agentic-configuration` ConfigMap | — | — | Sandbox mode, base PodSpec, OTEL endpoints, MCP endpoint (produced by lightspeed-operator) |
 
 ## Constraints
 
-- The operator assumes it is the sole controller for `agentic.openshift.io/v1alpha1` resources; running multiple replicas without leader election would cause conflicts.
+- All deployed replicas MUST share the same namespaced election Lease. Running multiple replicas with election disabled is unsupported.
+- The default installation requires OpenShift service-ca and the Prometheus Operator ServiceMonitor CRD. Local `make run` retains HTTP metrics and does not require those monitoring resources.
 - Sandbox provisioning via `SandboxClaim` depends on the Sandbox API CRDs being installed in the cluster; this dependency only applies when `sandbox-mode=sandbox-claim` in the ConfigMap. The default `bare-pod` mode has no external CRD dependency.
 - The `lightspeed-agentic-configuration` ConfigMap must be created by lightspeed-operator before any AgenticRun can execute. The operator does not block startup on this ConfigMap — it starts normally and individual runs fail gracefully when the ConfigMap is missing.
 - The operator requires OpenShift APIs for console plugin deployment; running on vanilla Kubernetes skips console integration.

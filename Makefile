@@ -83,7 +83,7 @@ test: fmt-check vet ## Run unit tests (main + api + cli modules).
 ##@ Testing
 
 .PHONY: test-e2e
-test-e2e: ## Run e2e tests against a live cluster (operator must be running). See test/e2e/ for prereqs.
+test-e2e: test-configwatch-e2e ## Run e2e tests against a live cluster (operator must be running). See test/e2e/ for prereqs.
 	go test -tags=e2e ./test/e2e/... -count=1 -v -timeout 60m
 
 .PHONY: mc-product-e2e-preflight
@@ -93,6 +93,18 @@ mc-product-e2e-preflight: ## Check two existing OpenShift clusters without creat
 .PHONY: mc-product-e2e
 mc-product-e2e: mc-product-e2e-preflight ## Run the real spoke AgenticRun test after read-only preflight. See run-e2e.md.
 	go test -tags=mc_product_e2e -run '^TestCrossClusterRun$$' ./test/mc-product-e2e/ -count=1 -v -timeout 60m
+
+.PHONY: test-configwatch-e2e
+test-configwatch-e2e: ## Test configuration synchronization across leader failover (requires a cluster).
+	go test -tags=e2e ./test/configwatch/... -count=1 -v -timeout 3m
+
+.PHONY: test-metrics-e2e
+test-metrics-e2e: ## Test deployed HTTPS/mTLS metrics and cluster Prometheus scraping (requires OpenShift).
+	go test -tags=e2e ./test/metrics/... -run '^TestMetricsScraping$$' -count=1 -v -timeout 10m
+
+.PHONY: test-metrics-e2e-build
+test-metrics-e2e-build: $(LOCALBIN) ## Compile metrics E2E tests without contacting a cluster.
+	go test -tags=e2e -c ./test/metrics -o $(LOCALBIN)/metrics-e2e.test
 
 .PHONY: product-e2e
 product-e2e: ## Run product e2e: deploy operator, run all providers against live LLMs, collect artifacts.
@@ -290,7 +302,7 @@ run: install validate-agent-sandbox vet ## install + validate-agent-sandbox (no-
 			-days 365 -nodes -subj "/CN=localhost" 2>/dev/null; \
 		echo "Generated self-signed webhook certs"; \
 	fi
-	go run ./cmd/main.go \
+	go run ./cmd \
 		--namespace=$(OPERATOR_NAMESPACE) \
 		--metrics-bind-address=$(METRICS_BIND_ADDRESS) \
 		--health-probe-bind-address=$(HEALTH_PROBE_BIND_ADDRESS)

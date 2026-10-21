@@ -2,10 +2,10 @@ package configwatch
 
 import (
 	"context"
-	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -15,12 +15,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-const errGetConfigMap = "get ConfigMap"
-
 // Handler is called when a watched ConfigMap is created, updated, or deleted.
 // Receives nil when the ConfigMap is deleted.
-// Returning an error fails TryLoad (startup). Reconcile logs handler errors
-// and does not requeue — invalid config is not fixed by retrying.
+// Reconcile logs handler errors and does not requeue: invalid configuration
+// is not fixed by retrying.
 type Handler func(ctx context.Context, cm *corev1.ConfigMap) error
 
 // Registration binds a ConfigMap name to a handler.
@@ -32,6 +30,8 @@ type Registration struct {
 // Watcher is a controller-runtime reconciler that watches specific ConfigMaps
 // by name and dispatches to registered handlers via informers.
 type Watcher struct {
+	// Name distinguishes independent watchers; empty uses configmap-watcher.
+	Name      string
 	client    client.Client
 	namespace string
 	handlers  map[string]Handler
@@ -83,10 +83,15 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	return ctrl.Result{}, nil
 }
 
-// SetupWithManager registers the watcher as a controller that watches ConfigMaps.
+// SetupWithManager registers a ConfigMap watcher on every replica so standby
+// configuration stays current before the replica acquires leadership.
 func (w *Watcher) SetupWithManager(mgr ctrl.Manager) error {
+	name := w.Name
+	if name == "" {
+		name = "configmap-watcher"
+	}
 	return ctrl.NewControllerManagedBy(mgr).
-		Named("configmap-watcher").
+		Named(name).
 		WatchesRawSource(source.Kind(mgr.GetCache(), &corev1.ConfigMap{},
 			handler.TypedEnqueueRequestsFromMapFunc(func(ctx context.Context, cm *corev1.ConfigMap) []reconcile.Request {
 				if cm.Namespace != w.namespace {
@@ -98,19 +103,6 @@ func (w *Watcher) SetupWithManager(mgr ctrl.Manager) error {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: cm.Name, Namespace: cm.Namespace}}}
 			}),
 		)).
-		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1, NeedLeaderElection: ptr.To(false)}).
 		Complete(w)
-}
-
-// TryLoad attempts a single read of the named ConfigMap and invokes the
-// handler if found. Returns an error if the ConfigMap does not exist or
-// the handler fails. Used at startup to eagerly populate caches on
-// operator restart without blocking if the ConfigMap is not yet available.
-func TryLoad(ctx context.Context, c client.Reader, namespace, name string, h Handler) error {
-	cm := &corev1.ConfigMap{}
-	if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, cm); err != nil {
-		return fmt.Errorf("%s %q: %w", errGetConfigMap, name, err)
-	}
-	logf.FromContext(ctx).Info("ConfigMap found at startup", "name", name)
-	return h(ctx, cm)
 }

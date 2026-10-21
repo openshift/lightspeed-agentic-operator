@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"os"
@@ -21,6 +22,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -44,14 +46,20 @@ func init() {
 
 func main() {
 	var (
-		metricsAddr string
-		healthAddr  string
-		namespace   string
+		metricsAddr   string
+		healthAddr    string
+		namespace     string
+		leaderElect   bool
+		secureMetrics bool
+		certDir       string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
 	flag.StringVar(&namespace, "namespace", "", "The namespace where the operator runs (required).")
+	flag.BoolVar(&leaderElect, "leader-elect", false, "Enable leader election for controller manager.")
+	flag.BoolVar(&secureMetrics, "secure-metrics-server", false, "Serve metrics over HTTPS and require trusted Prometheus client certificates.")
+	flag.StringVar(&certDir, "cert-dir", "/etc/tls/private", "Directory containing the metrics certificate file tls.crt and private key file tls.key.")
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
@@ -72,15 +80,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
-		HealthProbeBindAddress: healthAddr,
-		WebhookServer: webhook.NewServer(webhook.Options{
-			Port:    9443,
-			CertDir: "/tmp/k8s-webhook-server/serving-certs",
-		}),
-	})
+	var metricsPolicy *metricsTLS
+	opts := managerOptions(metricsAddr, healthAddr, namespace, leaderElect, secureMetrics, certDir)
+	if secureMetrics {
+		k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+		if err != nil {
+			log.Error(err, "unable to create Kubernetes client for metrics configuration")
+			os.Exit(1)
+		}
+		clientCA, err := loadMetricsClientCA(context.Background(), k8sClient)
+		if err != nil {
+			log.Error(err, "unable to load metrics client CA")
+			os.Exit(1)
+		}
+		metricsPolicy = &metricsTLS{roots: clientCA}
+		opts.Metrics.TLSOpts = []func(*tls.Config){metricsPolicy.Configure}
+	}
+	mgr, err := ctrl.NewManager(cfg, opts)
 	if err != nil {
 		log.Error(err, "unable to create manager")
 		os.Exit(1)
@@ -108,15 +124,9 @@ func main() {
 	cfgCache := &configuration.Cache{ForceBareMode: !sandboxCRDs}
 	cfgCache.SetOTELProvider(telemetryProvider)
 
-	// Eagerly read ConfigMap if it already exists (operator restart).
-	// Non-fatal if missing — the watcher will pick it up when it appears.
-	if err := configwatch.TryLoad(
-		context.Background(), mgr.GetAPIReader(), namespace,
-		configuration.ConfigMapName, cfgCache.OnConfigMapChange,
-	); err != nil {
-		log.Info("ConfigMap not available at startup, telemetry disabled until it appears", "name", configuration.ConfigMapName, "reason", err.Error())
-	}
-
+	// Workflow reconciliation is blocked while cfgCache is unavailable. The
+	// watcher populates it from the initial ConfigMap list and keeps every
+	// replica synchronized, including leader-election standbys.
 	// Watch for ConfigMap changes at runtime
 	cmWatcher := configwatch.New(mgr.GetClient(), namespace,
 		configwatch.Registration{Name: configuration.ConfigMapName, Handler: cfgCache.OnConfigMapChange},
@@ -124,6 +134,18 @@ func main() {
 	if err := cmWatcher.SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up ConfigMap watcher")
 		os.Exit(1)
+	}
+
+	if metricsPolicy != nil {
+		// Keep the metrics TLS policy in sync with the
+		// lightspeed-agentic-configuration ConfigMap.
+		metricsWatcher := configwatch.New(mgr.GetClient(), namespace,
+			configwatch.Registration{Name: configuration.ConfigMapName, Handler: metricsPolicy.OnConfigMapChange})
+		metricsWatcher.Name = "metrics-configmap-watcher"
+		if err := metricsWatcher.SetupWithManager(mgr); err != nil {
+			log.Error(err, "unable to set up metrics TLS policy watcher")
+			os.Exit(1)
+		}
 	}
 
 	// Create AuditLogger (always enabled — stdout audit is unconditional)
@@ -207,6 +229,33 @@ func main() {
 		}
 		cancel()
 		os.Exit(1)
+	}
+}
+
+// managerOptions keeps local development defaults separate from deployed security settings.
+func managerOptions(metricsAddr, healthAddr, namespace string, leaderElect, secureMetrics bool, certDir string) ctrl.Options {
+	return ctrl.Options{
+		Scheme:                     scheme,
+		LeaderElection:             leaderElect,
+		LeaderElectionID:           "lightspeed-agentic-operator.agentic.openshift.io",
+		LeaderElectionNamespace:    namespace,
+		LeaderElectionResourceLock: "leases",
+		Metrics: metricsserver.Options{
+			BindAddress:   metricsAddr,
+			SecureServing: secureMetrics,
+			CertDir:       certDir,
+			CertName:      "tls.crt",
+			KeyName:       "tls.key",
+			TLSOpts: []func(*tls.Config){func(cfg *tls.Config) {
+				cfg.MinVersion = tls.VersionTLS12
+				cfg.NextProtos = []string{"http/1.1"}
+			}},
+		},
+		HealthProbeBindAddress: healthAddr,
+		WebhookServer: webhook.NewServer(webhook.Options{
+			Port:    9443,
+			CertDir: "/tmp/k8s-webhook-server/serving-certs",
+		}),
 	}
 }
 

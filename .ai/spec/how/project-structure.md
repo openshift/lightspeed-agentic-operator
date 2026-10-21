@@ -29,7 +29,7 @@
 ## Key Entry Points
 
 **Operator binary** (`cmd/main.go`):
-- Parses flags (`--namespace`, `--metrics-bind-address`, `--health-probe-bind-address`, `--agentic-console-image`)
+- Parses flags (`--namespace`, `--metrics-bind-address`, `--health-probe-bind-address`, `--leader-elect`, `--secure-metrics-server`, `--cert-dir`)
 - Creates `configuration.Cache` and registers ConfigMap watcher for `lightspeed-agentic-configuration`
 - [PLANNED: OLS-3928] Reads `tool-output-inspection-enabled` and makes its effective value available to `PodSpecBuilder`
 - Wires `SandboxManager` → `SandboxAgentCaller` → `AgenticRunReconciler` directly (no `controller/setup.go`)
