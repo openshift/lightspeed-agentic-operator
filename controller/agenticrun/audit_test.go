@@ -583,6 +583,11 @@ func TestTerminalReason(t *testing.T) {
 			want:       "Terminated by system kill switch",
 		},
 		{
+			name:       "cancelled_by_user",
+			conditions: []metav1.Condition{{Type: "Stopping", Status: metav1.ConditionFalse, Reason: "TeardownComplete", Message: "Sandbox workloads and access removed"}, {Type: "Executed", Status: metav1.ConditionFalse, Reason: "CancelledByUser", Message: "Run stopped by user"}},
+			want:       "Run stopped by user",
+		},
+		{
 			name:       "completed_no_reason",
 			conditions: []metav1.Condition{{Type: "Verified", Status: metav1.ConditionTrue, Reason: "Passed", Message: "All checks passed"}},
 			want:       "",

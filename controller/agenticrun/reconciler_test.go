@@ -98,8 +98,11 @@ type testAgentCaller struct {
 	ns string
 	t  *testing.T
 
-	releaseAllCount int
-	releasedSteps   []string
+	releaseAllCount        int
+	releasedSteps          []string
+	stopSandboxesCalls     int
+	stopSandboxesConfirmed *bool
+	stopSandboxesErr       error
 }
 
 func (ta *testAgentCaller) record(err error) bool {
@@ -193,6 +196,16 @@ func (ta *testAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.Ag
 func (ta *testAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) error {
 	ta.releaseAllCount++
 	return nil
+}
+func (ta *testAgentCaller) StopSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) (bool, error) {
+	ta.stopSandboxesCalls++
+	if ta.stopSandboxesErr != nil {
+		return false, ta.stopSandboxesErr
+	}
+	if ta.stopSandboxesConfirmed != nil {
+		return *ta.stopSandboxesConfirmed, nil
+	}
+	return true, nil
 }
 
 func (ta *testAgentCaller) ReleaseSandbox(_ context.Context, _ *agenticv1alpha1.AgenticRun, step string) error {
@@ -742,7 +755,7 @@ func TestReconcileSuspension(t *testing.T) {
 	})
 }
 
-func TestHandleSuspension(t *testing.T) {
+func TestHandleStopping(t *testing.T) {
 	tests := []struct {
 		name          string
 		run           *agenticv1alpha1.AgenticRun
@@ -786,9 +799,9 @@ func TestHandleSuspension(t *testing.T) {
 				Agent:     newTestAgentCaller(),
 				Namespace: "default",
 			}
-			_, err := r.handleSuspension(context.Background(), tt.run)
+			_, err := r.handleStopping(context.Background(), tt.run, reasonSystemSuspended)
 			if err != nil {
-				t.Fatalf("handleSuspension() error: %v", err)
+				t.Fatalf("handleStopping() error: %v", err)
 			}
 			got, _ := getAgenticRun(r, tt.run.Name)
 			phase := agenticv1alpha1.DerivePhase(got.Status.Conditions)

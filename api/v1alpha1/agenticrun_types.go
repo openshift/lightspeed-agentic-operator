@@ -230,7 +230,9 @@ func (a AnalysisOutput) IsZero() bool {
 //	Verified=False      -> verification failed; run escalates (Escalated=Unknown)
 //	Denied=True         -> user denied a step (terminal)
 //	Escalated=True      -> escalation complete (terminal)
-//	Any condition=False -> step failed; check reason and message
+//
+// Any condition=False    -> step failed; check reason and message
+// Stopping=True          -> teardown in progress; does not define a phase
 const (
 	// AgenticRunConditionAnalyzed indicates whether analysis has completed.
 	// Status=True when analysis succeeds, Status=False on failure,
@@ -252,6 +254,9 @@ const (
 	// escalation completes (terminal), Status=False on escalation failure.
 	AgenticRunConditionEscalated        string = "Escalated"
 	AgenticRunConditionEmergencyStopped string = "EmergencyStopped"
+	// AgenticRunConditionStopping tracks in-progress sandbox teardown. It is
+	// shared by cancellation and global suspension and does not affect DerivePhase.
+	AgenticRunConditionStopping string = "Stopping"
 )
 
 // AgenticRunStep defines per-step configuration on an AgenticRun. The agent
@@ -285,6 +290,7 @@ func (s AgenticRunStep) IsZero() bool {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.analysis) || (has(self.analysis) && self.analysis == oldSelf.analysis)",message="analysis is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.execution) || (has(self.execution) && self.execution == oldSelf.execution)",message="execution is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.verification) || (has(self.verification) && self.verification == oldSelf.verification)",message="verification is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.cancelled) || !oldSelf.cancelled || (has(self.cancelled) && self.cancelled)",message="cancelled is one-way and cannot be cleared or removed"
 type AgenticRunSpec struct {
 	// request is the user's original request, alert description, or a
 	// description of what triggered this agentic run. This text is passed to
@@ -353,12 +359,18 @@ type AgenticRunSpec struct {
 	// the operator detects (generation > observedGeneration) and triggers
 	// re-analysis with the feedback appended to the original request.
 	//
-	// Mutable: this and terminalTTL below are the only mutable spec
-	// fields. All other spec fields are immutable via CEL rules.
+	// Mutable: this field can request re-analysis. The only other mutable
+	// spec fields are `cancelled` (one-way) and `terminalTTL` (until terminalTime).
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
+	// cancelled is a one-way user signal requesting workflow termination. It
+	// defaults to false and, once true, cannot be cleared or removed. The
+	// controller reports teardown progress through the Stopping condition.
+	// +optional
+	// +default=false
+	Cancelled bool `json:"cancelled,omitempty"` //nolint:kubeapilinter // one-way cancellation is a binary signal with effective false default
 
 	// terminalTTL requests cleanup after this many whole days in a terminal
 	// phase (Completed, Failed, Denied, Escalated, EmergencyStopped).
@@ -381,8 +393,8 @@ type AgenticRunSpec struct {
 // +kubebuilder:validation:MinProperties=1
 type AgenticRunStatus struct {
 	// conditions represent the latest available observations using the
-	// standard Kubernetes condition pattern. Condition types include:
-	// Analyzed, Approved, Executed, Verified, and Escalated.
+	// standard Kubernetes condition pattern. Run-level condition types include
+	// Analyzed, Executed, Verified, Denied, Escalated, EmergencyStopped, and Stopping.
 	// +listType=map
 	// +listMapKey=type
 	// +patchStrategy=merge

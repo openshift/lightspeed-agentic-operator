@@ -89,19 +89,24 @@ const (
 	templogCleanupAttemptsAnnotation = "agentic.openshift.io/templog-cleanup-attempts"
 	templogMaxCleanupAttempts        = 3
 	templogCleanupRequeueAfter       = 5 * time.Second
+	stopSandboxesRequeueAfter        = 5 * time.Second
 
-	reasonInProgress       = "InProgress"
-	reasonComplete         = "Complete"
-	reasonFailed           = "Failed"
-	reasonSkipped          = "Skipped"
-	reasonPassed           = "Passed"
-	reasonWorkflowFailed   = "WorkflowResolutionFailed"
-	reasonUserDenied       = "UserDenied"
-	defaultSandboxSA       = "lightspeed-agent"
-	reasonRevising         = "Revising"
-	reasonRevisionComplete = "RevisionComplete"
-	reasonSystemSuspended  = "SystemSuspended"
-	reasonNoActionRequired = agenticv1alpha1.ReasonNoActionRequired
+	reasonInProgress        = "InProgress"
+	reasonComplete          = "Complete"
+	reasonFailed            = "Failed"
+	reasonSkipped           = "Skipped"
+	reasonPassed            = "Passed"
+	reasonWorkflowFailed    = "WorkflowResolutionFailed"
+	reasonUserDenied        = "UserDenied"
+	defaultSandboxSA        = "lightspeed-agent"
+	reasonRevising          = "Revising"
+	reasonRevisionComplete  = "RevisionComplete"
+	reasonSystemSuspended   = "SystemSuspended"
+	reasonCancelledByUser   = "CancelledByUser"
+	reasonTeardownComplete  = "TeardownComplete"
+	messageStopping         = "Stopping run; sandbox teardown in progress"
+	messageTeardownComplete = "Sandbox workloads and access removed"
+	reasonNoActionRequired  = agenticv1alpha1.ReasonNoActionRequired
 
 	LogKeyName      = "name"
 	LogKeyStep      = "step"
@@ -115,6 +120,8 @@ const (
 // retryBaseDelay is the base delay for exponential backoff between transient
 // retries. Package-level var so tests can override it.
 var retryBaseDelay = 5 * time.Second
+
+var errAsyncUpdateSuperseded = stderrors.New("asynchronous step update superseded by run termination")
 
 // isTransient returns true for Kubernetes API errors that are likely to
 // succeed on retry (server timeouts, throttling, temporary unavailability).
@@ -178,55 +185,113 @@ func isSuspended(ctx context.Context, c client.Client) (bool, error) {
 // The caller must have set the step condition to ConditionUnknown before
 // calling failStep so that conditionTime can extract the start time.
 func (r *AgenticRunReconciler) failStep(ctx context.Context, run *agenticv1alpha1.AgenticRun, conditionType string, err error) (ctrl.Result, error) {
+	if stderrors.Is(err, ErrRunStopAccepted) {
+		return ctrl.Result{Requeue: true}, nil
+	}
 	log := logf.FromContext(ctx)
 	log.Error(err, "step failed", LogKeyCondition, conditionType)
-	base := run.DeepCopy()
-	completedAt := metav1.Now()
-	startTime := conditionTime(run.Status.Conditions, conditionType)
 
+	const maxAttempts = 3
+	var lastErr error
+	for range maxAttempts {
+		// Sandbox creation patches metadata on a separately fetched copy of the
+		// run, so the caller's object can be stale. Record the failure from the
+		// current object: a stale optimistic-lock status patch conflicts and
+		// would leave the step Unknown with no Pod for the timeout loop to reap.
+		current := &agenticv1alpha1.AgenticRun{}
+		if readErr := r.apiReader().Get(ctx, client.ObjectKeyFromObject(run), current); readErr != nil {
+			if client.IgnoreNotFound(readErr) == nil {
+				return ctrl.Result{}, nil
+			}
+			log.Error(readErr, "failed to read run before recording step failure")
+			return ctrl.Result{}, readErr
+		}
+		if current.UID != run.UID {
+			return ctrl.Result{}, nil
+		}
+		if runMustNotAdvance(current) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+
+		base := current.DeepCopy()
+		completedAt := metav1.Now()
+		startTime := conditionTime(current.Status.Conditions, conditionType)
+		_, createErr := r.createFailureResult(ctx, current, conditionType, startTime, completedAt, err.Error())
+		if createErr != nil {
+			log.Error(createErr, "failed to create failure result CR")
+		}
+		meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+			Type:               conditionType,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonFailed,
+			Message:            err.Error(),
+			ObservedGeneration: current.Generation,
+		})
+		if statusErr := r.statusPatch(ctx, current, base); statusErr != nil {
+			lastErr = statusErr
+			if !errors.IsConflict(statusErr) {
+				log.Error(statusErr, "failed to patch status after step failure")
+				return ctrl.Result{}, statusErr
+			}
+			continue
+		}
+		return ctrl.Result{}, nil
+	}
+	log.Error(lastErr, "failed to patch status after step failure")
+	return ctrl.Result{}, lastErr
+}
+
+// createFailureResult creates the result CR for a failed step and records its
+// reference on the run.
+func (r *AgenticRunReconciler) createFailureResult(
+	ctx context.Context,
+	run *agenticv1alpha1.AgenticRun,
+	conditionType string,
+	startTime *metav1.Time,
+	completedAt metav1.Time,
+	failureReason string,
+) (string, error) {
 	var crName string
 	var createErr error
 	switch conditionType {
 	case agenticv1alpha1.AgenticRunConditionAnalyzed:
-		crName, _, createErr = r.createAnalysisResult(ctx, run, nil, run.Status.Steps.Analysis.Sandbox, startTime, &completedAt, err.Error())
+		crName, _, createErr = r.createAnalysisResult(ctx, run, nil, run.Status.Steps.Analysis.Sandbox, startTime, &completedAt, failureReason)
 		if createErr == nil {
-			run.Status.Steps.Analysis.Results = append(run.Status.Steps.Analysis.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFailed})
+			appendStepResultRef(&run.Status.Steps.Analysis.Results, crName)
 		}
 	case agenticv1alpha1.AgenticRunConditionExecuted:
-		crName, _, createErr = r.createExecutionResult(ctx, run, nil, run.Status.Steps.Execution.Sandbox, startTime, &completedAt, err.Error())
+		crName, _, createErr = r.createExecutionResult(ctx, run, nil, run.Status.Steps.Execution.Sandbox, startTime, &completedAt, failureReason)
 		if createErr == nil {
-			run.Status.Steps.Execution.Results = append(run.Status.Steps.Execution.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFailed})
+			appendStepResultRef(&run.Status.Steps.Execution.Results, crName)
 		}
 	case agenticv1alpha1.AgenticRunConditionVerified:
-		crName, _, createErr = r.createVerificationResult(ctx, run, nil, run.Status.Steps.Verification.Sandbox, startTime, &completedAt, err.Error())
+		crName, _, createErr = r.createVerificationResult(ctx, run, nil, run.Status.Steps.Verification.Sandbox, startTime, &completedAt, failureReason)
 		if createErr == nil {
-			run.Status.Steps.Verification.Results = append(run.Status.Steps.Verification.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFailed})
+			appendStepResultRef(&run.Status.Steps.Verification.Results, crName)
 		}
 	case agenticv1alpha1.AgenticRunConditionEscalated:
-		crName, _, createErr = r.createEscalationResult(ctx, run, nil, run.Status.Steps.Escalation.Sandbox, startTime, &completedAt, err.Error())
+		crName, _, createErr = r.createEscalationResult(ctx, run, nil, run.Status.Steps.Escalation.Sandbox, startTime, &completedAt, failureReason)
 		if createErr == nil {
-			run.Status.Steps.Escalation.Results = append(run.Status.Steps.Escalation.Results, agenticv1alpha1.StepResultRef{Name: crName, Outcome: agenticv1alpha1.ActionOutcomeFailed})
+			appendStepResultRef(&run.Status.Steps.Escalation.Results, crName)
 		}
 	}
-	if createErr != nil {
-		log.Error(createErr, "failed to create failure result CR")
-	}
+	return crName, createErr
+}
 
-	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
-		Type:               conditionType,
-		Status:             metav1.ConditionFalse,
-		Reason:             reasonFailed,
-		Message:            err.Error(),
-		ObservedGeneration: run.Generation,
-	})
-	if statusErr := r.statusPatch(ctx, run, base); statusErr != nil {
-		log.Error(statusErr, "failed to patch status after step failure")
+func appendStepResultRef(refs *[]agenticv1alpha1.StepResultRef, name string) {
+	if name == "" {
+		return
 	}
-	return ctrl.Result{}, nil
+	for _, ref := range *refs {
+		if ref.Name == name {
+			return
+		}
+	}
+	*refs = append(*refs, agenticv1alpha1.StepResultRef{Name: name, Outcome: agenticv1alpha1.ActionOutcomeFailed})
 }
 
 func (r *AgenticRunReconciler) statusPatch(ctx context.Context, run *agenticv1alpha1.AgenticRun, base *agenticv1alpha1.AgenticRun) error {
-	return r.Status().Patch(ctx, run, client.MergeFrom(base))
+	return r.Status().Patch(ctx, run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
 func hasSandboxClaims(run *agenticv1alpha1.AgenticRun) bool {
@@ -238,7 +303,7 @@ func hasSandboxClaims(run *agenticv1alpha1.AgenticRun) bool {
 
 func terminalReason(run *agenticv1alpha1.AgenticRun) string {
 	for _, c := range run.Status.Conditions {
-		if c.Status == metav1.ConditionFalse && c.Reason == reasonFailed {
+		if c.Status == metav1.ConditionFalse && (c.Reason == reasonFailed || c.Reason == reasonCancelledByUser) {
 			return c.Message
 		}
 		if c.Status == metav1.ConditionTrue && (c.Reason == reasonUserDenied || c.Reason == reasonSystemSuspended || c.Reason == reasonNoActionRequired) {
@@ -254,6 +319,107 @@ func isTerminal(phase agenticv1alpha1.AgenticRunPhase) bool {
 		return true
 	}
 	return false
+}
+
+func needsTerminalRevision(run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase) bool {
+	switch phase {
+	case agenticv1alpha1.AgenticRunPhaseCompleted:
+		return (isNoActionRequired(run) || run.Spec.Execution.IsZero()) && needsRevision(run)
+	case agenticv1alpha1.AgenticRunPhaseFailed:
+		return run.Spec.Execution.IsZero() && needsRevision(run)
+	default:
+		return false
+	}
+}
+
+func isStopping(run *agenticv1alpha1.AgenticRun) bool {
+	condition := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	return condition != nil && condition.Status == metav1.ConditionTrue
+}
+
+func isStopCleanupComplete(run *agenticv1alpha1.AgenticRun) bool {
+	condition := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	return condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason == reasonTeardownComplete
+}
+
+func isStoppedOutcome(run *agenticv1alpha1.AgenticRun) bool {
+	if condition := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped); condition != nil && condition.Status == metav1.ConditionTrue {
+		return true
+	}
+	for i := range run.Status.Conditions {
+		condition := &run.Status.Conditions[i]
+		switch condition.Type {
+		case agenticv1alpha1.AgenticRunConditionAnalyzed,
+			agenticv1alpha1.AgenticRunConditionExecuted,
+			agenticv1alpha1.AgenticRunConditionVerified,
+			agenticv1alpha1.AgenticRunConditionEscalated:
+			if condition.Status == metav1.ConditionFalse && condition.Reason == reasonCancelledByUser {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cancellationConditionType(phase agenticv1alpha1.AgenticRunPhase) string {
+	switch phase {
+	case agenticv1alpha1.AgenticRunPhasePending, agenticv1alpha1.AgenticRunPhaseAnalyzing:
+		return agenticv1alpha1.AgenticRunConditionAnalyzed
+	case agenticv1alpha1.AgenticRunPhaseProposed, agenticv1alpha1.AgenticRunPhaseExecuting:
+		return agenticv1alpha1.AgenticRunConditionExecuted
+	case agenticv1alpha1.AgenticRunPhaseVerifying:
+		return agenticv1alpha1.AgenticRunConditionVerified
+	case agenticv1alpha1.AgenticRunPhaseEscalating:
+		return agenticv1alpha1.AgenticRunConditionEscalated
+	default:
+		return ""
+	}
+}
+
+func clearSandboxReferences(run *agenticv1alpha1.AgenticRun) bool {
+	empty := agenticv1alpha1.SandboxInfo{}
+	changed := false
+	if run.Status.Steps.Analysis.Sandbox != empty {
+		run.Status.Steps.Analysis.Sandbox = empty
+		changed = true
+	}
+	if run.Status.Steps.Execution.Sandbox != empty {
+		run.Status.Steps.Execution.Sandbox = empty
+		changed = true
+	}
+	if run.Status.Steps.Verification.Sandbox != empty {
+		run.Status.Steps.Verification.Sandbox = empty
+		changed = true
+	}
+	if run.Status.Steps.Escalation.Sandbox != empty {
+		run.Status.Steps.Escalation.Sandbox = empty
+		changed = true
+	}
+	return changed
+}
+
+func (r *AgenticRunReconciler) refreshRunForAsyncUpdate(ctx context.Context, run *agenticv1alpha1.AgenticRun) (bool, error) {
+	var current agenticv1alpha1.AgenticRun
+	if err := r.Get(ctx, client.ObjectKeyFromObject(run), &current); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			return false, nil
+		}
+		return false, err
+	}
+	if run.UID != "" && run.UID != current.UID {
+		return false, nil
+	}
+	*run = current
+
+	if !current.DeletionTimestamp.IsZero() || current.Spec.Cancelled || isStopping(&current) ||
+		isStoppedOutcome(&current) || isStopCleanupComplete(&current) || isTerminal(agenticv1alpha1.DerivePhase(current.Status.Conditions)) {
+		return false, nil
+	}
+	suspended, err := isSuspended(ctx, r.Client)
+	if err != nil {
+		return false, err
+	}
+	return !suspended, nil
 }
 
 func isNoActionRequired(run *agenticv1alpha1.AgenticRun) bool {

@@ -227,6 +227,21 @@ func TestDerivePhase(t *testing.T) {
 			},
 			want: AgenticRunPhaseEmergencyStopped,
 		},
+		{
+			name: "stopping does not create a phase",
+			conditions: []metav1.Condition{
+				cond(AgenticRunConditionStopping, metav1.ConditionTrue, "Stopping"),
+			},
+			want: AgenticRunPhasePending,
+		},
+		{
+			name: "stopping preserves the active phase",
+			conditions: []metav1.Condition{
+				cond(AgenticRunConditionAnalyzed, metav1.ConditionUnknown, "InProgress"),
+				cond(AgenticRunConditionStopping, metav1.ConditionTrue, "Stopping"),
+			},
+			want: AgenticRunPhaseAnalyzing,
+		},
 	}
 
 	for _, tt := range tests {

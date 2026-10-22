@@ -115,6 +115,13 @@ spec:
                 x-kubernetes-validations:
                 - message: schema is required when mode is Minimal
                   rule: self.mode != 'Minimal' || has(self.schema)
+              cancelled:
+                default: false
+                description: |-
+                  cancelled is a one-way user signal requesting workflow termination. It
+                  defaults to false and, once true, cannot be cleared or removed. The
+                  controller reports teardown progress through the Stopping condition.
+                type: boolean
               execution:
                 description: |-
                   execution defines the agent used for the execution step.
@@ -155,8 +162,8 @@ spec:
                   the operator detects (generation > observedGeneration) and triggers
                   re-analysis with the feedback appended to the original request.
 
-                  Mutable: this and terminalTTL below are the only mutable spec
-                  fields. All other spec fields are immutable via CEL rules.
+                  Mutable: this field can request re-analysis. The only other mutable
+                  spec fields are `cancelled` (one-way) and `terminalTTL` (until terminalTime).
                 maxLength: 32768
                 minLength: 1
                 type: string
@@ -591,6 +598,9 @@ spec:
             - message: verification is immutable once set
               rule: '!has(oldSelf.verification) || (has(self.verification) && self.verification
                 == oldSelf.verification)'
+            - message: cancelled is one-way and cannot be cleared or removed
+              rule: '!has(oldSelf.cancelled) || !oldSelf.cancelled || (has(self.cancelled)
+                && self.cancelled)'
           status:
             description: status defines the observed state of AgenticRun.
             minProperties: 1
@@ -598,8 +608,8 @@ spec:
               conditions:
                 description: |-
                   conditions represent the latest available observations using the
-                  standard Kubernetes condition pattern. Condition types include:
-                  Analyzed, Approved, Executed, Verified, and Escalated.
+                  standard Kubernetes condition pattern. Run-level condition types include
+                  Analyzed, Executed, Verified, Denied, Escalated, EmergencyStopped, and Stopping.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
