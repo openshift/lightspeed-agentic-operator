@@ -1,0 +1,46 @@
+# Blocks AgenticOLSConfig deactivation and deletion until the Suspended
+# condition is terminal. Unrelated config edits remain allowed.
+# Spec: .ai/spec/what/system-config.md rule 11j (OLS-4133).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: agentic.openshift.io-agenticolsconfig-resume
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["agentic.openshift.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["UPDATE", "DELETE"]
+        resources: ["agenticolsconfigs"]
+  validations:
+    - expression: |
+        (
+          request.operation == "UPDATE" &&
+          (
+            !has(oldObject.spec.suspended) || !oldObject.spec.suspended ||
+            (has(object.spec.suspended) && object.spec.suspended) ||
+            (
+              has(oldObject.status) &&
+              has(oldObject.status.conditions) &&
+              oldObject.status.conditions.exists(c,
+                c.type == "Suspended" && c.status == "True" &&
+                (c.reason == "AdminActivated" || c.reason == "AdminActivatedWithErrors"))
+            )
+          )
+        ) || (
+          request.operation == "DELETE" &&
+          (
+            !has(oldObject.spec.suspended) || !oldObject.spec.suspended ||
+            (
+              has(oldObject.status) &&
+              has(oldObject.status.conditions) &&
+              oldObject.status.conditions.exists(c,
+                c.type == "Suspended" && c.status == "True" &&
+                (c.reason == "AdminActivated" || c.reason == "AdminActivatedWithErrors"))
+            )
+          )
+        )
+      message: >-
+        AgenticOLSConfig deactivation or deletion is blocked while the
+        Suspended condition is not AdminActivated or AdminActivatedWithErrors.

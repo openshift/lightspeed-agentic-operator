@@ -344,35 +344,133 @@ func (r *AgenticRunReconciler) handleFailed(
 	return ctrl.Result{}, nil
 }
 
-func (r *AgenticRunReconciler) handleSuspension(
+func (r *AgenticRunReconciler) handleStopping(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
+	reason string,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
+	if reason == "" {
+		if condition := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping); condition != nil {
+			reason = condition.Reason
+		}
+	}
+	if reason == "" {
+		reason = reasonSystemSuspended
+	}
 
-	log.Info("terminating run due to system suspension", LogKeyPhase, phase)
-
-	if hasSandboxClaims(run) {
-		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
-			log.Error(err, "best-effort sandbox release during suspension")
+	log.Info("stopping run", LogKeyPhase, phase, "reason", reason)
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if !isTerminal(phase) && (stopping == nil || stopping.Status != metav1.ConditionTrue || stopping.Reason != reason || stopping.Message != messageStopping) {
+		base := run.DeepCopy()
+		meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reason,
+			Message:            messageStopping,
+			ObservedGeneration: run.Generation,
+		})
+		if err := r.statusPatch(ctx, run, base); err != nil {
+			return ctrl.Result{}, fmt.Errorf("mark run stopping: %w", err)
 		}
 	}
 
-	if isTerminal(phase) {
+	finalized, err := r.ensureRunFinalizers(ctx, run)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !finalized {
 		return ctrl.Result{}, nil
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(run), run); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if !run.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
+	}
+	phase = agenticv1alpha1.DerivePhase(run.Status.Conditions)
+	suspended, err := isSuspended(ctx, r.Client)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if suspended {
+		reason = reasonSystemSuspended
+	}
+	stopping = meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if !isTerminal(phase) && (stopping == nil || stopping.Status != metav1.ConditionTrue || stopping.Reason != reason || stopping.Message != messageStopping) {
+		base := run.DeepCopy()
+		meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reason,
+			Message:            messageStopping,
+			ObservedGeneration: run.Generation,
+		})
+		if err := r.statusPatch(ctx, run, base); err != nil {
+			return ctrl.Result{}, fmt.Errorf("update run stop reason: %w", err)
+		}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(run), run); err != nil {
+			if client.IgnoreNotFound(err) == nil {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		phase = agenticv1alpha1.DerivePhase(run.Status.Conditions)
+	}
+	confirmed, err := r.Agent.StopSandboxes(ctx, run)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("stop sandboxes: %w", err)
+	}
+	if !confirmed {
+		return ctrl.Result{RequeueAfter: stopSandboxesRequeueAfter}, nil
+	}
+	// Teardown records pending descendant identities on the run as metadata;
+	// re-read so the outcome patch uses the current object.
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(run), run); err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	if suspended, err := isSuspended(ctx, r.Client); err != nil {
+		return ctrl.Result{}, err
+	} else if suspended {
+		reason = reasonSystemSuspended
 	}
 
 	base := run.DeepCopy()
-	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
-		Type:               agenticv1alpha1.AgenticRunConditionEmergencyStopped,
-		Status:             metav1.ConditionTrue,
-		Reason:             reasonSystemSuspended,
-		Message:            "Terminated by system kill switch (AgenticOLSConfig.spec.suspended=true)",
-		ObservedGeneration: run.Generation,
-	})
-	if err := r.statusPatch(ctx, run, base); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch EmergencyStopped condition: %w", err)
+	changed := clearSandboxReferences(run)
+	if !isTerminal(phase) || isStopping(run) {
+		meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonTeardownComplete,
+			Message:            messageTeardownComplete,
+			ObservedGeneration: run.Generation,
+		})
+		changed = true
+	}
+	if !isTerminal(phase) {
+		meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionEmergencyStopped,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonSystemSuspended,
+			Message:            "Terminated by system kill switch (AgenticOLSConfig.spec.suspended=true)",
+			ObservedGeneration: run.Generation,
+		})
+		changed = true
+	}
+	if changed {
+		if err := r.statusPatch(ctx, run, base); err != nil {
+			return ctrl.Result{}, fmt.Errorf("record stopped run outcome: %w", err)
+		}
+	}
+	if isTerminal(phase) {
+		return ctrl.Result{Requeue: true}, nil
 	}
 	return ctrl.Result{}, nil
 }

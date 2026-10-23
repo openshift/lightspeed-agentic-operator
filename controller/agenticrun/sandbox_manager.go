@@ -40,9 +40,11 @@ const (
 )
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxtemplates,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;delete
+// +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxtemplates,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxclaims,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxwarmpools,verbs=get;list;watch;create;patch;update;delete
+// +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch;delete
 
 var smClaimGVK = schema.GroupVersionKind{
 	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxClaim",
@@ -57,10 +59,12 @@ var smSandboxGVK = schema.GroupVersionKind{
 // the configuration cache, builds the PodSpec via PodSpecBuilder, and
 // delegates to the appropriate creation path.
 type SandboxManager struct {
-	client  client.Client
-	config  *configuration.Cache
-	builder *PodSpecBuilder
-	audit   AuditLogger
+	client client.Client
+	// APIReader bypasses informer caches for authoritative sandbox-stop reads.
+	APIReader client.Reader
+	config    *configuration.Cache
+	builder   *PodSpecBuilder
+	audit     AuditLogger
 
 	namespace       string
 	deletionTimeout time.Duration
@@ -69,6 +73,7 @@ type SandboxManager struct {
 func NewSandboxManager(c client.Client, config *configuration.Cache, namespace string, audit AuditLogger) *SandboxManager {
 	return &SandboxManager{
 		client:    c,
+		APIReader: c,
 		config:    config,
 		builder:   &PodSpecBuilder{},
 		audit:     audit,
@@ -758,7 +763,7 @@ func (m *SandboxManager) releaseBarePod(ctx context.Context, podName string) err
 		},
 	}
 
-	if err := m.client.Delete(ctx, pod); err != nil {
+	if err := m.client.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -787,23 +792,11 @@ func (m *SandboxManager) releaseSandboxClaim(ctx context.Context, claimName stri
 	})
 	pool.SetName(claimName)
 	pool.SetNamespace(m.namespace)
-
 	if err := m.client.Delete(ctx, pool); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete SandboxWarmPool %q: %w", claimName, err)
 	}
 
-	tmpl := &unstructured.Unstructured{}
-	tmpl.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxTemplate",
-	})
-	tmpl.SetName(claimName)
-	tmpl.SetNamespace(m.namespace)
-
-	if err := m.client.Delete(ctx, tmpl); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete SandboxTemplate %q: %w", claimName, err)
-	}
-
-	log.Info("Released SandboxClaim, SandboxWarmPool, and SandboxTemplate", LogKeyClaim, claimName)
+	log.Info("Released SandboxClaim and SandboxWarmPool", LogKeyClaim, claimName)
 	return nil
 }
 

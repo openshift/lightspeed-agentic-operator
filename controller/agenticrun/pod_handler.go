@@ -35,20 +35,29 @@ func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Ob
 		return nil
 	}
 
-	var step, runName string
-	if r.isSandboxClaimMode() {
-		step, runName, _ = resolveSandboxPodMetadata(ctx, r.Client, pod)
+	claimMode := r.isSandboxClaimMode()
+	var step, runName, runUID string
+	if claimMode {
+		step, runName, runUID, _ = resolveSandboxPodMetadata(ctx, r.Client, pod)
 	} else {
 		step, runName = resolveBarePodMetadata(pod)
+		runUID = pod.Labels[LabelRun]
 	}
-	if step == "" || runName == "" {
-		return nil
+	if step == "" || runName == "" || (claimMode && runUID == "") {
+		if claimMode {
+			return r.enqueueSandboxPodOwner(ctx, pod)
+		}
+		return r.enqueueManagedRun(ctx, pod)
 	}
 
 	var run agenticv1alpha1.AgenticRun
-	if err := r.Get(ctx, client.ObjectKey{Name: runName, Namespace: r.Namespace}, &run); err != nil {
-		return nil
+	if err := r.Get(ctx, client.ObjectKey{Name: runName, Namespace: pod.Namespace}, &run); err != nil {
+		return r.enqueueRunByUID(ctx, pod.Namespace, runUID)
 	}
+	if runUID != "" && string(run.UID) != runUID {
+		return r.enqueueRunByUID(ctx, pod.Namespace, runUID)
+	}
+	request := []ctrl.Request{{NamespacedName: client.ObjectKeyFromObject(&run)}}
 
 	condType := stepConditionType(step)
 	claimName := sandboxClaimName(&run, step)
@@ -62,14 +71,16 @@ func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Ob
 		if pod.Status.Phase != corev1.PodRunning {
 			reason = ReasonWaitingForSandbox
 		}
-		r.patchStepCondition(ctx, &run, condType, metav1.ConditionUnknown, reason, "Sandbox pod "+reason)
-		return nil
+		if err := r.patchStepCondition(ctx, &run, condType, metav1.ConditionUnknown, reason, "Sandbox pod "+reason); err != nil {
+			logf.FromContext(ctx).Error(err, "pod handler: failed to observe sandbox progress")
+		}
+		return request
 	}
 
 	if err := r.completeStep(ctx, &run, pod, step, condType, "", ""); err != nil {
-		return nil
+		logf.FromContext(ctx).Error(err, "pod handler: failed to process sandbox completion")
 	}
-	return nil
+	return request
 }
 
 // resolveBarePodMetadata reads step and run name from pod labels/annotations.
@@ -82,7 +93,7 @@ func resolveBarePodMetadata(pod *corev1.Pod) (step, runName string) {
 
 // resolveSandboxPodMetadata follows the ownership chain:
 // Pod → Sandbox (ownerRef) → SandboxClaim (ownerRef) → our labels.
-func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1.Pod) (step, runName string, err error) {
+func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1.Pod) (step, runName, runUID string, err error) {
 	for _, podRef := range pod.OwnerReferences {
 		if podRef.Kind != "Sandbox" {
 			continue
@@ -90,7 +101,7 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 		sb := &unstructured.Unstructured{}
 		sb.SetGroupVersionKind(smSandboxGVK)
 		if err := c.Get(ctx, client.ObjectKey{Name: podRef.Name, Namespace: pod.Namespace}, sb); err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		for _, sbRef := range sb.GetOwnerReferences() {
 			if sbRef.Kind != "SandboxClaim" {
@@ -99,14 +110,122 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 			claim := &unstructured.Unstructured{}
 			claim.SetGroupVersionKind(smClaimGVK)
 			if err := c.Get(ctx, client.ObjectKey{Name: sbRef.Name, Namespace: pod.Namespace}, claim); err != nil {
-				return "", "", err
+				return "", "", "", err
 			}
 			labels := claim.GetLabels()
 			annotations := claim.GetAnnotations()
-			return labels[LabelStep], annotations[AnnotationRunName], nil
+			return labels[LabelStep], annotations[AnnotationRunName], labels[LabelRun], nil
 		}
 	}
-	return "", "", nil
+	return "", "", "", nil
+}
+
+func (r *AgenticRunReconciler) handleManagedSandboxEvent(ctx context.Context, obj client.Object) []ctrl.Request {
+	if obj.GetNamespace() != r.Namespace {
+		return nil
+	}
+	if obj.GetObjectKind().GroupVersionKind().Kind == smSandboxGVK.Kind {
+		return r.enqueueSandboxOwner(ctx, obj)
+	}
+	return r.enqueueManagedRun(ctx, obj)
+}
+
+func (r *AgenticRunReconciler) enqueueSandboxPodOwner(ctx context.Context, pod *corev1.Pod) []ctrl.Request {
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind != smSandboxGVK.Kind {
+			continue
+		}
+		sandbox := &unstructured.Unstructured{}
+		sandbox.SetGroupVersionKind(smSandboxGVK)
+		if err := r.Get(ctx, client.ObjectKey{Name: owner.Name, Namespace: pod.Namespace}, sandbox); err == nil {
+			return r.enqueueSandboxOwner(ctx, sandbox)
+		}
+		return r.enqueueRunByClaimName(ctx, pod.Namespace, owner.Name)
+	}
+	return nil
+}
+
+func (r *AgenticRunReconciler) enqueueSandboxOwner(ctx context.Context, obj client.Object) []ctrl.Request {
+	for _, owner := range obj.GetOwnerReferences() {
+		if owner.Kind != smClaimGVK.Kind {
+			continue
+		}
+		claim := &unstructured.Unstructured{}
+		claim.SetGroupVersionKind(smClaimGVK)
+		if err := r.Get(ctx, client.ObjectKey{Name: owner.Name, Namespace: obj.GetNamespace()}, claim); err != nil {
+			return r.enqueueRunByClaimName(ctx, obj.GetNamespace(), owner.Name)
+		}
+		if owner.UID != "" && claim.GetUID() != owner.UID {
+			return nil
+		}
+		return r.enqueueManagedRun(ctx, claim)
+	}
+	return r.enqueueManagedRun(ctx, obj)
+}
+
+func (r *AgenticRunReconciler) enqueueManagedRun(ctx context.Context, obj client.Object) []ctrl.Request {
+	name := obj.GetAnnotations()[AnnotationRunName]
+	uid := obj.GetLabels()[LabelRun]
+	for _, owner := range obj.GetOwnerReferences() {
+		if owner.Kind != "AgenticRun" {
+			continue
+		}
+		if name != "" && name != owner.Name {
+			return nil
+		}
+		name = owner.Name
+		if owner.UID != "" {
+			if uid != "" && uid != string(owner.UID) {
+				return nil
+			}
+			uid = string(owner.UID)
+		}
+	}
+	if name != "" && uid == "" {
+		return nil
+	}
+	if name != "" {
+		var run agenticv1alpha1.AgenticRun
+		if err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: obj.GetNamespace()}, &run); err == nil && string(run.UID) == uid {
+			return []ctrl.Request{{NamespacedName: client.ObjectKeyFromObject(&run)}}
+		}
+	}
+	return r.enqueueRunByUID(ctx, obj.GetNamespace(), uid)
+}
+
+func (r *AgenticRunReconciler) enqueueRunByUID(ctx context.Context, namespace, uid string) []ctrl.Request {
+	if uid == "" {
+		return nil
+	}
+	var runs agenticv1alpha1.AgenticRunList
+	if err := r.List(ctx, &runs, client.InNamespace(namespace)); err != nil {
+		return nil
+	}
+	for i := range runs.Items {
+		if string(runs.Items[i].UID) == uid {
+			return []ctrl.Request{{NamespacedName: client.ObjectKeyFromObject(&runs.Items[i])}}
+		}
+	}
+	return nil
+}
+func (r *AgenticRunReconciler) enqueueRunByClaimName(ctx context.Context, namespace, claimName string) []ctrl.Request {
+	if claimName == "" {
+		return nil
+	}
+	var runs agenticv1alpha1.AgenticRunList
+	if err := r.List(ctx, &runs, client.InNamespace(namespace)); err != nil {
+		return nil
+	}
+	for i := range runs.Items {
+		run := &runs.Items[i]
+		if run.Status.Steps.Analysis.Sandbox.ClaimName == claimName ||
+			run.Status.Steps.Execution.Sandbox.ClaimName == claimName ||
+			run.Status.Steps.Verification.Sandbox.ClaimName == claimName ||
+			run.Status.Steps.Escalation.Sandbox.ClaimName == claimName {
+			return []ctrl.Request{{NamespacedName: client.ObjectKeyFromObject(run)}}
+		}
+	}
+	return nil
 }
 
 // completeStep handles step completion: patches the step condition (and result ref
@@ -184,6 +303,9 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 	}
 
 	if patchErr != nil {
+		if patchErr == errAsyncUpdateSuperseded {
+			return nil
+		}
 		return patchErr
 	}
 
@@ -205,10 +327,16 @@ func (r *AgenticRunReconciler) patchStepCondition(ctx context.Context, run *agen
 	if condType == "" {
 		return nil
 	}
-
+	allowed, err := r.refreshRunForAsyncUpdate(ctx, run)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errAsyncUpdateSuperseded
+	}
 	if c := meta.FindStatusCondition(run.Status.Conditions, condType); c != nil {
 		if c.Status != metav1.ConditionUnknown {
-			return nil
+			return errAsyncUpdateSuperseded
 		}
 		if c.Status == status && c.Reason == reason {
 			return nil
@@ -238,6 +366,16 @@ func (r *AgenticRunReconciler) patchStepResult(ctx context.Context, run *agentic
 	if condType == "" {
 		return nil
 	}
+	allowed, err := r.refreshRunForAsyncUpdate(ctx, run)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errAsyncUpdateSuperseded
+	}
+	if c := meta.FindStatusCondition(run.Status.Conditions, condType); c != nil && c.Status != metav1.ConditionUnknown {
+		return errAsyncUpdateSuperseded
+	}
 	base := run.DeepCopy()
 	outcome := agenticv1alpha1.ActionOutcomeSucceeded
 	if status != metav1.ConditionTrue {
@@ -264,6 +402,16 @@ func (r *AgenticRunReconciler) patchStepResult(ctx context.Context, run *agentic
 // result ref and, in a single status patch, sets Verified=False/VerificationFailed
 // plus Escalated=Unknown/VerificationFailed so DerivePhase yields Escalating.
 func (r *AgenticRunReconciler) patchVerificationFailedEscalating(ctx context.Context, run *agenticv1alpha1.AgenticRun, crName string, resultCR client.Object, reason string) error {
+	allowed, err := r.refreshRunForAsyncUpdate(ctx, run)
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return errAsyncUpdateSuperseded
+	}
+	if c := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionVerified); c != nil && c.Status != metav1.ConditionUnknown {
+		return errAsyncUpdateSuperseded
+	}
 	base := run.DeepCopy()
 	appendResultRef(run, "verification", crName, agenticv1alpha1.ActionOutcomeFailed)
 	aggregateTokenUsage(run, resultCR)

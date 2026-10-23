@@ -22,6 +22,9 @@ const sandboxTimeoutCheckInterval = 1 * time.Minute
 // sandbox-claim mode. When Sandbox CRDs are not installed, the config
 // cache forces bare-pod mode so this naturally returns false.
 func (r *AgenticRunReconciler) isSandboxClaimMode() bool {
+	if r.Config == nil {
+		return false
+	}
 	cfg := r.Config.Get()
 	return cfg != nil && cfg.Sandbox.Mode == sandboxModeSandboxClaim
 }
@@ -76,6 +79,7 @@ type podEntry struct {
 	pod     *corev1.Pod
 	step    string
 	runName string
+	runUID  string
 	// created is the sandbox resource creation time. In claim mode this is
 	// the claim timestamp, not the backing pod timestamp.
 	created time.Time
@@ -100,6 +104,18 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 			continue
 		}
 
+		if e.runUID != "" && string(run.UID) != e.runUID {
+			continue
+		}
+		allowed, err := r.refreshRunForAsyncUpdate(ctx, &run)
+		if err != nil {
+			log.Error(err, "failed to refresh run before timeout handling", LogKeyName, e.runName)
+			continue
+		}
+		if !allowed {
+			continue
+		}
+
 		if !isStepInProgress(&run, condType) {
 			continue
 		}
@@ -120,7 +136,9 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 		phase := e.pod.Status.Phase
 		if phase == corev1.PodSucceeded || phase == corev1.PodFailed {
 			log.Info("retrying completion for terminal pod", LogKeyName, e.pod.Name, LogKeyStep, e.step)
-			_ = r.completeStep(ctx, &run, e.pod, e.step, condType, "", "")
+			if err := r.completeStep(ctx, &run, e.pod, e.step, condType, "", ""); err != nil {
+				log.Error(err, "failed to retry terminal pod completion", LogKeyName, e.pod.Name)
+			}
 			continue
 		}
 
@@ -156,7 +174,9 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 			}
 		}
 
-		_ = r.completeStep(ctx, &run, e.pod, e.step, condType, message, reason)
+		if err := r.completeStep(ctx, &run, e.pod, e.step, condType, message, reason); err != nil {
+			log.Error(err, "failed to record sandbox timeout", LogKeyName, e.pod.Name)
+		}
 	}
 }
 
@@ -177,7 +197,7 @@ func (r *AgenticRunReconciler) listBarePods(ctx context.Context, log logr.Logger
 		if step == "" || runName == "" {
 			continue
 		}
-		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, created: pod.CreationTimestamp.Time})
+		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, runUID: pod.Labels[LabelRun], created: pod.CreationTimestamp.Time})
 	}
 	return entries
 }
@@ -192,21 +212,21 @@ func (r *AgenticRunReconciler) listSandboxPods(ctx context.Context, log logr.Log
 	seen := make(map[string]bool)
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		step, runName, err := resolveSandboxPodMetadata(ctx, r.Client, pod)
+		step, runName, runUID, err := resolveSandboxPodMetadata(ctx, r.Client, pod)
 		if err != nil {
 			// Do not let the claim-only fallback classify this pod-backed step
 			// as still provisioning when its owner chain cannot be resolved.
 			log.Error(err, "failed to resolve sandbox pod metadata", LogKeyName, pod.Name)
 			return entries
 		}
-		if step == "" || runName == "" {
+		if step == "" || runName == "" || runUID == "" {
 			continue
 		}
 		created := pod.CreationTimestamp.Time
 		if claimCreated, err := sandboxClaimCreationTime(ctx, r.Client, pod); err == nil && !claimCreated.IsZero() {
 			created = claimCreated
 		}
-		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, created: created})
+		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, runUID: runUID, created: created})
 		seen[runName+"\x00"+step] = true
 	}
 
@@ -223,10 +243,10 @@ func (r *AgenticRunReconciler) listSandboxPods(ctx context.Context, log logr.Log
 		labels := claim.GetLabels()
 		annotations := claim.GetAnnotations()
 		step, runName := labels[LabelStep], annotations[AnnotationRunName]
-		if step == "" || runName == "" || seen[runName+"\x00"+step] {
+		if step == "" || runName == "" || labels[LabelRun] == "" || seen[runName+"\x00"+step] {
 			continue
 		}
-		entries = append(entries, podEntry{step: step, runName: runName, created: claim.GetCreationTimestamp().Time})
+		entries = append(entries, podEntry{step: step, runName: runName, runUID: labels[LabelRun], created: claim.GetCreationTimestamp().Time})
 	}
 	return entries
 }

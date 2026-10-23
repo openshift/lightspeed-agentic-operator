@@ -38,6 +38,7 @@ rules:
   resources:
   - secrets
   verbs:
+  - delete
   - get
   - list
   - watch
@@ -115,6 +116,7 @@ rules:
   resources:
   - sandboxes
   verbs:
+  - delete
   - get
   - list
   - watch
@@ -140,9 +142,20 @@ rules:
   - sandboxtemplates
   verbs:
   - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - extensions.agents.x-k8s.io
+  resources:
+  - sandboxwarmpools
+  verbs:
+  - create
   - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -154,6 +167,7 @@ rules:
   - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io

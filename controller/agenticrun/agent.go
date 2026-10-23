@@ -54,6 +54,8 @@ type AgentCaller interface {
 	Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) error
 	Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error
 	ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error
+	// StopSandboxes returns true only after run workloads and access are confirmed absent.
+	StopSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) (bool, error)
 	ReleaseSandbox(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string) error
 }
 
@@ -78,6 +80,9 @@ func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Agentic
 
 func (s *StubAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) error {
 	return nil
+}
+func (s *StubAgentCaller) StopSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) (bool, error) {
+	return true, nil
 }
 
 func (s *StubAgentCaller) ReleaseSandbox(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string) error {

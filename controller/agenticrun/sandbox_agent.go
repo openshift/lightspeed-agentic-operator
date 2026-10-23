@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -121,6 +122,8 @@ type agentPreviousAttempt struct {
 type SandboxLifecycle interface {
 	Create(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, deadline time.Duration, agentCtx *agentContext) (string, error)
 	Release(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, spoke *SpokeAccess) error
+	// StopSandboxes returns true only after workloads and access are confirmed absent.
+	StopSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) (bool, error)
 }
 
 // SandboxAgentCaller implements AgentCaller by creating a sandbox pod
@@ -129,12 +132,33 @@ type SandboxLifecycle interface {
 type SandboxAgentCaller struct {
 	Sandbox   SandboxLifecycle
 	K8sClient client.Client
+	// APIReader bypasses the informer cache for persisted-run termination checks.
+	APIReader client.Reader
 	Namespace string
 	Audit     AuditLogger
 }
 
 func stepString(step agenticv1alpha1.SandboxStep) string {
 	return strings.ToLower(string(step))
+}
+func (s *SandboxAgentCaller) apiReader() client.Reader {
+	if s.APIReader != nil {
+		return s.APIReader
+	}
+	return s.K8sClient
+}
+
+func (s *SandboxAgentCaller) persistedRun(ctx context.Context, run *agenticv1alpha1.AgenticRun) (*agenticv1alpha1.AgenticRun, error) {
+	current := &agenticv1alpha1.AgenticRun{}
+	if err := s.apiReader().Get(ctx, client.ObjectKeyFromObject(run), current); err != nil {
+		return nil, fmt.Errorf("get persisted AgenticRun: %w", err)
+	}
+	// A deleted and recreated run is a different object with its own approval
+	// state. Never let an in-flight launch from the previous object adopt it.
+	if current.UID != run.UID {
+		return nil, fmt.Errorf("%w: expected UID %q, found %q", ErrRunReplaced, run.UID, current.UID)
+	}
+	return current, nil
 }
 
 func (s *SandboxAgentCaller) Analyze(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error {
@@ -175,6 +199,14 @@ func (s *SandboxAgentCaller) launchSandbox(
 	step resolvedStep,
 	agentCtx *agentContext,
 ) error {
+	current, err := s.persistedRun(ctx, run)
+	if err != nil {
+		return err
+	}
+	if runMustNotAdvance(current) {
+		return ErrRunStopAccepted
+	}
+
 	// activeDeadlineSeconds is measured from pod creation, while the product
 	// running deadline starts at the main container's startedAt. Include the
 	// complete startup allowance here so Kubernetes cannot kill a pod before
@@ -182,18 +214,64 @@ func (s *SandboxAgentCaller) launchSandbox(
 	// the precise startup/running clocks in timeout_handler.go.
 	podDeadline := sandboxPodDeadline(step.Agent, stepName)
 	var name string
+	createAttempted := false
 	if err := retryOnTransient(ctx, func() error {
+		current, err := s.persistedRun(ctx, run)
+		if err != nil {
+			return err
+		}
+		if runMustNotAdvance(current) {
+			return ErrRunStopAccepted
+		}
+		createAttempted = true
 		var createErr error
-		name, createErr = s.Sandbox.Create(ctx, run, stepName, step.Agent, step.LLM, step.Tools, podDeadline, agentCtx)
+		name, createErr = s.Sandbox.Create(ctx, current, stepName, step.Agent, step.LLM, step.Tools, podDeadline, agentCtx)
 		return createErr
 	}); err != nil {
+		if errors.Is(err, ErrRunStopAccepted) {
+			if createAttempted {
+				return s.stopAfterTermination(ctx, run, nil)
+			}
+			return ErrRunStopAccepted
+		}
+		if createAttempted {
+			current, readErr := s.persistedRun(ctx, run)
+			if readErr == nil && runMustNotAdvance(current) {
+				return s.stopAfterTermination(ctx, current, nil)
+			}
+		}
 		return fmt.Errorf("%s: %w", ErrClaimSandbox, err)
 	}
 
-	if err := s.patchSandboxInfo(ctx, run, stepName, name); err != nil {
+	current, err = s.persistedRun(ctx, run)
+	if err != nil {
+		return fmt.Errorf("read run after sandbox creation: %w", err)
+	}
+	if runMustNotAdvance(current) {
+		return s.stopAfterTermination(ctx, current, nil)
+	}
+
+	if err := s.patchSandboxInfo(ctx, current, stepName, name); err != nil {
+		if apierrors.IsConflict(err) {
+			fresh, readErr := s.persistedRun(ctx, run)
+			if readErr == nil && runMustNotAdvance(fresh) {
+				return s.stopAfterTermination(ctx, fresh, nil)
+			}
+		}
+		if errors.Is(err, ErrRunStopAccepted) {
+			return s.stopAfterTermination(ctx, current, nil)
+		}
 		return fmt.Errorf("patch sandbox info for step %s: %w", stepName, err)
 	}
 	return nil
+}
+
+func (s *SandboxAgentCaller) stopAfterTermination(ctx context.Context, run *agenticv1alpha1.AgenticRun, cause error) error {
+	_, stopErr := s.StopSandboxes(ctx, run)
+	if stopErr != nil {
+		return errors.Join(ErrRunStopAccepted, cause, fmt.Errorf("stop sandbox after run termination: %w", stopErr))
+	}
+	return errors.Join(ErrRunStopAccepted, cause)
 }
 
 func (s *SandboxAgentCaller) ReleaseSandbox(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string) error {
@@ -209,14 +287,21 @@ func (s *SandboxAgentCaller) ReleaseSandbox(ctx context.Context, run *agenticv1a
 
 func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error {
 	log := logf.FromContext(ctx)
-	var firstErr error
+	var errs []error
 
 	// Resolve spoke access once for the entire teardown.
 	spoke, spokeErr := spokeAccessForRun(ctx, s.K8sClient, run, s.Namespace)
 	if spokeErr != nil {
 		log.Error(spokeErr, "release: spoke unreachable, skipping spoke cleanup")
+		// A missing kubeconfig is hard gone and must not block deletion; other
+		// spoke failures are typed so the deletion path can decide whether the
+		// bounded unverified-access window applies.
 		if !apierrors.IsNotFound(spokeErr) || run.DeletionTimestamp.IsZero() {
-			firstErr = spokeErr
+			errs = append(errs, &SpokeStopError{
+				Cluster: run.Spec.TargetCluster,
+				Kind:    classifySpokeAccessError(spokeErr),
+				Err:     spokeErr,
+			})
 		}
 	}
 
@@ -231,9 +316,7 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 		}
 		if err := s.Sandbox.Release(ctx, run, step, spoke); err != nil {
 			log.Error(err, "failed to release sandbox", LogKeyClaim, claimName, LogKeyStep, step)
-			if firstErr == nil {
-				firstErr = err
-			}
+			errs = append(errs, err)
 		}
 	}
 
@@ -242,17 +325,19 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 	// RBAC cleanup even without a claim name; missing spoke access skips it.
 	if !executionReleased {
 		// spoke already resolved above.
-		if err := cleanupStepRBAC(ctx, spoke, s.K8sClient, s.Namespace, run, "execution"); err != nil && firstErr == nil {
-			firstErr = err
+		if err := cleanupStepRBAC(ctx, spoke, s.K8sClient, s.Namespace, run, "execution"); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
+}
+func (s *SandboxAgentCaller) StopSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) (bool, error) {
+	return s.Sandbox.StopSandboxes(ctx, run)
 }
 
-func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, claimName string) error {
-	var current agenticv1alpha1.AgenticRun
-	if err := s.K8sClient.Get(ctx, client.ObjectKeyFromObject(run), &current); err != nil {
-		return fmt.Errorf("get run for sandbox info patch: %w", err)
+func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, current *agenticv1alpha1.AgenticRun, step, claimName string) error {
+	if runMustNotAdvance(current) {
+		return ErrRunStopAccepted
 	}
 
 	base := current.DeepCopy()
@@ -272,8 +357,8 @@ func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, run *agenticv
 		current.Status.Steps.Escalation.Sandbox = info
 	}
 
-	if err := s.K8sClient.Status().Patch(ctx, &current, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("patch sandbox info for step %s: %w", step, err)
+	if err := s.K8sClient.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		return err
 	}
 	return nil
 }

@@ -295,17 +295,21 @@ webhooks:
 EOF
 info "MutatingWebhookConfiguration registered"
 
-# --- Suspension ValidatingAdmissionPolicy (OLS-3267) -------------------------
+# --- Suspension ValidatingAdmissionPolicies (OLS-3267, OLS-4133) -------------
 
-step "Installing AgenticRun suspension ValidatingAdmissionPolicy..."
+step "Installing agentic suspension ValidatingAdmissionPolicies..."
 if [ -n "${REPO_ROOT}" ]; then
   oc apply -f "${REPO_ROOT}/config/admission/agenticrun-suspension-policy.yaml"
   oc apply -f "${REPO_ROOT}/config/admission/agenticrun-suspension-binding.yaml"
-  info "ValidatingAdmissionPolicy applied (from local checkout)"
+  oc apply -f "${REPO_ROOT}/config/admission/agenticolsconfig-resume-policy.yaml"
+  oc apply -f "${REPO_ROOT}/config/admission/agenticolsconfig-resume-binding.yaml"
+  info "ValidatingAdmissionPolicies applied (from local checkout)"
 else
   oc apply -f "${GITHUB_RAW}/config/admission/agenticrun-suspension-policy.yaml"
   oc apply -f "${GITHUB_RAW}/config/admission/agenticrun-suspension-binding.yaml"
-  info "ValidatingAdmissionPolicy applied (from GitHub)"
+  oc apply -f "${GITHUB_RAW}/config/admission/agenticolsconfig-resume-policy.yaml"
+  oc apply -f "${GITHUB_RAW}/config/admission/agenticolsconfig-resume-binding.yaml"
+  info "ValidatingAdmissionPolicies applied (from GitHub)"
 fi
 
 info "Agentic operator deployed successfully"

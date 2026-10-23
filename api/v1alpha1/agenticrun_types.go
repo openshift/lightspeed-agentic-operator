@@ -230,7 +230,9 @@ func (a AnalysisOutput) IsZero() bool {
 //	Verified=False      -> verification failed; run escalates (Escalated=Unknown)
 //	Denied=True         -> user denied a step (terminal)
 //	Escalated=True      -> escalation complete (terminal)
-//	Any condition=False -> step failed; check reason and message
+//
+// Any condition=False    -> step failed; check reason and message
+// Stopping=True          -> teardown in progress; does not define a phase
 const (
 	// AgenticRunConditionAnalyzed indicates whether analysis has completed.
 	// Status=True when analysis succeeds, Status=False on failure,
@@ -252,6 +254,9 @@ const (
 	// escalation completes (terminal), Status=False on escalation failure.
 	AgenticRunConditionEscalated        string = "Escalated"
 	AgenticRunConditionEmergencyStopped string = "EmergencyStopped"
+	// AgenticRunConditionStopping tracks in-progress sandbox teardown. It is
+	// used by the shared hard-stop contract and does not affect DerivePhase.
+	AgenticRunConditionStopping string = "Stopping"
 )
 
 // AgenticRunStep defines per-step configuration on an AgenticRun. The agent
@@ -353,13 +358,12 @@ type AgenticRunSpec struct {
 	// the operator detects (generation > observedGeneration) and triggers
 	// re-analysis with the feedback appended to the original request.
 	//
-	// Mutable: this and terminalTTL below are the only mutable spec
-	// fields. All other spec fields are immutable via CEL rules.
+	// Mutable: this field can request re-analysis. The only other mutable
+	// spec field is `terminalTTL` (until terminalTime).
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
-
 	// terminalTTL requests cleanup after this many whole days in a terminal
 	// phase (Completed, Failed, Denied, Escalated, EmergencyStopped).
 	// The operator caps this request at the cluster retention ceiling and
@@ -381,8 +385,8 @@ type AgenticRunSpec struct {
 // +kubebuilder:validation:MinProperties=1
 type AgenticRunStatus struct {
 	// conditions represent the latest available observations using the
-	// standard Kubernetes condition pattern. Condition types include:
-	// Analyzed, Approved, Executed, Verified, and Escalated.
+	// standard Kubernetes condition pattern. Run-level condition types include
+	// Analyzed, Executed, Verified, Denied, Escalated, EmergencyStopped, and Stopping.
 	// +listType=map
 	// +listMapKey=type
 	// +patchStrategy=merge

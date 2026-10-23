@@ -106,8 +106,12 @@ var NewClientFromConfig = func(cfg *rest.Config) (client.Client, error) {
 // spokeAccessForRun returns a SpokeAccess for the run's targetCluster.
 // Returns nil when targetCluster is empty (local cluster — caller uses
 // hub client and operator namespace, unchanged behavior).
-func spokeAccessForRun(ctx context.Context, hubClient client.Client, run *agenticv1alpha1.AgenticRun, operatorNS string) (*SpokeAccess, error) {
-	tc := run.Spec.TargetCluster
+func spokeAccessForRun(ctx context.Context, hubClient client.Reader, run *agenticv1alpha1.AgenticRun, operatorNS string) (*SpokeAccess, error) {
+	return spokeAccessForCluster(ctx, hubClient, operatorNS, run.Spec.TargetCluster)
+}
+
+func spokeAccessForCluster(ctx context.Context, hubClient client.Reader, operatorNS, targetCluster string) (*SpokeAccess, error) {
+	tc := targetCluster
 	if tc == "" {
 		return nil, nil
 	}

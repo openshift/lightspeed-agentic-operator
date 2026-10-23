@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -18,18 +19,25 @@ import (
 // --- Hand-written mocks ---
 
 type mockSandboxProvider struct {
-	claimName    string
-	claimErr     error
-	claimErrors  []error // per-call errors; takes precedence over claimErr when non-empty
-	releaseErr   error
-	claimCalls   int
-	releaseCalls int
-	tools        *agenticv1alpha1.ToolsSpec
+	claimName     string
+	claimErr      error
+	claimErrors   []error // per-call errors; takes precedence over claimErr when non-empty
+	releaseErr    error
+	claimCalls    int
+	releaseCalls  int
+	stopCalls     int
+	stopConfirmed bool
+	stopErr       error
+	createHook    func()
+	tools         *agenticv1alpha1.ToolsSpec
 }
 
 func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, _ time.Duration, _ *agentContext) (string, error) {
 	m.claimCalls++
 	m.tools = tools
+	if m.createHook != nil {
+		m.createHook()
+	}
 	if len(m.claimErrors) > 0 {
 		idx := m.claimCalls - 1
 		if idx >= len(m.claimErrors) {
@@ -45,6 +53,10 @@ func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.Agent
 func (m *mockSandboxProvider) Release(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *SpokeAccess) error {
 	m.releaseCalls++
 	return m.releaseErr
+}
+func (m *mockSandboxProvider) StopSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) (bool, error) {
+	m.stopCalls++
+	return m.stopConfirmed, m.stopErr
 }
 
 func newTestSandboxAgentCaller(sandbox *mockSandboxProvider) *SandboxAgentCaller {
@@ -183,6 +195,91 @@ func TestSandboxAgentCaller_PatchesSandboxInfo(t *testing.T) {
 		t.Errorf("expected sandbox claim name 'ls-analysis-fix-crash', got %q", updated.Status.Steps.Analysis.Sandbox.ClaimName)
 	}
 }
+func TestSandboxAgentCaller_PreventsCreationAfterStop(t *testing.T) {
+	tests := []struct {
+		name string
+		stop func(*agenticv1alpha1.AgenticRun)
+	}{
+		{
+			name: "stopping condition",
+			stop: func(run *agenticv1alpha1.AgenticRun) {
+				run.Status.Conditions = []metav1.Condition{{
+					Type:   agenticv1alpha1.AgenticRunConditionStopping,
+					Status: metav1.ConditionTrue,
+					Reason: "Stopping",
+				}}
+			},
+		},
+		{
+			name: "terminal stopped condition",
+			stop: func(run *agenticv1alpha1.AgenticRun) {
+				run.Status.Conditions = []metav1.Condition{{
+					Type:   agenticv1alpha1.AgenticRunConditionEmergencyStopped,
+					Status: metav1.ConditionTrue,
+					Reason: "SystemSuspended",
+				}}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := testSandboxAgenticRun()
+			tt.stop(run)
+			sandbox := &mockSandboxProvider{claimName: "ls-analysis-fix-crash"}
+			caller := newTestSandboxAgentCallerWithAgenticRun(sandbox, run)
+
+			err := caller.Analyze(context.Background(), run, testSandboxStep())
+			if !errors.Is(err, ErrRunStopAccepted) {
+				t.Fatalf("Analyze() error = %v, want ErrRunStopAccepted", err)
+			}
+			if sandbox.claimCalls != 0 {
+				t.Fatalf("Create calls = %d, want 0", sandbox.claimCalls)
+			}
+		})
+	}
+}
+
+func TestSandboxAgentCaller_StopsSandboxIfStoppingPersistsDuringCreate(t *testing.T) {
+	ctx := context.Background()
+	run := testSandboxAgenticRun()
+	sandbox := &mockSandboxProvider{
+		claimName:     "ls-analysis-fix-crash",
+		stopConfirmed: true,
+	}
+	var caller *SandboxAgentCaller
+	sandbox.createHook = func() {
+		var current agenticv1alpha1.AgenticRun
+		if err := caller.K8sClient.Get(ctx, client.ObjectKeyFromObject(run), &current); err != nil {
+			t.Fatalf("get run during Create: %v", err)
+		}
+		current.Status.Conditions = append(current.Status.Conditions, metav1.Condition{
+			Type:   agenticv1alpha1.AgenticRunConditionStopping,
+			Status: metav1.ConditionTrue,
+			Reason: reasonSystemSuspended,
+		})
+		if err := caller.K8sClient.Status().Update(ctx, &current); err != nil {
+			t.Fatalf("persist stop during Create: %v", err)
+		}
+	}
+	caller = newTestSandboxAgentCallerWithAgenticRun(sandbox, run)
+
+	err := caller.Analyze(ctx, run, testSandboxStep())
+	if !errors.Is(err, ErrRunStopAccepted) {
+		t.Fatalf("Analyze() error = %v, want ErrRunStopAccepted", err)
+	}
+	if sandbox.stopCalls != 1 {
+		t.Fatalf("StopSandboxes calls = %d, want 1", sandbox.stopCalls)
+	}
+
+	var current agenticv1alpha1.AgenticRun
+	if err := caller.K8sClient.Get(ctx, client.ObjectKeyFromObject(run), &current); err != nil {
+		t.Fatalf("get run after Create: %v", err)
+	}
+	if current.Status.Steps.Analysis.Sandbox.ClaimName != "" {
+		t.Fatalf("sandbox reference was patched after stop: %+v", current.Status.Steps.Analysis.Sandbox)
+	}
+}
 
 func TestSandboxAgentCaller_ReleaseSandbox(t *testing.T) {
 	sandbox := &mockSandboxProvider{}
@@ -290,6 +387,9 @@ func (m *trackingMockSandbox) Release(_ context.Context, run *agenticv1alpha1.Ag
 	}
 	return nil
 }
+func (m *trackingMockSandbox) StopSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) (bool, error) {
+	return true, nil
+}
 
 // --- Retry integration tests ---
 
@@ -345,5 +445,64 @@ func TestSandboxAgentCaller_TransientExhaustsRetries(t *testing.T) {
 	}
 	if sandbox.claimCalls != maxCreateRetries {
 		t.Errorf("expected %d Create calls, got %d", maxCreateRetries, sandbox.claimCalls)
+	}
+}
+
+func TestSandboxAgentCallerRejectsReplacedRun(t *testing.T) {
+	ctx := context.Background()
+	original := testSandboxAgenticRun()
+	original.UID = "original-uid"
+	replacement := original.DeepCopy()
+	replacement.UID = "replacement-uid"
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(replacement).Build()
+	provider := &mockSandboxProvider{claimName: "ls-analysis-replacement-uid"}
+	caller := &SandboxAgentCaller{Sandbox: provider, K8sClient: fc, APIReader: fc, Namespace: "test-ns"}
+
+	err := caller.Analyze(ctx, original, testSandboxStep())
+	if !errors.Is(err, ErrRunReplaced) {
+		t.Fatalf("Analyze() error = %v, want %v", err, ErrRunReplaced)
+	}
+	if provider.claimCalls != 0 {
+		t.Fatalf("sandbox Create calls = %d, want 0 for a replaced run", provider.claimCalls)
+	}
+}
+
+func TestPersistedRunRejectsUIDChange(t *testing.T) {
+	ctx := context.Background()
+	original := testSandboxAgenticRun()
+	original.UID = "original-uid"
+	replacement := original.DeepCopy()
+	replacement.UID = "replacement-uid"
+
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(replacement).Build()
+	caller := &SandboxAgentCaller{K8sClient: fc, APIReader: fc}
+	if _, err := caller.persistedRun(ctx, original); !errors.Is(err, ErrRunReplaced) {
+		t.Fatalf("persistedRun() error = %v, want %v", err, ErrRunReplaced)
+	}
+}
+
+func TestSandboxAgentCallerUsesAPIReaderForStop(t *testing.T) {
+	ctx := context.Background()
+	run := testSandboxAgenticRun()
+	run.UID = "run-uid"
+	stopped := run.DeepCopy()
+	stopped.Status.Conditions = append(stopped.Status.Conditions, metav1.Condition{
+		Type:   agenticv1alpha1.AgenticRunConditionStopping,
+		Status: metav1.ConditionTrue,
+		Reason: reasonSystemSuspended,
+	})
+
+	staleCache := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).Build()
+	authoritative := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(stopped).Build()
+	provider := &mockSandboxProvider{claimName: "claim"}
+	caller := &SandboxAgentCaller{Sandbox: provider, K8sClient: staleCache, APIReader: authoritative, Namespace: "test-ns"}
+
+	err := caller.Analyze(ctx, run, testSandboxStep())
+	if !errors.Is(err, ErrRunStopAccepted) {
+		t.Fatalf("Analyze() error = %v, want %v", err, ErrRunStopAccepted)
+	}
+	if provider.claimCalls != 0 {
+		t.Fatalf("sandbox Create calls = %d, want 0 for a stopping run", provider.claimCalls)
 	}
 }

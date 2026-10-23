@@ -22,7 +22,11 @@ import (
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
-const suspensionVAPName = "agentic.openshift.io-agenticrun-suspension"
+const (
+	suspensionVAPName   = "agentic.openshift.io-agenticrun-suspension"
+	configResumeVAPName = "agentic.openshift.io-agenticolsconfig-resume"
+	holdingSecretName   = "e2e-suspend-hold"
+)
 
 // TestSuspension verifies the full suspension lifecycle: activating the kill
 // switch emergency-stops an in-flight run, sets the Suspended=True status
@@ -111,6 +115,9 @@ func TestSuspension_AdmissionRejectsCreate(t *testing.T) {
 	if getErr := c.Get(ctx, types.NamespacedName{Name: name, Namespace: testNS}, &got); !apierrors.IsNotFound(getErr) {
 		t.Fatalf("expected AgenticRun not to exist after admission reject, get err=%v", getErr)
 	}
+	// No runs are left to stop, so the config reaches a terminal reason and
+	// its cleanup Delete is admitted.
+	waitForConfigSuspended(t, c, 0)
 }
 
 // TestSuspension_AdmissionAllowsCreateWhenConfigAbsent verifies rule 11c:
@@ -121,12 +128,9 @@ func TestSuspension_AdmissionAllowsCreateWhenConfigAbsent(t *testing.T) {
 
 	assertSuspensionVAPInstalled(t, c)
 
-	// Ensure the param object is absent (other e2e tests may leave it).
-	if err := c.Delete(ctx, &agenticv1alpha1.AgenticOLSConfig{
-		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
-	}); err != nil && !apierrors.IsNotFound(err) {
-		t.Fatalf("delete AgenticOLSConfig: %v", err)
-	}
+	// Ensure the param object is absent (other e2e tests may leave it). A
+	// suspended config must reach a terminal reason before DELETE is admitted.
+	deleteConfigWhenResumable(t, c)
 	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
 		var cfg agenticv1alpha1.AgenticOLSConfig
 		getErr := c.Get(ctx, types.NamespacedName{Name: "cluster"}, &cfg)
@@ -181,6 +185,7 @@ func TestSuspension_InFlight(t *testing.T) {
 
 	// The AgenticOLSConfig watch re-queues all non-terminal proposals.
 	waitForPhase(t, c, prop.Name, agenticv1alpha1.AgenticRunPhaseEmergencyStopped)
+	waitForConfigSuspended(t, c, 1)
 	t.Log("in-flight run terminated by suspension guard")
 }
 
@@ -212,6 +217,10 @@ func TestSuspension_ResumeNewAgenticRun(t *testing.T) {
 	})
 	t.Log("confirmed admission blocking while suspended")
 
+	// The resume VAP only accepts the patch after the operator has confirmed
+	// teardown and run outcomes.
+	waitForConfigSuspended(t, c, 0)
+
 	// Resume via raw JSON merge patch — avoids omitempty/omitzero serialization
 	// issues with bool false, and sends a MODIFIED watch event that the informer
 	// cache propagates faster than a DELETE.
@@ -236,6 +245,206 @@ func TestSuspension_ResumeNewAgenticRun(t *testing.T) {
 	t.Log("new run proceeded normally after resume")
 }
 
+// TestSuspension_ResumeRejectedUntilTerminal verifies the AgenticOLSConfig
+// UPDATE VAP: a suspended config cannot be patched to false while a managed
+// workload keeps the Suspended condition in Stopping.
+func TestSuspension_ResumeRejectedUntilTerminal(t *testing.T) {
+	c := newClient(t)
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		releaseHoldingSecret(t, c)
+		deleteConfigWhenResumable(t, c)
+	})
+	releaseHoldingSecret(t, c)
+	createHoldingSecret(t, c)
+
+	config := &agenticv1alpha1.AgenticOLSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Spec:       agenticv1alpha1.AgenticOLSConfigSpec{Suspended: true},
+	}
+	if err := c.Create(ctx, config); err != nil {
+		t.Fatalf("create AgenticOLSConfig: %v", err)
+	}
+	waitForConfigReason(t, c, "Stopping")
+
+	patch := client.RawPatch(types.MergePatchType, []byte(`{"spec":{"suspended":false}}`))
+	err := c.Patch(ctx, config, patch)
+	if !admissionRejectedWith(err, "AdminActivated") {
+		t.Fatalf("resume patch error = %v, want admission denial mentioning AdminActivated", err)
+	}
+	t.Log("resume denied while teardown is Stopping")
+
+	releaseHoldingSecret(t, c)
+	waitForConfigSuspended(t, c, 0)
+	if err := c.Patch(ctx, config, patch); err != nil {
+		t.Fatalf("resume patch after terminal condition: %v", err)
+	}
+	waitForConfigDeactivated(t, c)
+}
+
+// TestSuspension_DeleteRejectedUntilTerminal verifies the AgenticOLSConfig
+// DELETE VAP. Deletion is the second resume path and must follow the same
+// teardown gate.
+func TestSuspension_DeleteRejectedUntilTerminal(t *testing.T) {
+	c := newClient(t)
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		releaseHoldingSecret(t, c)
+		deleteConfigWhenResumable(t, c)
+	})
+	releaseHoldingSecret(t, c)
+	createHoldingSecret(t, c)
+
+	config := &agenticv1alpha1.AgenticOLSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Spec:       agenticv1alpha1.AgenticOLSConfigSpec{Suspended: true},
+	}
+	if err := c.Create(ctx, config); err != nil {
+		t.Fatalf("create AgenticOLSConfig: %v", err)
+	}
+	waitForConfigReason(t, c, "Stopping")
+
+	if err := c.Delete(ctx, config); !admissionRejectedWith(err, "AdminActivated") {
+		t.Fatalf("delete error = %v, want admission denial mentioning AdminActivated", err)
+	}
+	t.Log("delete denied while teardown is Stopping")
+
+	releaseHoldingSecret(t, c)
+	waitForConfigSuspended(t, c, 0)
+	if err := c.Delete(ctx, config); err != nil {
+		t.Fatalf("delete after terminal condition: %v", err)
+	}
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		var current agenticv1alpha1.AgenticOLSConfig
+		getErr := c.Get(ctx, types.NamespacedName{Name: "cluster"}, &current)
+		return apierrors.IsNotFound(getErr), nil
+	})
+	if err != nil {
+		t.Fatalf("config still present after admitted delete: %v", err)
+	}
+}
+
+// createHoldingSecret creates a labeled Secret whose finalizer keeps the
+// cluster sweep in Stopping. The sweep deletes it; the finalizer proves that
+// an accepted Delete request is not the same as confirmed removal.
+func createHoldingSecret(t *testing.T, c client.Client) {
+	t.Helper()
+	ctx := context.Background()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       holdingSecretName,
+			Namespace:  testNS,
+			Labels:     map[string]string{"agentic.openshift.io/run": "e2e-hold"},
+			Finalizers: []string{"e2e.example.com/hold"},
+		},
+	}
+	if err := c.Create(ctx, secret); err != nil {
+		t.Fatalf("create holding Secret: %v", err)
+	}
+}
+
+// releaseHoldingSecret removes the finalizer so a pending sweep can finish.
+func releaseHoldingSecret(t *testing.T, c client.Client) {
+	t.Helper()
+	ctx := context.Background()
+	key := types.NamespacedName{Name: holdingSecretName, Namespace: testNS}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, key, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("get holding Secret: %v", err)
+	}
+	secret.SetFinalizers(nil)
+	if err := c.Update(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("release holding Secret: %v", err)
+	}
+	if err := c.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("delete holding Secret: %v", err)
+	}
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		return apierrors.IsNotFound(c.Get(ctx, key, &corev1.Secret{})), nil
+	})
+	if err != nil {
+		t.Fatalf("holding Secret was not removed: %v", err)
+	}
+}
+
+// deleteConfigWhenResumable removes a prior AgenticOLSConfig, waiting for a
+// terminal Suspended reason when the config is still suspended.
+func deleteConfigWhenResumable(t *testing.T, c client.Client) {
+	t.Helper()
+	ctx := context.Background()
+	var config agenticv1alpha1.AgenticOLSConfig
+	if err := c.Get(ctx, types.NamespacedName{Name: "cluster"}, &config); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
+		}
+		t.Fatalf("get AgenticOLSConfig: %v", err)
+	}
+	if config.Spec.Suspended {
+		waitForConfigTerminal(t, c)
+	}
+	if err := c.Delete(ctx, &config); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("delete AgenticOLSConfig: %v", err)
+	}
+}
+
+// waitForConfigReason polls for a specific Suspended=True reason.
+func waitForConfigReason(t *testing.T, c client.Client, reason string) {
+	t.Helper()
+	ctx := context.Background()
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		var cfg agenticv1alpha1.AgenticOLSConfig
+		if err := c.Get(ctx, types.NamespacedName{Name: "cluster"}, &cfg); err != nil {
+			return false, err
+		}
+		cond := meta.FindStatusCondition(cfg.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+		if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != reason {
+			t.Logf("polling config status: condition=%v", cond)
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("timed out waiting for Suspended=True/%s: %v", reason, err)
+	}
+}
+
+// waitForConfigTerminal polls for either terminal reason accepted by the VAP.
+func waitForConfigTerminal(t *testing.T, c client.Client) {
+	t.Helper()
+	ctx := context.Background()
+	err := wait.PollUntilContextTimeout(ctx, pollInterval, pollTimeout, true, func(ctx context.Context) (bool, error) {
+		var cfg agenticv1alpha1.AgenticOLSConfig
+		if err := c.Get(ctx, types.NamespacedName{Name: "cluster"}, &cfg); err != nil {
+			return false, err
+		}
+		cond := meta.FindStatusCondition(cfg.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+		if cond == nil || cond.Status != metav1.ConditionTrue ||
+			(cond.Reason != "AdminActivated" && cond.Reason != "AdminActivatedWithErrors") {
+			t.Logf("polling config status: condition=%v", cond)
+			return false, nil
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("timed out waiting for terminal Suspended condition: %v", err)
+	}
+}
+
+func admissionRejectedWith(err error, text string) bool {
+	if err == nil {
+		return false
+	}
+	if !apierrors.IsForbidden(err) && !apierrors.IsInvalid(err) {
+		return false
+	}
+	return strings.Contains(err.Error(), text)
+}
+
 // assertSuspensionVAPInstalled fails if the suspension policy or binding is missing.
 func assertSuspensionVAPInstalled(t *testing.T, c client.Client) {
 	t.Helper()
@@ -252,6 +461,30 @@ func assertSuspensionVAPInstalled(t *testing.T, c client.Client) {
 	if binding.Spec.ParamRef == nil || binding.Spec.ParamRef.ParameterNotFoundAction == nil ||
 		*binding.Spec.ParamRef.ParameterNotFoundAction != admissionregistrationv1.AllowAction {
 		t.Fatalf("expected binding parameterNotFoundAction=Allow, got %+v", binding.Spec.ParamRef)
+	}
+
+	var resumePolicy admissionregistrationv1.ValidatingAdmissionPolicy
+	if err := c.Get(ctx, types.NamespacedName{Name: configResumeVAPName}, &resumePolicy); err != nil {
+		t.Fatalf("ValidatingAdmissionPolicy %s not installed: %v", configResumeVAPName, err)
+	}
+	if len(resumePolicy.Spec.Validations) == 0 {
+		t.Fatalf("resume policy has no validations: %+v", resumePolicy.Spec)
+	}
+	var resumeBinding admissionregistrationv1.ValidatingAdmissionPolicyBinding
+	if err := c.Get(ctx, types.NamespacedName{Name: configResumeVAPName}, &resumeBinding); err != nil {
+		t.Fatalf("ValidatingAdmissionPolicyBinding %s not installed: %v", configResumeVAPName, err)
+	}
+	if resumeBinding.Spec.PolicyName != configResumeVAPName {
+		t.Fatalf("resume binding policyName = %q, want %q", resumeBinding.Spec.PolicyName, configResumeVAPName)
+	}
+	deny := false
+	for _, action := range resumeBinding.Spec.ValidationActions {
+		if action == admissionregistrationv1.Deny {
+			deny = true
+		}
+	}
+	if !deny {
+		t.Fatalf("resume binding actions = %v, want Deny", resumeBinding.Spec.ValidationActions)
 	}
 }
 

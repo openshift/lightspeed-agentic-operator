@@ -1,0 +1,9 @@
+# Binds the AgenticOLSConfig resume policy to its UPDATE/DELETE rules.
+# Spec: .ai/spec/what/system-config.md rule 11j (OLS-4133).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: agentic.openshift.io-agenticolsconfig-resume
+spec:
+  policyName: agentic.openshift.io-agenticolsconfig-resume
+  validationActions: [Deny]

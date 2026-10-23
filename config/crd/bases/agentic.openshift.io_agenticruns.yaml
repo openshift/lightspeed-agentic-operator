@@ -155,8 +155,8 @@ spec:
                   the operator detects (generation > observedGeneration) and triggers
                   re-analysis with the feedback appended to the original request.
 
-                  Mutable: this and terminalTTL below are the only mutable spec
-                  fields. All other spec fields are immutable via CEL rules.
+                  Mutable: this field can request re-analysis. The only other mutable
+                  spec field is `terminalTTL` (until terminalTime).
                 maxLength: 32768
                 minLength: 1
                 type: string
@@ -598,8 +598,8 @@ spec:
               conditions:
                 description: |-
                   conditions represent the latest available observations using the
-                  standard Kubernetes condition pattern. Condition types include:
-                  Analyzed, Approved, Executed, Verified, and Escalated.
+                  standard Kubernetes condition pattern. Run-level condition types include
+                  Analyzed, Executed, Verified, Denied, Escalated, EmergencyStopped, and Stopping.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
