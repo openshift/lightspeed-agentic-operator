@@ -42,7 +42,7 @@ func (m *mockSandboxProvider) Create(_ context.Context, _ *agenticv1alpha1.Agent
 	}
 	return m.claimName, m.claimErr
 }
-func (m *mockSandboxProvider) Release(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *SpokeAccess) error {
+func (m *mockSandboxProvider) Release(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *SpokeAccess, _ bool) error {
 	m.releaseCalls++
 	return m.releaseErr
 }
@@ -184,35 +184,86 @@ func TestSandboxAgentCaller_PatchesSandboxInfo(t *testing.T) {
 	}
 }
 
-func TestSandboxAgentCaller_ReleaseSandbox(t *testing.T) {
-	sandbox := &mockSandboxProvider{}
-	caller := newTestSandboxAgentCaller(sandbox)
+func TestSandboxAgentCaller_ReleaseUsesKubernetesDefaultPodGrace(t *testing.T) {
+	tests := []struct {
+		name        string
+		claimNames  map[string]string
+		releaseStep string
+		bulk        bool
+	}{
+		{
+			name: "per-step",
+			claimNames: map[string]string{
+				"analysis": "ls-analysis-caller-test",
+			},
+			releaseStep: "analysis",
+		},
+		{
+			name: "bulk",
+			claimNames: map[string]string{
+				"analysis":     "ls-analysis-caller-test",
+				"execution":    "ls-execution-caller-test",
+				"verification": "ls-verification-caller-test",
+			},
+			bulk: true,
+		},
+	}
 
-	run := testSandboxAgenticRun()
-	run.Status.Steps.Analysis.Sandbox.ClaimName = "test-claim"
-	if err := caller.ReleaseSandbox(context.Background(), run, "analysis"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sandbox.releaseCalls != 1 {
-		t.Errorf("expected 1 Release call, got %d", sandbox.releaseCalls)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := testSMRun()
+			for step, claimName := range tt.claimNames {
+				switch step {
+				case "analysis":
+					run.Status.Steps.Analysis.Sandbox.ClaimName = claimName
+				case "execution":
+					run.Status.Steps.Execution.Sandbox.ClaimName = claimName
+				case "verification":
+					run.Status.Steps.Verification.Sandbox.ClaimName = claimName
+				default:
+					t.Fatalf("unsupported step %q", step)
+				}
+			}
 
-func TestSandboxAgentCaller_ReleaseSandboxes(t *testing.T) {
-	run := testSandboxAgenticRun()
-	run.Status.Steps = agenticv1alpha1.StepsStatus{
-		Analysis:     agenticv1alpha1.AnalysisStepStatus{Sandbox: agenticv1alpha1.SandboxInfo{ClaimName: "ls-analysis-test"}},
-		Execution:    agenticv1alpha1.ExecutionStepStatus{Sandbox: agenticv1alpha1.SandboxInfo{ClaimName: "ls-execution-test"}},
-		Verification: agenticv1alpha1.VerificationStepStatus{Sandbox: agenticv1alpha1.SandboxInfo{ClaimName: "ls-verification-test"}},
-	}
-	sandbox := &mockSandboxProvider{}
-	caller := newTestSandboxAgentCaller(sandbox)
+			objects := []client.Object{run}
+			for _, claimName := range tt.claimNames {
+				objects = append(objects, sandboxReleaseObjects(t, run, claimName, claimName, false)[1])
+			}
+			fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objects...).Build()
+			recorder := &podDeleteOptionsClient{Client: fc}
+			manager := newTestSandboxManager(recorder, testCache(t, "bare-pod"))
+			caller := &SandboxAgentCaller{Sandbox: manager, K8sClient: recorder, Namespace: "test-ns"}
 
-	if err := caller.ReleaseSandboxes(context.Background(), run); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if sandbox.releaseCalls != 3 {
-		t.Errorf("expected 3 Release calls, got %d", sandbox.releaseCalls)
+			var err error
+			if tt.bulk {
+				err = caller.ReleaseSandboxes(context.Background(), run, false)
+			} else {
+				err = caller.ReleaseSandbox(context.Background(), run, tt.releaseStep)
+			}
+			if err != nil {
+				t.Fatalf("release: %v", err)
+			}
+
+			if len(recorder.podDeletes) != len(tt.claimNames) {
+				t.Fatalf("Pod delete requests = %+v, want %d", recorder.podDeletes, len(tt.claimNames))
+			}
+			want := make(map[string]struct{}, len(tt.claimNames))
+			for _, claimName := range tt.claimNames {
+				want[claimName] = struct{}{}
+			}
+			for _, call := range recorder.podDeletes {
+				if _, ok := want[call.name]; !ok {
+					t.Fatalf("unexpected or duplicate Pod delete request for %q", call.name)
+				}
+				delete(want, call.name)
+				if call.grace != nil {
+					t.Fatalf("Pod %q delete GracePeriodSeconds = %d, want omitted", call.name, *call.grace)
+				}
+			}
+			if len(want) != 0 {
+				t.Fatalf("missing Pod delete requests for %v", want)
+			}
+		})
 	}
 }
 
@@ -230,7 +281,7 @@ func TestSandboxAgentCaller_ReleaseSandboxes_PartialError(t *testing.T) {
 	_ = fc.Create(context.Background(), fakeBaseTemplate())
 	caller := &SandboxAgentCaller{Sandbox: tracker, K8sClient: fc, Namespace: "test-ns"}
 
-	if err := caller.ReleaseSandboxes(context.Background(), run); err == nil {
+	if err := caller.ReleaseSandboxes(context.Background(), run, false); err == nil {
 		t.Fatal("expected error when one release fails")
 	}
 	if len(*tracker.released) != 3 {
@@ -282,7 +333,7 @@ type trackingMockSandbox struct {
 func (m *trackingMockSandbox) Create(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ string, _ *agenticv1alpha1.Agent, _ *agenticv1alpha1.LLMProvider, _ *agenticv1alpha1.ToolsSpec, _ time.Duration, _ *agentContext) (string, error) {
 	return "", nil
 }
-func (m *trackingMockSandbox) Release(_ context.Context, run *agenticv1alpha1.AgenticRun, step string, _ *SpokeAccess) error {
+func (m *trackingMockSandbox) Release(_ context.Context, run *agenticv1alpha1.AgenticRun, step string, _ *SpokeAccess, _ bool) error {
 	claimName := sandboxClaimName(run, step)
 	*m.released = append(*m.released, claimName)
 	if m.errOnClaim != "" && claimName == m.errOnClaim {

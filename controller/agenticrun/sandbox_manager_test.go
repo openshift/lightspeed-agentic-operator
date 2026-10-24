@@ -403,7 +403,7 @@ func TestRelease_BarePod(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(pod).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	if err := mgr.Release(context.Background(), run, "analysis", nil); err != nil {
+	if err := mgr.Release(context.Background(), run, "analysis", nil, false); err != nil {
 		t.Fatalf("Release failed: %v", err)
 	}
 
@@ -420,7 +420,7 @@ func TestRelease_BarePod_Idempotent(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	if err := mgr.Release(context.Background(), run, "analysis", nil); err != nil {
+	if err := mgr.Release(context.Background(), run, "analysis", nil, false); err != nil {
 		t.Fatalf("Release of non-existent pod should succeed, got: %v", err)
 	}
 }
@@ -431,7 +431,7 @@ func TestRelease_SandboxClaim_Idempotent(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	if err := mgr.Release(context.Background(), run, "analysis", nil); err != nil {
+	if err := mgr.Release(context.Background(), run, "analysis", nil, false); err != nil {
 		t.Fatalf("Release of non-existent claim should succeed, got: %v", err)
 	}
 }
@@ -862,7 +862,7 @@ func TestRelease_SpokeRun_CleansUpSpoke(t *testing.T) {
 	}
 
 	spoke := &SpokeAccess{Client: spokeFC, Namespace: spokeManagedNamespace}
-	if err := mgr.Release(context.Background(), run, "analysis", spoke); err != nil {
+	if err := mgr.Release(context.Background(), run, "analysis", spoke, false); err != nil {
 		t.Fatalf("Release failed: %v", err)
 	}
 
@@ -909,7 +909,7 @@ func TestRelease_SpokeUnreachable_HubCleanupContinues(t *testing.T) {
 	}
 
 	// Release should not error — spoke failure is logged, hub cleanup proceeds.
-	if err := mgr.Release(context.Background(), run, "analysis", nil); err != nil {
+	if err := mgr.Release(context.Background(), run, "analysis", nil, false); err != nil {
 		t.Fatalf("Release should succeed even when spoke is unreachable, got: %v", err)
 	}
 

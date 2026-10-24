@@ -173,7 +173,7 @@ func TestReleaseSandboxes_SpokeAccessFailure(t *testing.T) {
 				}
 			}
 
-			err := caller.ReleaseSandboxes(context.Background(), run)
+			err := caller.ReleaseSandboxes(context.Background(), run, false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ReleaseSandboxes() error = %v, wantErr %v", err, tt.wantErr)
 			}

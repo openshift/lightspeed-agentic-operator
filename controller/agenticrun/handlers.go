@@ -354,7 +354,7 @@ func (r *AgenticRunReconciler) handleSuspension(
 	log.Info("terminating run due to system suspension", LogKeyPhase, phase)
 
 	if hasSandboxClaims(run) {
-		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
+		if err := r.Agent.ReleaseSandboxes(ctx, run, true); err != nil {
 			log.Error(err, "best-effort sandbox release during suspension")
 		}
 	}

@@ -190,7 +190,7 @@ func (ta *testAgentCaller) Escalate(ctx context.Context, run *agenticv1alpha1.Ag
 	return nil
 }
 
-func (ta *testAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) error {
+func (ta *testAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ bool) error {
 	ta.releaseAllCount++
 	return nil
 }
@@ -809,6 +809,185 @@ func TestHandleSuspension(t *testing.T) {
 					t.Error("EmergencyStopped condition not found")
 				}
 			}
+		})
+	}
+}
+
+type recordedPodDelete struct {
+	name  string
+	grace *int64
+}
+
+type podDeleteOptionsClient struct {
+	client.Client
+	podDeletes []recordedPodDelete
+}
+
+func (c *podDeleteOptionsClient) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if pod, ok := obj.(*corev1.Pod); ok {
+		deleteOptions := (&client.DeleteOptions{}).ApplyOptions(opts)
+		var grace *int64
+		if deleteOptions.GracePeriodSeconds != nil {
+			value := *deleteOptions.GracePeriodSeconds
+			grace = &value
+		}
+		c.podDeletes = append(c.podDeletes, recordedPodDelete{name: pod.Name, grace: grace})
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func sandboxReleaseObjects(t *testing.T, run *agenticv1alpha1.AgenticRun, claimName, podName string, claimMode bool) []client.Object {
+	t.Helper()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: "test-ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	objects := []client.Object{run, pod}
+	if !claimMode {
+		return objects
+	}
+
+	claim := &unstructured.Unstructured{}
+	claim.SetGroupVersionKind(smClaimGVK)
+	claim.SetName(claimName)
+	claim.SetNamespace("test-ns")
+	claim.SetUID(types.UID("claim-uid"))
+	if err := unstructured.SetNestedField(claim.Object, "sandbox-real", "status", "sandbox", "name"); err != nil {
+		t.Fatalf("set SandboxClaim status: %v", err)
+	}
+
+	sandbox := &unstructured.Unstructured{}
+	sandbox.SetGroupVersionKind(smSandboxGVK)
+	sandbox.SetName("sandbox-real")
+	sandbox.SetNamespace("test-ns")
+	sandbox.SetUID(types.UID("sandbox-uid"))
+	if podName != sandbox.GetName() {
+		sandbox.SetAnnotations(map[string]string{"agents.x-k8s.io/pod-name": podName})
+	}
+	controller := true
+	sandbox.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: smClaimGVK.GroupVersion().String(),
+		Kind:       smClaimGVK.Kind,
+		Name:       claimName,
+		UID:        claim.GetUID(),
+		Controller: &controller,
+	}})
+	pod.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: smSandboxGVK.GroupVersion().String(),
+		Kind:       smSandboxGVK.Kind,
+		Name:       sandbox.GetName(),
+		UID:        sandbox.GetUID(),
+		Controller: &controller,
+	}}
+	return append(objects, claim, sandbox)
+}
+
+func TestHandleSuspension_ZeroGracePodDeletion(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		mode          string
+		podName       string
+		claimMode     bool
+		ownerMismatch string
+		wantDelete    bool
+	}{
+		{name: "bare-pod", mode: "bare-pod", podName: "ls-analysis-abc-123", wantDelete: true},
+		{name: "sandbox-claim backing Pod", mode: "sandbox-claim", podName: "backing-pod", claimMode: true, wantDelete: true},
+		{name: "sandbox-claim Sandbox name fallback", mode: "sandbox-claim", podName: "sandbox-real", claimMode: true, wantDelete: true},
+		{name: "sandbox not owned by claim", mode: "sandbox-claim", podName: "backing-pod", claimMode: true, ownerMismatch: "sandbox"},
+		{name: "Pod not owned by Sandbox", mode: "sandbox-claim", podName: "backing-pod", claimMode: true, ownerMismatch: "pod"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			run := testSMRun()
+			claimName := "ls-analysis-abc-123"
+			run.Status.Steps.Analysis.Sandbox.ClaimName = claimName
+			objects := sandboxReleaseObjects(t, run, claimName, tt.podName, tt.claimMode)
+			if tt.ownerMismatch != "" {
+				pod := objects[1].(*corev1.Pod)
+				sandbox := objects[3].(*unstructured.Unstructured)
+				controller := true
+				switch tt.ownerMismatch {
+				case "sandbox":
+					sandbox.SetOwnerReferences([]metav1.OwnerReference{{
+						APIVersion: smClaimGVK.GroupVersion().String(),
+						Kind:       smClaimGVK.Kind,
+						Name:       claimName,
+						UID:        types.UID("other-claim"),
+						Controller: &controller,
+					}})
+				case "pod":
+					pod.OwnerReferences = []metav1.OwnerReference{{
+						APIVersion: smSandboxGVK.GroupVersion().String(),
+						Kind:       smSandboxGVK.Kind,
+						Name:       sandbox.GetName(),
+						UID:        types.UID("other-sandbox"),
+						Controller: &controller,
+					}}
+				}
+			}
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme()).
+				WithObjects(objects...).
+				WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+				Build()
+			recorder := &podDeleteOptionsClient{Client: fc}
+			cache := testCache(t, tt.mode)
+			manager := newTestSandboxManager(recorder, cache)
+			caller := &SandboxAgentCaller{Sandbox: manager, K8sClient: recorder, Namespace: "test-ns"}
+			r := &AgenticRunReconciler{Client: recorder, Agent: caller, Config: cache, Namespace: "test-ns"}
+
+			if _, err := r.handleSuspension(context.Background(), run); err != nil {
+				t.Fatalf("handleSuspension: %v", err)
+			}
+
+			found := false
+			for _, call := range recorder.podDeletes {
+				if call.name != tt.podName {
+					continue
+				}
+				if !tt.wantDelete {
+					t.Fatalf("unexpected delete request for Pod %q with mismatched ownership", call.name)
+				}
+				if call.grace == nil || *call.grace != 0 {
+					t.Fatalf("Pod %q delete grace = %v, want zero", call.name, call.grace)
+				}
+				found = true
+			}
+			if found != tt.wantDelete {
+				t.Fatalf("backing Pod delete found = %t, want %t; requests: %+v", found, tt.wantDelete, recorder.podDeletes)
+			}
+		})
+	}
+}
+
+func TestSandboxManagerReleaseKeepsDefaultPodGrace(t *testing.T) {
+	for _, mode := range []string{"bare-pod", "sandbox-claim"} {
+		t.Run(mode, func(t *testing.T) {
+			run := testSMRun()
+			claimName := "ls-analysis-abc-123"
+			run.Status.Steps.Analysis.Sandbox.ClaimName = claimName
+			fc := fake.NewClientBuilder().
+				WithScheme(testScheme()).
+				WithObjects(sandboxReleaseObjects(t, run, claimName, claimName, mode == "sandbox-claim")...).
+				Build()
+			recorder := &podDeleteOptionsClient{Client: fc}
+			manager := newTestSandboxManager(recorder, testCache(t, mode))
+
+			if err := manager.Release(context.Background(), run, "analysis", nil, false); err != nil {
+				t.Fatalf("Release: %v", err)
+			}
+
+			for _, call := range recorder.podDeletes {
+				if call.name != claimName {
+					continue
+				}
+				if call.grace != nil {
+					t.Fatalf("ordinary Pod delete grace = %d, want Kubernetes default", *call.grace)
+				}
+				return
+			}
+			t.Fatalf("no Pod delete request for %q; requests: %+v", claimName, recorder.podDeletes)
 		})
 	}
 }

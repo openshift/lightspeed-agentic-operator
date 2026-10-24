@@ -53,7 +53,7 @@ type AgentCaller interface {
 	Execute(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption) error
 	Verify(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep, option *agenticv1alpha1.RemediationOption, exec *ExecutionOutput) error
 	Escalate(ctx context.Context, run *agenticv1alpha1.AgenticRun, step resolvedStep) error
-	ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error
+	ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun, zeroGrace bool) error
 	ReleaseSandbox(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string) error
 }
 
@@ -76,7 +76,7 @@ func (s *StubAgentCaller) Escalate(_ context.Context, _ *agenticv1alpha1.Agentic
 	return nil
 }
 
-func (s *StubAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun) error {
+func (s *StubAgentCaller) ReleaseSandboxes(_ context.Context, _ *agenticv1alpha1.AgenticRun, _ bool) error {
 	return nil
 }
 

@@ -80,6 +80,8 @@ oc agentic version
 
 Default namespace is `openshift-lightspeed` unless overridden with `-n` or kubeconfig context.
 
+Suspension requests zero-grace deletion of sandbox Pods in both bare-pod and sandbox-claim modes, bypassing graceful shutdown. Ordinary cleanup keeps its existing termination behavior. This API request does not guarantee immediate process termination on an unreachable node.
+
 ### Preserve a Failed Sandbox for Debugging
 
 To retain the sandbox Pod and associated diagnostic resources after a failed run, add this annotation to the `AgenticRun`:

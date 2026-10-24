@@ -90,7 +90,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			r.Audit.Cleanup(&run)
 		}
 		if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
-			if err := r.Agent.ReleaseSandboxes(ctx, &run); err != nil {
+			if err := r.Agent.ReleaseSandboxes(ctx, &run, false); err != nil {
 				return ctrl.Result{}, fmt.Errorf("release sandboxes during deletion: %w", err)
 			}
 			original := run.DeepCopy()
@@ -325,7 +325,7 @@ func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	if hasSandboxClaims(run) {
-		if err := r.Agent.ReleaseSandboxes(ctx, run); err != nil {
+		if err := r.Agent.ReleaseSandboxes(ctx, run, false); err != nil {
 			log.Error(err, "sandbox cleanup failed at terminal phase")
 		}
 	}

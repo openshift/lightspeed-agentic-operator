@@ -117,10 +117,11 @@ type agentPreviousAttempt struct {
 // SandboxLifecycle is the interface for sandbox create/release.
 // Create handles all sandbox setup: SA, RBAC, ConfigMap, pod, owner refs.
 // Release handles all cleanup: pod deletion (GC handles children) plus
-// explicit cross-namespace/cluster-scoped RBAC teardown.
+// explicit cross-namespace/cluster-scoped RBAC teardown. zeroGrace requests
+// zero-grace Pod deletion; false retains normal graceful cleanup.
 type SandboxLifecycle interface {
 	Create(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, agent *agenticv1alpha1.Agent, llm *agenticv1alpha1.LLMProvider, tools *agenticv1alpha1.ToolsSpec, deadline time.Duration, agentCtx *agentContext) (string, error)
-	Release(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, spoke *SpokeAccess) error
+	Release(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, spoke *SpokeAccess, zeroGrace bool) error
 }
 
 // SandboxAgentCaller implements AgentCaller by creating a sandbox pod
@@ -201,13 +202,13 @@ func (s *SandboxAgentCaller) ReleaseSandbox(ctx context.Context, run *agenticv1a
 	if spokeErr != nil {
 		logf.FromContext(ctx).Error(spokeErr, "release: spoke unreachable, skipping spoke cleanup")
 	}
-	if err := s.Sandbox.Release(ctx, run, step, spoke); err != nil {
+	if err := s.Sandbox.Release(ctx, run, step, spoke, false); err != nil {
 		return err
 	}
 	return spokeErr
 }
 
-func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun) error {
+func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv1alpha1.AgenticRun, zeroGrace bool) error {
 	log := logf.FromContext(ctx)
 	var firstErr error
 
@@ -229,7 +230,7 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 		if step == "execution" {
 			executionReleased = true
 		}
-		if err := s.Sandbox.Release(ctx, run, step, spoke); err != nil {
+		if err := s.Sandbox.Release(ctx, run, step, spoke, zeroGrace); err != nil {
 			log.Error(err, "failed to release sandbox", LogKeyClaim, claimName, LogKeyStep, step)
 			if firstErr == nil {
 				firstErr = err

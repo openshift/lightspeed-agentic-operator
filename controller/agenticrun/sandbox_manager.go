@@ -52,6 +52,9 @@ var smSandboxGVK = schema.GroupVersionKind{
 	Group: "agents.x-k8s.io", Version: "v1beta1", Kind: "Sandbox",
 }
 
+// sandboxPodNameAnnotation records an adopted Pod's name when it differs from the Sandbox name.
+const sandboxPodNameAnnotation = "agents.x-k8s.io/pod-name"
+
 // SandboxManager manages sandbox lifecycle: create, wait-ready, release.
 // Internally it decides between bare-pod and sandbox-claim mode based on
 // the configuration cache, builds the PodSpec via PodSpecBuilder, and
@@ -707,7 +710,8 @@ func podSpecToUnstructured(podSpec *corev1.PodSpec) (map[string]any, error) {
 // Release ends the audit span and deletes the sandbox resource. spoke is
 // pre-resolved by the caller (ReleaseSandbox / ReleaseSandboxes) so that
 // bulk teardown reads the kubeconfig Secret only once.
-func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, spoke *SpokeAccess) error {
+// zeroGrace requests zero-grace Pod deletion; false keeps the normal grace period.
+func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, spoke *SpokeAccess, zeroGrace bool) error {
 	if m.audit != nil {
 		m.audit.CompleteStep(run, step, nil)
 	}
@@ -718,10 +722,15 @@ func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.Agent
 	}
 
 	var firstErr error
-	if err := m.releaseBarePod(ctx, claimName); err != nil {
+	if err := m.releaseBarePod(ctx, claimName, zeroGrace); err != nil {
 		firstErr = err
 	}
 	if cfg := m.config.Get(); cfg != nil && cfg.Sandbox.Mode == sandboxModeSandboxClaim {
+		if zeroGrace {
+			if err := m.releaseSandboxClaimPod(ctx, claimName); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 		if err := m.releaseSandboxClaim(ctx, claimName); err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -748,7 +757,7 @@ func (m *SandboxManager) Release(ctx context.Context, run *agenticv1alpha1.Agent
 	return firstErr
 }
 
-func (m *SandboxManager) releaseBarePod(ctx context.Context, podName string) error {
+func (m *SandboxManager) releaseBarePod(ctx context.Context, podName string, zeroGrace bool) error {
 	log := logf.FromContext(ctx)
 
 	pod := &corev1.Pod{
@@ -758,7 +767,13 @@ func (m *SandboxManager) releaseBarePod(ctx context.Context, podName string) err
 		},
 	}
 
-	if err := m.client.Delete(ctx, pod); err != nil {
+	var err error
+	if zeroGrace {
+		err = m.client.Delete(ctx, pod, client.GracePeriodSeconds(0))
+	} else {
+		err = m.client.Delete(ctx, pod)
+	}
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
@@ -766,6 +781,65 @@ func (m *SandboxManager) releaseBarePod(ctx context.Context, podName string) err
 	}
 
 	log.Info("Released bare pod", LogKeyName, podName)
+	return nil
+}
+
+// releaseSandboxClaimPod follows the claim's bound Sandbox to its backing Pod.
+func (m *SandboxManager) releaseSandboxClaimPod(ctx context.Context, claimName string) error {
+	log := logf.FromContext(ctx)
+
+	claim := &unstructured.Unstructured{}
+	claim.SetGroupVersionKind(smClaimGVK)
+	if err := m.client.Get(ctx, types.NamespacedName{Name: claimName, Namespace: m.namespace}, claim); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get SandboxClaim %q for backing Pod deletion: %w", claimName, err)
+	}
+
+	sandboxName, found, err := unstructured.NestedString(claim.Object, "status", "sandbox", "name")
+	if err != nil {
+		return fmt.Errorf("get backing Sandbox name from SandboxClaim %q: %w", claimName, err)
+	}
+	if !found || sandboxName == "" {
+		return nil
+	}
+
+	sandbox := &unstructured.Unstructured{}
+	sandbox.SetGroupVersionKind(smSandboxGVK)
+	if err := m.client.Get(ctx, types.NamespacedName{Name: sandboxName, Namespace: m.namespace}, sandbox); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get backing Sandbox %q for SandboxClaim %q: %w", sandboxName, claimName, err)
+	}
+	if !metav1.IsControlledBy(sandbox, claim) {
+		return nil
+	}
+
+	podName := sandbox.GetAnnotations()[sandboxPodNameAnnotation]
+	if podName == "" {
+		podName = sandbox.GetName()
+	}
+	pod := &corev1.Pod{}
+	if err := m.client.Get(ctx, types.NamespacedName{Name: podName, Namespace: m.namespace}, pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get backing Pod %q for Sandbox %q: %w", podName, sandboxName, err)
+	}
+	if !metav1.IsControlledBy(pod, sandbox) {
+		return nil
+	}
+
+	if err := m.client.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete backing Pod %q for SandboxClaim %q: %w", podName, claimName, err)
+	}
+
+	log.Info("Deleted backing sandbox Pod with zero grace", LogKeyName, podName, LogKeyClaim, claimName)
 	return nil
 }
 
