@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"syscall"
 	"time"
@@ -98,7 +99,11 @@ func main() {
 	}()
 
 	// --- Check for Sandbox CRDs (determines sandbox-claim mode availability) ---
-	sandboxCRDs := sandboxCRDInstalled(cfg)
+	sandboxCRDs, err := sandboxCRDInstalled(cfg)
+	if err != nil {
+		log.Error(err, "unable to determine Sandbox API availability")
+		os.Exit(1)
+	}
 	if sandboxCRDs {
 		log.Info("Sandbox CRDs detected, sandbox-claim mode available")
 	} else {
@@ -140,10 +145,12 @@ func main() {
 	auditLogger := agenticrun.NewProductionAuditLogger(zapLogger, telemetryProvider)
 
 	// --- Create sandbox manager and agent caller ---
-	sandboxMgr := agenticrun.NewSandboxManager(mgr.GetClient(), cfgCache, namespace, auditLogger)
+	apiReader := mgr.GetAPIReader()
+	sandboxMgr := agenticrun.NewSandboxManager(mgr.GetClient(), apiReader, cfgCache, namespace, auditLogger)
 	agentCaller := &agenticrun.SandboxAgentCaller{
 		Sandbox:   sandboxMgr,
 		K8sClient: mgr.GetClient(),
+		APIReader: apiReader,
 		Namespace: namespace,
 		Audit:     auditLogger,
 	}
@@ -151,7 +158,9 @@ func main() {
 	// --- Register controllers ---
 	if err := (&agenticrun.AgenticRunReconciler{
 		Client:    mgr.GetClient(),
+		APIReader: apiReader,
 		Agent:     agentCaller,
+		Sandbox:   sandboxMgr,
 		Config:    cfgCache,
 		Namespace: namespace,
 		Audit:     auditLogger,
@@ -163,6 +172,8 @@ func main() {
 
 	if err := (&agenticolsconfig.Reconciler{
 		Client:        mgr.GetClient(),
+		APIReader:     apiReader,
+		Sandbox:       sandboxMgr,
 		EventRecorder: mgr.GetEventRecorderFor("agenticolsconfig-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "unable to set up AgenticOLSConfig controller")
@@ -210,14 +221,30 @@ func main() {
 	}
 }
 
-// sandboxCRDInstalled queries the apiextensions API directly to check
-// whether the Sandbox CRD exists, bypassing any cached REST mapper.
-func sandboxCRDInstalled(cfg *rest.Config) bool {
+// sandboxCRDInstalled queries the apiextensions API directly for all CRDs
+// required by sandbox-claim mode, bypassing any cached REST mapper.
+func sandboxCRDInstalled(cfg *rest.Config) (bool, error) {
 	apiext, err := apiextensionsclient.NewForConfig(cfg)
 	if err != nil {
-		return false
+		return false, fmt.Errorf("create API extensions client: %w", err)
 	}
-	_, err = apiext.ApiextensionsV1().CustomResourceDefinitions().Get(
-		context.Background(), "sandboxes.agents.x-k8s.io", metav1.GetOptions{})
-	return err == nil
+	installed := true
+	for _, name := range []string{
+		"sandboxclaims.extensions.agents.x-k8s.io",
+		"sandboxes.agents.x-k8s.io",
+		"sandboxtemplates.extensions.agents.x-k8s.io",
+		"sandboxwarmpools.extensions.agents.x-k8s.io",
+	} {
+		_, err := apiext.ApiextensionsV1().CustomResourceDefinitions().Get(
+			context.Background(), name, metav1.GetOptions{})
+		if err == nil {
+			continue
+		}
+		if apierrors.IsNotFound(err) {
+			installed = false
+			continue
+		}
+		return false, fmt.Errorf("get Sandbox API CRD %q: %w", name, err)
+	}
+	return installed, nil
 }

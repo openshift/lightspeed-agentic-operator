@@ -39,10 +39,11 @@ const (
 	sandboxDeletionTimeout = 2 * time.Minute
 )
 
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete;patch
 // +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxtemplates,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxclaims,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=agents.x-k8s.io,resources=sandboxes,verbs=get;list;watch;patch;delete
+// +kubebuilder:rbac:groups=extensions.agents.x-k8s.io,resources=sandboxwarmpools,verbs=get;list;create;delete
 
 var smClaimGVK = schema.GroupVersionKind{
 	Group: "extensions.agents.x-k8s.io", Version: "v1beta1", Kind: "SandboxClaim",
@@ -61,6 +62,7 @@ const sandboxPodNameAnnotation = "agents.x-k8s.io/pod-name"
 // delegates to the appropriate creation path.
 type SandboxManager struct {
 	client  client.Client
+	reader  client.Reader
 	config  *configuration.Cache
 	builder *PodSpecBuilder
 	audit   AuditLogger
@@ -69,14 +71,22 @@ type SandboxManager struct {
 	deletionTimeout time.Duration
 }
 
-func NewSandboxManager(c client.Client, config *configuration.Cache, namespace string, audit AuditLogger) *SandboxManager {
+func NewSandboxManager(c client.Client, reader client.Reader, config *configuration.Cache, namespace string, audit AuditLogger) *SandboxManager {
 	return &SandboxManager{
 		client:    c,
+		reader:    reader,
 		config:    config,
 		builder:   &PodSpecBuilder{},
 		audit:     audit,
 		namespace: namespace,
 	}
+}
+
+func (m *SandboxManager) requireRunnableRun(ctx context.Context, run *agenticv1alpha1.AgenticRun) (*agenticv1alpha1.AgenticRun, error) {
+	if m.reader == nil {
+		return nil, fmt.Errorf("uncached API reader is required before sandbox creation")
+	}
+	return readRunnableRun(ctx, m.reader, client.ObjectKeyFromObject(run), run.UID)
 }
 
 // Create handles full sandbox setup: builds input ConfigMap, determines
@@ -92,6 +102,11 @@ func (m *SandboxManager) Create(
 	deadline time.Duration,
 	agentCtx *agentContext,
 ) (name string, retErr error) {
+	current, err := m.requireRunnableRun(ctx, run)
+	if err != nil {
+		return "", err
+	}
+	run = current
 	if m.audit != nil {
 		ctx = m.audit.BeginStep(ctx, run, step)
 		if step == "analysis" {
@@ -540,6 +555,9 @@ func (m *SandboxManager) createBarePod(
 		Spec: *podSpec,
 	}
 
+	if _, err := m.requireRunnableRun(ctx, run); err != nil {
+		return "", "", err
+	}
 	if err := m.client.Create(ctx, pod); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return "", "", fmt.Errorf("%s %s: %w", errCreatePod, step, err)
@@ -557,6 +575,9 @@ func (m *SandboxManager) createBarePod(
 		log.Info("Waiting for terminating pod to disappear", LogKeyName, podName)
 		if err := m.waitForPodDeletion(ctx, key); err != nil {
 			return "", "", fmt.Errorf("wait for terminating pod %q: %w", podName, err)
+		}
+		if _, err := m.requireRunnableRun(ctx, run); err != nil {
+			return "", "", err
 		}
 		if err := m.client.Create(ctx, pod); err != nil {
 			if apierrors.IsAlreadyExists(err) {
@@ -610,8 +631,16 @@ func (m *SandboxManager) createSandboxClaim(
 				"ownerReferences": []any{ownerRef},
 			},
 			"spec": map[string]any{
-				"networkPolicyManagement": "Unmanaged",
 				"podTemplate": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
+							LabelRun:  string(run.UID),
+							LabelStep: step,
+						},
+						"annotations": map[string]any{
+							AnnotationRunName: run.Name,
+						},
+					},
 					"spec": podSpecMap,
 				},
 			},
@@ -673,6 +702,9 @@ func (m *SandboxManager) createSandboxClaim(
 		},
 	}
 
+	if _, err := m.requireRunnableRun(ctx, run); err != nil {
+		return "", "", err
+	}
 	if err := m.client.Create(ctx, claim); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			existing := &unstructured.Unstructured{}

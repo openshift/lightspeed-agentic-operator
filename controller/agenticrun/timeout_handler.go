@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -76,6 +77,7 @@ type podEntry struct {
 	pod     *corev1.Pod
 	step    string
 	runName string
+	runUID  types.UID
 	// created is the sandbox resource creation time. In claim mode this is
 	// the claim timestamp, not the backing pod timestamp.
 	created time.Time
@@ -91,16 +93,29 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 		entries = r.listBarePods(ctx, log)
 	}
 
-	now := time.Now()
+	now := r.now()
 	for _, e := range entries {
 		condType := stepConditionType(e.step)
-
-		var run agenticv1alpha1.AgenticRun
-		if err := r.Get(ctx, client.ObjectKey{Name: e.runName, Namespace: r.Namespace}, &run); err != nil {
+		run, err := r.runForSandboxIdentity(ctx, e.runName, e.runUID)
+		if err != nil {
+			log.Error(err, "failed to resolve run for sandbox timeout", LogKeyStep, e.step)
 			continue
 		}
-
-		if !isStepInProgress(&run, condType) {
+		if run == nil {
+			continue
+		}
+		key := client.ObjectKeyFromObject(run)
+		current, guardErr := readRunnableRun(ctx, r.APIReader, key, run.UID)
+		if guardErr != nil {
+			if isStopAcceptedError(guardErr) {
+				r.reconcileAcceptedStop(ctx, key, guardErr)
+			} else {
+				log.Error(guardErr, "failed to verify run before timeout processing", LogKeyName, run.Name)
+			}
+			continue
+		}
+		run = current
+		if !isStepInProgress(run, condType) {
 			continue
 		}
 
@@ -110,8 +125,18 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 		if e.pod == nil {
 			if now.Sub(e.created) > podStartTimeout {
 				message := fmt.Sprintf("sandbox did not start within %s", podStartTimeout)
-				if err := r.patchStepCondition(ctx, &run, condType, metav1.ConditionFalse, ReasonSandboxStartupTimeout, message); err == nil {
-					r.releaseSandbox(ctx, &run, e.step)
+				err := r.patchStepCondition(ctx, run, condType, metav1.ConditionFalse, ReasonSandboxStartupTimeout, message)
+				if isStopAcceptedError(err) {
+					r.reconcileAcceptedStop(ctx, key, err)
+					continue
+				}
+				if err == nil {
+					current, guardErr := readRunnableRun(ctx, r.APIReader, key, run.UID)
+					if guardErr == nil {
+						r.releaseSandbox(ctx, current, e.step)
+					} else if isStopAcceptedError(guardErr) {
+						r.reconcileAcceptedStop(ctx, key, guardErr)
+					}
 				}
 			}
 			continue
@@ -120,7 +145,9 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 		phase := e.pod.Status.Phase
 		if phase == corev1.PodSucceeded || phase == corev1.PodFailed {
 			log.Info("retrying completion for terminal pod", LogKeyName, e.pod.Name, LogKeyStep, e.step)
-			_ = r.completeStep(ctx, &run, e.pod, e.step, condType, "", "")
+			if err := r.completeStep(ctx, run, e.pod, e.step, condType, "", ""); isStopAcceptedError(err) {
+				r.reconcileAcceptedStop(ctx, key, err)
+			}
 			continue
 		}
 
@@ -133,8 +160,7 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 			message = fmt.Sprintf("sandbox pod did not start within %s", podStartTimeout)
 			reason = ReasonSandboxStartupTimeout
 		} else {
-			// Resolve the agent for this step to get the configured timeout
-			agent, err := r.resolveStepAgent(ctx, &run, e.step)
+			agent, err := r.resolveStepAgent(ctx, run, e.step)
 			if err != nil {
 				log.Error(err, "failed to resolve step agent", LogKeyStep, e.step)
 				continue
@@ -144,8 +170,6 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 			agentTimeout := time.Duration(agentTimeoutSecs) * time.Second
 
 			startedAt := mainContainerStartedAt(e.pod)
-			// Keep a creation-based upper bound across container restarts. The
-			// startedAt clock additionally enforces the current container run.
 			creationDeadline := sandboxStartupTimeout + agentTimeout + sandboxRunningGrace
 			if overallTimedOut(created, now, creationDeadline) ||
 				(!startedAt.IsZero() && overallTimedOut(startedAt, now, agentTimeout+sandboxRunningGrace)) {
@@ -156,7 +180,9 @@ func (r *AgenticRunReconciler) handlePodTimeEvent(ctx context.Context) {
 			}
 		}
 
-		_ = r.completeStep(ctx, &run, e.pod, e.step, condType, message, reason)
+		if err := r.completeStep(ctx, run, e.pod, e.step, condType, message, reason); isStopAcceptedError(err) {
+			r.reconcileAcceptedStop(ctx, key, err)
+		}
 	}
 }
 
@@ -173,11 +199,11 @@ func (r *AgenticRunReconciler) listBarePods(ctx context.Context, log logr.Logger
 	var entries []podEntry
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		step, runName := resolveBarePodMetadata(pod)
-		if step == "" || runName == "" {
+		step, runName, runUID := resolveBarePodMetadata(pod)
+		if step == "" || runUID == "" {
 			continue
 		}
-		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, created: pod.CreationTimestamp.Time})
+		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, runUID: runUID, created: pod.CreationTimestamp.Time})
 	}
 	return entries
 }
@@ -192,22 +218,20 @@ func (r *AgenticRunReconciler) listSandboxPods(ctx context.Context, log logr.Log
 	seen := make(map[string]bool)
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		step, runName, err := resolveSandboxPodMetadata(ctx, r.Client, pod)
+		step, runName, runUID, err := resolveSandboxPodMetadata(ctx, r.Client, pod)
 		if err != nil {
-			// Do not let the claim-only fallback classify this pod-backed step
-			// as still provisioning when its owner chain cannot be resolved.
 			log.Error(err, "failed to resolve sandbox pod metadata", LogKeyName, pod.Name)
 			return entries
 		}
-		if step == "" || runName == "" {
+		if step == "" || runUID == "" {
 			continue
 		}
 		created := pod.CreationTimestamp.Time
 		if claimCreated, err := sandboxClaimCreationTime(ctx, r.Client, pod); err == nil && !claimCreated.IsZero() {
 			created = claimCreated
 		}
-		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, created: created})
-		seen[runName+"\x00"+step] = true
+		entries = append(entries, podEntry{pod: pod, step: step, runName: runName, runUID: runUID, created: created})
+		seen[string(runUID)+"\x00"+step] = true
 	}
 
 	// Include claims with no backing pod so a claim stuck in provisioning still
@@ -223,10 +247,11 @@ func (r *AgenticRunReconciler) listSandboxPods(ctx context.Context, log logr.Log
 		labels := claim.GetLabels()
 		annotations := claim.GetAnnotations()
 		step, runName := labels[LabelStep], annotations[AnnotationRunName]
-		if step == "" || runName == "" || seen[runName+"\x00"+step] {
+		runUID := types.UID(labels[LabelRun])
+		if step == "" || runUID == "" || seen[string(runUID)+"\x00"+step] {
 			continue
 		}
-		entries = append(entries, podEntry{step: step, runName: runName, created: claim.GetCreationTimestamp().Time})
+		entries = append(entries, podEntry{step: step, runName: runName, runUID: runUID, created: claim.GetCreationTimestamp().Time})
 	}
 	return entries
 }

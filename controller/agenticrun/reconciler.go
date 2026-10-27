@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -34,6 +35,7 @@ const (
 	ErrDeleteExpiredRun            = "delete expired run"
 	ErrLabelTerminalRun            = "label terminal run"
 	terminalTTLLabel               = "agentic.openshift.io/ttl-managed"
+	suspensionRequeueAfter         = 5 * time.Second
 )
 
 // TempLogCleaner is the interface for deleting templog records on CR deletion.
@@ -43,14 +45,24 @@ type TempLogCleaner interface {
 
 // AgenticRunReconciler reconciles AgenticRun objects.
 //
-// Agent must be set before calling SetupWithManager.
+// Agent, APIReader, and Sandbox must be set before calling SetupWithManager.
 type AgenticRunReconciler struct {
 	client.Client
+	APIReader client.Reader
 	Agent     AgentCaller
+	Sandbox   *SandboxManager
 	Config    *configuration.Cache
 	Namespace string
 	Audit     AuditLogger
 	TempLog   TempLogCleaner
+	Now       func() time.Time
+}
+
+func (r *AgenticRunReconciler) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
@@ -71,24 +83,61 @@ type AgenticRunReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticolsconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=create;delete;get;list;patch;update;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=create;delete;get;list;update;watch
 
 func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
+	if r.APIReader == nil {
+		return ctrl.Result{}, fmt.Errorf("uncached API reader is required by the run controller")
+	}
 
 	var run agenticv1alpha1.AgenticRun
-	if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
+	if err := r.APIReader.Get(ctx, req.NamespacedName, &run); err != nil {
 		if client.IgnoreNotFound(err) == nil && r.Audit != nil {
 			r.Audit.CleanupDeleted(req.NamespacedName)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// --- Deletion ---
 	if !run.DeletionTimestamp.IsZero() {
 		if r.Audit != nil {
 			r.Audit.Cleanup(&run)
 		}
+		accepted := hasAcceptedStop(&run)
+		suspended := false
+		var start metav1.Time
+		currentActivation := false
+		if !accepted {
+			var err error
+			suspended, start, currentActivation, err = r.readSuspensionActivation(ctx)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		if accepted || suspended {
+			if suspended && !currentActivation && !accepted {
+				return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+			}
+			result, err := r.handleSuspensionAt(ctx, &run, start)
+			if err != nil {
+				return result, err
+			}
+			if result.Requeue || result.RequeueAfter > 0 {
+				return result, nil
+			}
+			if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
+				base := run.DeepCopy()
+				controllerutil.RemoveFinalizer(&run, rbacCleanupFinalizer)
+				if err := r.Patch(ctx, &run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); client.IgnoreNotFound(err) != nil {
+					return ctrl.Result{}, fmt.Errorf("%s: %w", ErrRemoveFinalizer, err)
+				}
+			}
+			if controllerutil.ContainsFinalizer(&run, templogCleanupFinalizer) {
+				return r.handleTemplogCleanup(ctx, &run)
+			}
+			return ctrl.Result{}, nil
+		}
+
 		if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
 			if err := r.Agent.ReleaseSandboxes(ctx, &run, false); err != nil {
 				return ctrl.Result{}, fmt.Errorf("release sandboxes during deletion: %w", err)
@@ -107,15 +156,57 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	// --- Finalizers (first sight of any non-deleting run, including terminal) ---
 	if !controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) || !controllerutil.ContainsFinalizer(&run, templogCleanupFinalizer) {
-		original := run.DeepCopy()
+		base := run.DeepCopy()
 		controllerutil.AddFinalizer(&run, rbacCleanupFinalizer)
 		controllerutil.AddFinalizer(&run, templogCleanupFinalizer)
-		if err := r.Patch(ctx, &run, client.MergeFrom(original)); err != nil {
+		if err := r.Patch(ctx, &run, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("%s: %w", ErrAddFinalizer, err)
 		}
-		if err := r.Get(ctx, req.NamespacedName, &run); err != nil {
+		if err := r.APIReader.Get(ctx, req.NamespacedName, &run); err != nil {
 			return ctrl.Result{}, client.IgnoreNotFound(err)
 		}
+	}
+
+	accepted := hasAcceptedStop(&run)
+	suspended := false
+	var start metav1.Time
+	currentActivation := false
+	if !accepted {
+		var err error
+		suspended, start, currentActivation, err = r.readSuspensionActivation(ctx)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if accepted || suspended {
+		if suspended && !currentActivation && !accepted {
+			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+		}
+		result, err := r.handleSuspensionAt(ctx, &run, start)
+		if err != nil {
+			return result, err
+		}
+		phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
+		if isTerminal(phase) {
+			var cfg *configuration.Config
+			if r.Config != nil {
+				cfg = r.Config.Get()
+			}
+			if cfg == nil {
+				if result.RequeueAfter == 0 && !result.Requeue {
+					result = ctrl.Result{RequeueAfter: suspensionRequeueAfter}
+				}
+				return result, nil
+			}
+			terminalResult, err := r.handleSuspendedTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
+			if err != nil {
+				return terminalResult, err
+			}
+			if result.RequeueAfter == 0 && !result.Requeue {
+				result = terminalResult
+			}
+		}
+		return result, nil
 	}
 
 	// --- Configuration guard (wait for lightspeed-agentic-configuration ConfigMap) ---
@@ -130,7 +221,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
 	skipTerminalCleanup := (run.Labels[terminalTTLLabel] == "true" && run.Status.DeleteAfter != nil) || (phase == agenticv1alpha1.AgenticRunPhaseFailed && preserveFailedSandbox(&run))
 
-	// --- Terminal phases (before suspension guard) ---
+	// --- Terminal phases ---
 	switch phase {
 	case agenticv1alpha1.AgenticRunPhaseCompleted:
 		revisable := isNoActionRequired(&run) || run.Spec.Execution.IsZero()
@@ -161,15 +252,6 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// --- Suspension guard (non-terminal runs and revisable Completed/Failed runs needing revision reach here) ---
-	suspended, err := isSuspended(ctx, r.Client)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if suspended {
-		return r.handleSuspension(ctx, &run)
-	}
-
 	// --- Ensure AgenticRunApproval exists ---
 	policy, err := getApprovalPolicy(ctx, r.Client)
 	if err != nil {
@@ -186,6 +268,15 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	resolved, err := resolveAgenticRun(ctx, r.Client, &run, approval, r.Namespace)
 	if err != nil {
 		log.Error(err, "workflow resolution failed")
+		current, guardErr := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(&run), run.UID)
+		if guardErr != nil {
+			if guardErr == errStopAccepted {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, guardErr
+		}
+		run = *current
+		phase = agenticv1alpha1.DerivePhase(run.Status.Conditions)
 		base := run.DeepCopy()
 		meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
@@ -237,6 +328,32 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.V(1).Info("unhandled phase, no-op", LogKeyPhase, phase)
 		return ctrl.Result{}, nil
 	}
+}
+
+func (r *AgenticRunReconciler) readSuspensionActivation(ctx context.Context) (bool, metav1.Time, bool, error) {
+	if r.APIReader == nil {
+		return false, metav1.Time{}, false, fmt.Errorf("uncached API reader is required by the run controller")
+	}
+	var config agenticv1alpha1.AgenticOLSConfig
+	err := r.APIReader.Get(ctx, client.ObjectKey{Name: "cluster"}, &config)
+	if err != nil {
+		if client.IgnoreNotFound(err) == nil {
+			return false, metav1.Time{}, false, nil
+		}
+		return false, metav1.Time{}, false, fmt.Errorf("read AgenticOLSConfig through uncached API reader: %w", err)
+	}
+	if !config.Spec.Suspended {
+		return false, metav1.Time{}, false, nil
+	}
+	condition := meta.FindStatusCondition(config.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+	current := condition != nil &&
+		condition.Status == metav1.ConditionTrue &&
+		condition.ObservedGeneration == config.Generation &&
+		!condition.LastTransitionTime.IsZero()
+	if !current {
+		return true, metav1.Time{}, false, nil
+	}
+	return true, condition.LastTransitionTime, true, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -329,6 +446,29 @@ func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *a
 			log.Error(err, "sandbox cleanup failed at terminal phase")
 		}
 	}
+	return r.handleTerminalRecord(ctx, run, phase, ceilingDays)
+}
+
+func (r *AgenticRunReconciler) handleSuspendedTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
+	if run.Labels[terminalTTLLabel] == "true" && run.Status.DeleteAfter != nil {
+		return ctrl.Result{}, nil
+	}
+	return r.handleTerminalRecord(ctx, run, phase, ceilingDays)
+}
+
+func (r *AgenticRunReconciler) handleTerminalRecord(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
+	if r.APIReader == nil {
+		return ctrl.Result{}, fmt.Errorf("uncached API reader is required by terminal run handling")
+	}
+	current := &agenticv1alpha1.AgenticRun{}
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(run), current); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if current.UID != run.UID {
+		return ctrl.Result{}, nil
+	}
+	*run = *current
+
 	if r.Audit != nil {
 		r.Audit.EmitTerminalSpan(ctx, run, string(phase), terminalReason(run))
 		r.Audit.Cleanup(run)
@@ -347,15 +487,23 @@ func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *a
 		if err := r.statusPatch(ctx, run, base); err != nil {
 			return ctrl.Result{}, fmt.Errorf("%s: %w", ErrStampTerminalTTL, err)
 		}
+		if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(run), run); err != nil {
+			return ctrl.Result{}, client.IgnoreNotFound(err)
+		}
+		if run.UID != current.UID {
+			return ctrl.Result{}, nil
+		}
 	}
 
-	base := run.DeepCopy()
-	if run.Labels == nil {
-		run.Labels = make(map[string]string)
-	}
-	run.Labels[terminalTTLLabel] = "true"
-	if err := r.Patch(ctx, run, client.MergeFrom(base)); err != nil {
-		return ctrl.Result{}, fmt.Errorf("%s: %w", ErrLabelTerminalRun, err)
+	if run.Labels[terminalTTLLabel] != "true" {
+		base := run.DeepCopy()
+		if run.Labels == nil {
+			run.Labels = make(map[string]string)
+		}
+		run.Labels[terminalTTLLabel] = "true"
+		if err := r.Patch(ctx, run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+			return ctrl.Result{}, fmt.Errorf("%s: %w", ErrLabelTerminalRun, err)
+		}
 	}
 	return ctrl.Result{}, nil
 }

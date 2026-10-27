@@ -130,6 +130,7 @@ type SandboxLifecycle interface {
 type SandboxAgentCaller struct {
 	Sandbox   SandboxLifecycle
 	K8sClient client.Client
+	APIReader client.Reader
 	Namespace string
 	Audit     AuditLogger
 }
@@ -251,9 +252,12 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 }
 
 func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, claimName string) error {
-	var current agenticv1alpha1.AgenticRun
-	if err := s.K8sClient.Get(ctx, client.ObjectKeyFromObject(run), &current); err != nil {
-		return fmt.Errorf("get run for sandbox info patch: %w", err)
+	if s.APIReader == nil {
+		return fmt.Errorf("uncached API reader is required before patching sandbox info")
+	}
+	current, err := readRunnableRun(ctx, s.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if err != nil {
+		return err
 	}
 
 	base := current.DeepCopy()
@@ -273,7 +277,7 @@ func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, run *agenticv
 		current.Status.Steps.Escalation.Sandbox = info
 	}
 
-	if err := s.K8sClient.Status().Patch(ctx, &current, client.MergeFrom(base)); err != nil {
+	if err := s.K8sClient.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return fmt.Errorf("patch sandbox info for step %s: %w", step, err)
 	}
 	return nil

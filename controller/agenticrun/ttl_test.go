@@ -39,7 +39,7 @@ func ttlTestReconciler(t *testing.T, run *agenticv1alpha1.AgenticRun, cache *con
 	t.Helper()
 	objects := append([]client.Object{run}, defaultObjects()...)
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objects...).WithStatusSubresource(run).Build()
-	return &AgenticRunReconciler{Client: fc, Config: cache, Agent: newTestAgentCaller(), Namespace: "default"}
+	return &AgenticRunReconciler{Client: fc, APIReader: fc, Config: cache, Agent: newTestAgentCaller(), Namespace: "default"}
 }
 
 func TestHandleTerminalTTL_RecordsCappedDeadlineWithoutChangingSpec(t *testing.T) {

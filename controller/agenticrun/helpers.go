@@ -79,9 +79,13 @@ func readBuiltinTemplate(name string) (string, error) {
 const (
 	preserveSandboxAnnotation = "agentic.openshift.io/preserve-sandbox"
 	cleanupTimeout            = 30 * time.Second
+	// SuspensionStopWindow is the fixed cleanup window for a stop activation.
+	SuspensionStopWindow = 10 * time.Second
 
 	ErrGetAnalysisResult         = "get AnalysisResult"
 	ErrTrimAnalysisResultOptions = "trim AnalysisResult options"
+	// ErrStopAccepted signals that the requested run must not receive workflow work.
+	ErrStopAccepted = "run stop accepted"
 
 	rbacCleanupFinalizer    = "agentic.openshift.io/execution-rbac-cleanup"
 	templogCleanupFinalizer = "agentic.openshift.io/templog-cleanup"
@@ -90,18 +94,21 @@ const (
 	templogMaxCleanupAttempts        = 3
 	templogCleanupRequeueAfter       = 5 * time.Second
 
-	reasonInProgress       = "InProgress"
-	reasonComplete         = "Complete"
-	reasonFailed           = "Failed"
-	reasonSkipped          = "Skipped"
-	reasonPassed           = "Passed"
-	reasonWorkflowFailed   = "WorkflowResolutionFailed"
-	reasonUserDenied       = "UserDenied"
-	defaultSandboxSA       = "lightspeed-agent"
-	reasonRevising         = "Revising"
-	reasonRevisionComplete = "RevisionComplete"
-	reasonSystemSuspended  = "SystemSuspended"
-	reasonNoActionRequired = agenticv1alpha1.ReasonNoActionRequired
+	reasonInProgress          = "InProgress"
+	reasonComplete            = "Complete"
+	reasonFailed              = "Failed"
+	reasonSkipped             = "Skipped"
+	reasonPassed              = "Passed"
+	reasonWorkflowFailed      = "WorkflowResolutionFailed"
+	reasonUserDenied          = "UserDenied"
+	defaultSandboxSA          = "lightspeed-agent"
+	reasonRevising            = "Revising"
+	reasonRevisionComplete    = "RevisionComplete"
+	reasonSystemSuspended     = "SystemSuspended"
+	reasonTeardownComplete    = "TeardownComplete"
+	reasonTeardownFailed      = "TeardownFailed"
+	reasonEmergencyStopFailed = "EmergencyStopFailed"
+	reasonNoActionRequired    = agenticv1alpha1.ReasonNoActionRequired
 
 	LogKeyName      = "name"
 	LogKeyStep      = "step"
@@ -111,6 +118,8 @@ const (
 
 	maxCreateRetries = 3
 )
+
+var errStopAccepted = stderrors.New(ErrStopAccepted)
 
 // retryBaseDelay is the base delay for exponential backoff between transient
 // retries. Package-level var so tests can override it.
@@ -163,21 +172,70 @@ func retryOnTransient(ctx context.Context, fn func() error) error {
 	return lastErr
 }
 
-func isSuspended(ctx context.Context, c client.Client) (bool, error) {
-	var config agenticv1alpha1.AgenticOLSConfig
-	if err := c.Get(ctx, client.ObjectKey{Name: "cluster"}, &config); err != nil {
-		if client.IgnoreNotFound(err) == nil {
-			return false, nil
+func hasAcceptedStop(run *agenticv1alpha1.AgenticRun) bool {
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping != nil {
+		if stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended {
+			return true
 		}
-		return false, err
+		if stopping.Status == metav1.ConditionFalse &&
+			(stopping.Reason == reasonTeardownComplete || stopping.Reason == reasonTeardownFailed) {
+			return true
+		}
 	}
-	return config.Spec.Suspended, nil
+
+	emergency := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if emergency != nil && emergency.Status == metav1.ConditionTrue {
+		return true
+	}
+	for i := range run.Status.Conditions {
+		condition := &run.Status.Conditions[i]
+		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonEmergencyStopFailed {
+			return true
+		}
+	}
+	return false
+}
+
+func readRunnableRun(ctx context.Context, reader client.Reader, key types.NamespacedName, uid types.UID) (*agenticv1alpha1.AgenticRun, error) {
+	if reader == nil {
+		return nil, fmt.Errorf("uncached API reader is required before run workflow work")
+	}
+	var current agenticv1alpha1.AgenticRun
+	if err := reader.Get(ctx, key, &current); err != nil {
+		return nil, err
+	}
+	if current.UID != uid || hasAcceptedStop(&current) {
+		return nil, errStopAccepted
+	}
+
+	var config agenticv1alpha1.AgenticOLSConfig
+	err := reader.Get(ctx, types.NamespacedName{Name: "cluster"}, &config)
+	if err != nil && !errors.IsNotFound(err) {
+		return nil, err
+	}
+	if err == nil && config.Spec.Suspended {
+		return nil, errStopAccepted
+	}
+	return &current, nil
 }
 
 // failStep marks a step as failed and creates a failure result CR.
 // The caller must have set the step condition to ConditionUnknown before
 // calling failStep so that conditionTime can extract the start time.
 func (r *AgenticRunReconciler) failStep(ctx context.Context, run *agenticv1alpha1.AgenticRun, conditionType string, err error) (ctrl.Result, error) {
+	if r.APIReader == nil {
+		return ctrl.Result{}, stderrors.New("uncached API reader is required before failing a run step")
+	}
+	current, guardErr := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if guardErr == errStopAccepted {
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if guardErr != nil {
+		return ctrl.Result{}, guardErr
+	}
+	run = current
+
 	log := logf.FromContext(ctx)
 	log.Error(err, "step failed", LogKeyCondition, conditionType)
 	base := run.DeepCopy()
@@ -225,8 +283,12 @@ func (r *AgenticRunReconciler) failStep(ctx context.Context, run *agenticv1alpha
 	return ctrl.Result{}, nil
 }
 
+func isStopAcceptedError(err error) bool {
+	return stderrors.Is(err, errStopAccepted)
+}
+
 func (r *AgenticRunReconciler) statusPatch(ctx context.Context, run *agenticv1alpha1.AgenticRun, base *agenticv1alpha1.AgenticRun) error {
-	return r.Status().Patch(ctx, run, client.MergeFrom(base))
+	return r.Status().Patch(ctx, run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 }
 
 func hasSandboxClaims(run *agenticv1alpha1.AgenticRun) bool {

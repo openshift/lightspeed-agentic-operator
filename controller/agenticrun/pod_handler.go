@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -36,22 +37,45 @@ func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Ob
 	}
 
 	var step, runName string
+	var runUID types.UID
+	var metadataErr error
 	if r.isSandboxClaimMode() {
-		step, runName, _ = resolveSandboxPodMetadata(ctx, r.Client, pod)
+		step, runName, runUID, metadataErr = resolveSandboxPodMetadata(ctx, r.Client, pod)
 	} else {
-		step, runName = resolveBarePodMetadata(pod)
+		step, runName, runUID = resolveBarePodMetadata(pod)
 	}
-	if step == "" || runName == "" {
+	if metadataErr != nil {
+		logf.FromContext(ctx).Error(metadataErr, "failed to resolve sandbox Pod identity", LogKeyName, pod.Name)
+		return nil
+	}
+	if step == "" || runUID == "" {
 		return nil
 	}
 
-	var run agenticv1alpha1.AgenticRun
-	if err := r.Get(ctx, client.ObjectKey{Name: runName, Namespace: r.Namespace}, &run); err != nil {
+	run, err := r.runForSandboxIdentity(ctx, runName, runUID)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "failed to resolve run for sandbox Pod", LogKeyName, pod.Name)
+		return nil
+	}
+	if run == nil {
+		return nil
+	}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+	current, guardErr := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if guardErr == errStopAccepted {
+		return []ctrl.Request{request}
+	}
+	if guardErr != nil {
+		logf.FromContext(ctx).Error(guardErr, "failed to verify run before processing sandbox Pod", LogKeyName, pod.Name)
+		return nil
+	}
+	run = current
+	if isTerminal(agenticv1alpha1.DerivePhase(run.Status.Conditions)) {
 		return nil
 	}
 
 	condType := stepConditionType(step)
-	claimName := sandboxClaimName(&run, step)
+	claimName := sandboxClaimName(run, step)
 	ctx = logf.IntoContext(ctx, logf.FromContext(ctx).WithValues(
 		LogKeyName, pod.Name, LogKeyStep, step,
 		LogKeyClaim, claimName, "runUID", string(run.UID), LogKeyCondition, condType,
@@ -62,27 +86,96 @@ func (r *AgenticRunReconciler) handlePodEvent(ctx context.Context, obj client.Ob
 		if pod.Status.Phase != corev1.PodRunning {
 			reason = ReasonWaitingForSandbox
 		}
-		r.patchStepCondition(ctx, &run, condType, metav1.ConditionUnknown, reason, "Sandbox pod "+reason)
+		if err := r.patchStepCondition(ctx, run, condType, metav1.ConditionUnknown, reason, "Sandbox pod "+reason); isStopAcceptedError(err) {
+			return []ctrl.Request{request}
+		}
 		return nil
 	}
 
-	if err := r.completeStep(ctx, &run, pod, step, condType, "", ""); err != nil {
-		return nil
+	if err := r.completeStep(ctx, run, pod, step, condType, "", ""); isStopAcceptedError(err) {
+		return []ctrl.Request{request}
 	}
 	return nil
 }
 
-// resolveBarePodMetadata reads step and run name from pod labels/annotations.
-func resolveBarePodMetadata(pod *corev1.Pod) (step, runName string) {
-	if pod.Labels[LabelRun] == "" {
-		return "", ""
+func (r *AgenticRunReconciler) runForSandboxIdentity(ctx context.Context, runName string, runUID types.UID) (*agenticv1alpha1.AgenticRun, error) {
+	if r.APIReader == nil {
+		return nil, fmt.Errorf("uncached API reader is required to resolve sandbox Pod ownership")
 	}
-	return pod.Labels[LabelStep], pod.Annotations[AnnotationRunName]
+	if runUID == "" {
+		return nil, nil
+	}
+	if runName != "" {
+		run := &agenticv1alpha1.AgenticRun{}
+		err := r.APIReader.Get(ctx, client.ObjectKey{Name: runName, Namespace: r.Namespace}, run)
+		if err == nil && run.UID == runUID {
+			return run, nil
+		}
+		if err != nil && client.IgnoreNotFound(err) != nil {
+			return nil, err
+		}
+	}
+
+	var runs agenticv1alpha1.AgenticRunList
+	if err := r.APIReader.List(ctx, &runs); err != nil {
+		return nil, err
+	}
+	for i := range runs.Items {
+		run := &runs.Items[i]
+		if run.UID == runUID && (runName == "" || run.Name == runName) {
+			return run, nil
+		}
+	}
+	return nil, nil
 }
 
-// resolveSandboxPodMetadata follows the ownership chain:
-// Pod → Sandbox (ownerRef) → SandboxClaim (ownerRef) → our labels.
-func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1.Pod) (step, runName string, err error) {
+func (r *AgenticRunReconciler) reconcileAcceptedStop(ctx context.Context, key types.NamespacedName, err error) {
+	if !isStopAcceptedError(err) {
+		return
+	}
+	if _, reconcileErr := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); reconcileErr != nil {
+		logf.FromContext(ctx).Error(reconcileErr, "failed to reconcile accepted stop", LogKeyName, key.Name)
+	}
+}
+
+// resolveBarePodMetadata uses the run UID as identity and the name annotation
+// only as a lookup hint, with an AgenticRun owner reference for legacy Pods.
+func resolveBarePodMetadata(pod *corev1.Pod) (step, runName string, runUID types.UID) {
+	step = pod.Labels[LabelStep]
+	runName = pod.Annotations[AnnotationRunName]
+	runUID = types.UID(pod.Labels[LabelRun])
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind != "AgenticRun" {
+			continue
+		}
+		if runUID == "" {
+			runUID = owner.UID
+		}
+		if runName == "" {
+			runName = owner.Name
+		}
+	}
+	return step, runName, runUID
+}
+
+// resolveSandboxPodMetadata prefers identity copied onto the Pod template and
+// falls back to its existing Sandbox → SandboxClaim ownership chain.
+func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1.Pod) (step, runName string, runUID types.UID, err error) {
+	step = pod.Labels[LabelStep]
+	runName = pod.Annotations[AnnotationRunName]
+	runUID = types.UID(pod.Labels[LabelRun])
+	for _, owner := range pod.OwnerReferences {
+		if owner.Kind == "AgenticRun" && runUID == "" {
+			runUID = owner.UID
+			if runName == "" {
+				runName = owner.Name
+			}
+		}
+	}
+	if step != "" && runUID != "" {
+		return step, runName, runUID, nil
+	}
+
 	for _, podRef := range pod.OwnerReferences {
 		if podRef.Kind != "Sandbox" {
 			continue
@@ -90,8 +183,22 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 		sb := &unstructured.Unstructured{}
 		sb.SetGroupVersionKind(smSandboxGVK)
 		if err := c.Get(ctx, client.ObjectKey{Name: podRef.Name, Namespace: pod.Namespace}, sb); err != nil {
-			return "", "", err
+			return step, runName, runUID, err
 		}
+		labels := sb.GetLabels()
+		if runUID == "" {
+			runUID = types.UID(labels[LabelRun])
+		}
+		if step == "" {
+			step = labels[LabelStep]
+		}
+		if runName == "" {
+			runName = sb.GetAnnotations()[AnnotationRunName]
+		}
+		if step != "" && runUID != "" {
+			return step, runName, runUID, nil
+		}
+
 		for _, sbRef := range sb.GetOwnerReferences() {
 			if sbRef.Kind != "SandboxClaim" {
 				continue
@@ -99,14 +206,22 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 			claim := &unstructured.Unstructured{}
 			claim.SetGroupVersionKind(smClaimGVK)
 			if err := c.Get(ctx, client.ObjectKey{Name: sbRef.Name, Namespace: pod.Namespace}, claim); err != nil {
-				return "", "", err
+				return step, runName, runUID, err
 			}
-			labels := claim.GetLabels()
-			annotations := claim.GetAnnotations()
-			return labels[LabelStep], annotations[AnnotationRunName], nil
+			claimLabels := claim.GetLabels()
+			if runUID == "" {
+				runUID = types.UID(claimLabels[LabelRun])
+			}
+			if step == "" {
+				step = claimLabels[LabelStep]
+			}
+			if runName == "" {
+				runName = claim.GetAnnotations()[AnnotationRunName]
+			}
+			return step, runName, runUID, nil
 		}
 	}
-	return "", "", nil
+	return step, runName, runUID, nil
 }
 
 // completeStep handles step completion: patches the step condition (and result ref
@@ -119,6 +234,14 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 	stepCondMu.Lock()
 	defer stepCondMu.Unlock()
 
+	if r.APIReader == nil {
+		return fmt.Errorf("uncached API reader is required before completing a run step")
+	}
+	current, err := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if err != nil {
+		return err
+	}
+	run = current
 	if c := meta.FindStatusCondition(run.Status.Conditions, condType); c != nil && c.Status != metav1.ConditionUnknown {
 		return nil
 	}
@@ -151,19 +274,11 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 		} else if resultCR != nil {
 			log.Info("agent reported failure", "reason", reason)
 			if reason == agenticv1alpha1.ResultReasonAgentTimeout && step == "verification" {
-				// A verification timeout is an agent outcome, not a sandbox
-				// infrastructure failure. Route it through the existing escalation
-				// path so a human can review the incomplete verification.
 				patchErr = r.patchVerificationFailedEscalating(ctx, run, resultCR.GetName(), resultCR, reason)
 			} else if reason == agenticv1alpha1.ResultReasonAgentTimeout {
 				patchErr = r.patchStepResult(ctx, run, step, condType, resultCR.GetName(), resultCR,
 					metav1.ConditionFalse, ReasonAgentTimeout, "Agent exceeded its configured execution budget")
 			} else if step == "verification" {
-				// OLS-3817: an objective verification failure (the agent ran and
-				// its VerificationResult reports the remediation did not work)
-				// escalates directly instead of retrying execution or terminating.
-				// Set Verified=False and Escalated=Unknown so DerivePhase routes to
-				// Escalating and the reconciler dispatches handleEscalation.
 				patchErr = r.patchVerificationFailedEscalating(ctx, run, resultCR.GetName(), resultCR, reason)
 			} else {
 				patchErr = r.patchStepResult(ctx, run, step, condType, resultCR.GetName(), resultCR,
@@ -187,6 +302,11 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 		return patchErr
 	}
 
+	current, err = readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if err != nil {
+		return err
+	}
+	run = current
 	if r.Audit != nil {
 		r.Audit.CompleteStep(run, step, resultCR)
 	}
@@ -195,6 +315,11 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 	if preserve {
 		log.Info("preserving failed sandbox for debugging", LogKeyStep, step)
 	} else {
+		current, err = readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+		if err != nil {
+			return err
+		}
+		run = current
 		r.releaseSandbox(ctx, run, step)
 	}
 	return nil
@@ -205,6 +330,14 @@ func (r *AgenticRunReconciler) patchStepCondition(ctx context.Context, run *agen
 	if condType == "" {
 		return nil
 	}
+	if r.APIReader == nil {
+		return fmt.Errorf("uncached API reader is required before patching a run step")
+	}
+	current, err := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if err != nil {
+		return err
+	}
+	run = current
 
 	if c := meta.FindStatusCondition(run.Status.Conditions, condType); c != nil {
 		if c.Status != metav1.ConditionUnknown {
@@ -238,6 +371,14 @@ func (r *AgenticRunReconciler) patchStepResult(ctx context.Context, run *agentic
 	if condType == "" {
 		return nil
 	}
+	if r.APIReader == nil {
+		return fmt.Errorf("uncached API reader is required before linking a run result")
+	}
+	current, err := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if err != nil {
+		return err
+	}
+	run = current
 	base := run.DeepCopy()
 	outcome := agenticv1alpha1.ActionOutcomeSucceeded
 	if status != metav1.ConditionTrue {
@@ -264,6 +405,14 @@ func (r *AgenticRunReconciler) patchStepResult(ctx context.Context, run *agentic
 // result ref and, in a single status patch, sets Verified=False/VerificationFailed
 // plus Escalated=Unknown/VerificationFailed so DerivePhase yields Escalating.
 func (r *AgenticRunReconciler) patchVerificationFailedEscalating(ctx context.Context, run *agenticv1alpha1.AgenticRun, crName string, resultCR client.Object, reason string) error {
+	if r.APIReader == nil {
+		return fmt.Errorf("uncached API reader is required before linking a verification result")
+	}
+	current, err := readRunnableRun(ctx, r.APIReader, client.ObjectKeyFromObject(run), run.UID)
+	if err != nil {
+		return err
+	}
+	run = current
 	base := run.DeepCopy()
 	appendResultRef(run, "verification", crName, agenticv1alpha1.ActionOutcomeFailed)
 	aggregateTokenUsage(run, resultCR)

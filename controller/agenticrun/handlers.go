@@ -3,7 +3,9 @@ package agenticrun
 import (
 	"context"
 	"fmt"
+	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -77,6 +79,9 @@ func (r *AgenticRunReconciler) handleAnalysis(
 	}
 
 	if err := r.Agent.Analyze(ctx, run, resolved.Analysis); err != nil {
+		if isStopAcceptedError(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
 
@@ -129,6 +134,9 @@ func (r *AgenticRunReconciler) handleRevision(
 	}
 
 	if err := r.Agent.Analyze(ctx, run, resolved.Analysis); err != nil {
+		if isStopAcceptedError(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionAnalyzed, err)
 	}
 
@@ -223,6 +231,9 @@ func (r *AgenticRunReconciler) handleExecution(
 	}
 
 	if err := r.Agent.Execute(ctx, run, *resolved.Execution, selectedOption); err != nil {
+		if isStopAcceptedError(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionExecuted, err)
 	}
 
@@ -299,6 +310,9 @@ func (r *AgenticRunReconciler) handleVerification(
 	}
 
 	if err := r.Agent.Verify(ctx, run, *resolved.Verification, selectedOption, execOutput); err != nil {
+		if isStopAcceptedError(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionVerified, err)
 	}
 
@@ -344,37 +358,414 @@ func (r *AgenticRunReconciler) handleFailed(
 	return ctrl.Result{}, nil
 }
 
-func (r *AgenticRunReconciler) handleSuspension(
+func (r *AgenticRunReconciler) handleSuspensionAt(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
+	activationStart metav1.Time,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
-
-	log.Info("terminating run due to system suspension", LogKeyPhase, phase)
-
-	if hasSandboxClaims(run) {
-		if err := r.Agent.ReleaseSandboxes(ctx, run, true); err != nil {
-			log.Error(err, "best-effort sandbox release during suspension")
-		}
+	if r.APIReader == nil {
+		return ctrl.Result{}, fmt.Errorf("uncached API reader is required for suspension cleanup")
+	}
+	if r.Sandbox == nil {
+		return ctrl.Result{}, fmt.Errorf("sandbox manager is required for suspension cleanup")
 	}
 
-	if isTerminal(phase) {
+	key := client.ObjectKeyFromObject(run)
+	current := &agenticv1alpha1.AgenticRun{}
+	if err := r.APIReader.Get(ctx, key, current); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if current.UID != run.UID {
+		return ctrl.Result{}, nil
+	}
+	if current.UID == "" {
+		return ctrl.Result{}, fmt.Errorf("run UID is required for suspension cleanup")
+	}
+	*run = *current
+
+	phase := agenticv1alpha1.DerivePhase(current.Status.Conditions)
+	historicalTerminal := isTerminal(phase) && !hasAcceptedStop(current)
+	stopStart := activationStart
+	stopping := meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping != nil && stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended &&
+		!stopping.LastTransitionTime.IsZero() {
+		stopStart = stopping.LastTransitionTime
+	}
+
+	remaining := time.Duration(0)
+	if !stopStart.IsZero() {
+		remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
+	}
+	if !historicalTerminal && !hasAcceptedStop(current) {
+		if stopStart.IsZero() || remaining <= 0 {
+			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+		}
+		acceptanceCtx, cancelAcceptance := context.WithTimeout(ctx, remaining)
+		updated, err := r.persistRunStop(acceptanceCtx, key, run.UID, stopStart)
+		cancelAcceptance()
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if updated == nil {
+			return ctrl.Result{}, nil
+		}
+		current = updated
+		*run = *current
+		phase = agenticv1alpha1.DerivePhase(current.Status.Conditions)
+		historicalTerminal = isTerminal(phase) && !hasAcceptedStop(current)
+	}
+
+	finalOutcome := hasFinalRunStopOutcome(current)
+	if !stopStart.IsZero() && !finalOutcome {
+		remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
+	}
+	if !historicalTerminal && !finalOutcome && !stopStart.IsZero() && remaining <= 0 {
+		updated, err := r.writeSuspensionOutcome(ctx, key, run.UID, false)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if updated == nil {
+			return ctrl.Result{}, nil
+		}
+		current = updated
+		*run = *current
+
+		report, cleanupErr, remoteEvidence := r.suspensionCleanupPass(ctx, current, cleanupTimeout)
+		if cleanupErr != nil {
+			log.Error(cleanupErr, "background cleanup after suspension deadline failed", LogKeyName, current.Name)
+		}
+		if cleanupErr == nil && report.Confirmed() && remoteEvidence == "" {
+			cleaned, err := r.clearRunSandboxInfo(ctx, key, run.UID)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if cleaned != nil {
+				*run = *cleaned
+			}
+		}
+		return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+	}
+
+	passTimeout := cleanupTimeout
+	if remaining > 0 && !finalOutcome {
+		passTimeout = remaining
+	}
+	report, cleanupErr, remoteEvidence := r.suspensionCleanupPass(ctx, current, passTimeout)
+	if cleanupErr != nil {
+		log.Error(cleanupErr, "suspension cleanup pass failed", LogKeyName, current.Name)
+	}
+	confirmed := cleanupErr == nil && report.Confirmed() && remoteEvidence == ""
+	current = &agenticv1alpha1.AgenticRun{}
+	if err := r.APIReader.Get(ctx, key, current); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+	if current.UID != run.UID {
+		return ctrl.Result{}, nil
+	}
+	*run = *current
+	phase = agenticv1alpha1.DerivePhase(current.Status.Conditions)
+	historicalTerminal = isTerminal(phase) && !hasAcceptedStop(current)
+	finalOutcome = hasFinalRunStopOutcome(current)
+
+	if confirmed {
+		if !historicalTerminal && !finalOutcome {
+			updated, err := r.writeSuspensionOutcome(ctx, key, run.UID, true)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if updated != nil {
+				*run = *updated
+			}
+		} else {
+			updated, err := r.clearRunSandboxInfo(ctx, key, run.UID)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if updated != nil {
+				*run = *updated
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
-	base := run.DeepCopy()
-	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
-		Type:               agenticv1alpha1.AgenticRunConditionEmergencyStopped,
-		Status:             metav1.ConditionTrue,
-		Reason:             reasonSystemSuspended,
-		Message:            "Terminated by system kill switch (AgenticOLSConfig.spec.suspended=true)",
-		ObservedGeneration: run.Generation,
-	})
-	if err := r.statusPatch(ctx, run, base); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch EmergencyStopped condition: %w", err)
+	deadlineReached := !stopStart.IsZero() && !r.now().Before(stopStart.Add(SuspensionStopWindow))
+	if deadlineReached && !historicalTerminal && !finalOutcome {
+		updated, err := r.writeSuspensionOutcome(ctx, key, run.UID, false)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if updated != nil {
+			*run = *updated
+		}
+		return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 	}
-	return ctrl.Result{}, nil
+
+	requeueAfter := suspensionRequeueAfter
+	if !stopStart.IsZero() {
+		if remaining := stopStart.Add(SuspensionStopWindow).Sub(r.now()); remaining > 0 && remaining < requeueAfter {
+			requeueAfter = remaining
+		}
+	}
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *AgenticRunReconciler) suspensionCleanupPass(
+	ctx context.Context,
+	run *agenticv1alpha1.AgenticRun,
+	timeout time.Duration,
+) (SuspensionCleanup, error, string) {
+	passCtx, cancel := context.WithTimeout(ctx, timeout)
+	report, cleanupErr := r.Sandbox.CleanupSuspension(passCtx, run.UID)
+	remoteEvidence := knownRemoteExecutionOrAccess(run)
+	if remoteEvidence != "" && r.Agent != nil {
+		if err := r.Agent.ReleaseSandboxes(passCtx, run, true); err != nil {
+			logf.FromContext(ctx).Error(err, "best-effort remote sandbox release during suspension", "evidence", remoteEvidence)
+		}
+	}
+	cancel()
+	return report, cleanupErr, remoteEvidence
+}
+
+func (r *AgenticRunReconciler) persistRunStop(
+	ctx context.Context,
+	key types.NamespacedName,
+	uid types.UID,
+	start metav1.Time,
+) (*agenticv1alpha1.AgenticRun, error) {
+	for range 5 {
+		current := &agenticv1alpha1.AgenticRun{}
+		if err := r.APIReader.Get(ctx, key, current); err != nil {
+			return nil, client.IgnoreNotFound(err)
+		}
+		if current.UID != uid {
+			return nil, nil
+		}
+		if isTerminal(agenticv1alpha1.DerivePhase(current.Status.Conditions)) || hasAcceptedStop(current) {
+			return current, nil
+		}
+
+		base := current.DeepCopy()
+		meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonSystemSuspended,
+			Message:            "Stop accepted by global system suspension",
+			ObservedGeneration: current.Generation,
+		})
+		meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping).LastTransitionTime = start
+		err := r.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("persist run stop acceptance: %w", err)
+		}
+		return current, nil
+	}
+	return nil, fmt.Errorf("persist run stop acceptance: status conflict retry limit reached")
+}
+
+func (r *AgenticRunReconciler) writeSuspensionOutcome(
+	ctx context.Context,
+	key types.NamespacedName,
+	uid types.UID,
+	confirmed bool,
+) (*agenticv1alpha1.AgenticRun, error) {
+	for range 5 {
+		current := &agenticv1alpha1.AgenticRun{}
+		if err := r.APIReader.Get(ctx, key, current); err != nil {
+			return nil, client.IgnoreNotFound(err)
+		}
+		if current.UID != uid {
+			return nil, nil
+		}
+		if hasFinalRunStopOutcome(current) {
+			return current, nil
+		}
+		phase := agenticv1alpha1.DerivePhase(current.Status.Conditions)
+		stopping := meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+		terminalStopIntent := isTerminal(phase) && stopping != nil &&
+			stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended
+		if isTerminal(phase) && !terminalStopIntent {
+			return current, nil
+		}
+		if !hasAcceptedStop(current) {
+			return current, nil
+		}
+
+		base := current.DeepCopy()
+		if confirmed {
+			meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+				Type:               agenticv1alpha1.AgenticRunConditionStopping,
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonTeardownComplete,
+				Message:            "Sandbox workload and access cleanup confirmed",
+				ObservedGeneration: current.Generation,
+			})
+			if !terminalStopIntent {
+				meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+					Type:               agenticv1alpha1.AgenticRunConditionEmergencyStopped,
+					Status:             metav1.ConditionTrue,
+					Reason:             reasonSystemSuspended,
+					Message:            "Terminated by system kill switch (AgenticOLSConfig.spec.suspended=true)",
+					ObservedGeneration: current.Generation,
+				})
+			}
+			clearRunSandboxInfo(&current.Status)
+		} else {
+			meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+				Type:               agenticv1alpha1.AgenticRunConditionStopping,
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonTeardownFailed,
+				Message:            "Sandbox cleanup remains unconfirmed after the suspension window",
+				ObservedGeneration: current.Generation,
+			})
+			if !terminalStopIntent {
+				if condType := suspensionFailureCondition(phase); condType != "" {
+					meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+						Type:               condType,
+						Status:             metav1.ConditionFalse,
+						Reason:             reasonEmergencyStopFailed,
+						Message:            "Sandbox cleanup could not be confirmed; see suspension diagnostics",
+						ObservedGeneration: current.Generation,
+					})
+				}
+			}
+		}
+
+		err := r.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("persist run suspension outcome: %w", err)
+		}
+		return current, nil
+	}
+	return nil, fmt.Errorf("persist run suspension outcome: status conflict retry limit reached")
+}
+
+func (r *AgenticRunReconciler) clearRunSandboxInfo(
+	ctx context.Context,
+	key types.NamespacedName,
+	uid types.UID,
+) (*agenticv1alpha1.AgenticRun, error) {
+	for range 5 {
+		current := &agenticv1alpha1.AgenticRun{}
+		if err := r.APIReader.Get(ctx, key, current); err != nil {
+			return nil, client.IgnoreNotFound(err)
+		}
+		if current.UID != uid {
+			return nil, nil
+		}
+		if !hasRunSandboxInfo(current) {
+			return current, nil
+		}
+
+		base := current.DeepCopy()
+		clearRunSandboxInfo(&current.Status)
+		err := r.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		if apierrors.IsConflict(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("clear confirmed sandbox references: %w", err)
+		}
+		return current, nil
+	}
+	return nil, fmt.Errorf("clear confirmed sandbox references: status conflict retry limit reached")
+}
+
+func clearRunSandboxInfo(status *agenticv1alpha1.AgenticRunStatus) {
+	status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{}
+	status.Steps.Execution.Sandbox = agenticv1alpha1.SandboxInfo{}
+	status.Steps.Verification.Sandbox = agenticv1alpha1.SandboxInfo{}
+	status.Steps.Escalation.Sandbox = agenticv1alpha1.SandboxInfo{}
+}
+
+func hasRunSandboxInfo(run *agenticv1alpha1.AgenticRun) bool {
+	return run.Status.Steps.Analysis.Sandbox.ClaimName != "" || run.Status.Steps.Analysis.Sandbox.Namespace != "" ||
+		run.Status.Steps.Execution.Sandbox.ClaimName != "" || run.Status.Steps.Execution.Sandbox.Namespace != "" ||
+		run.Status.Steps.Verification.Sandbox.ClaimName != "" || run.Status.Steps.Verification.Sandbox.Namespace != "" ||
+		run.Status.Steps.Escalation.Sandbox.ClaimName != "" || run.Status.Steps.Escalation.Sandbox.Namespace != ""
+}
+
+func hasFinalRunStopOutcome(run *agenticv1alpha1.AgenticRun) bool {
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping != nil && stopping.Status == metav1.ConditionFalse &&
+		(stopping.Reason == reasonTeardownComplete || stopping.Reason == reasonTeardownFailed) {
+		return true
+	}
+	emergency := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if emergency != nil && emergency.Status == metav1.ConditionTrue {
+		return true
+	}
+	for i := range run.Status.Conditions {
+		condition := &run.Status.Conditions[i]
+		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonEmergencyStopFailed {
+			return true
+		}
+	}
+	return false
+}
+
+func knownRemoteExecutionOrAccess(run *agenticv1alpha1.AgenticRun) string {
+	if run.Spec.TargetCluster == "" {
+		return ""
+	}
+	var evidence string
+	for _, step := range []struct {
+		name string
+		info agenticv1alpha1.SandboxInfo
+	}{
+		{name: "analysis", info: run.Status.Steps.Analysis.Sandbox},
+		{name: "execution", info: run.Status.Steps.Execution.Sandbox},
+		{name: "verification", info: run.Status.Steps.Verification.Sandbox},
+		{name: "escalation", info: run.Status.Steps.Escalation.Sandbox},
+	} {
+		if step.info.ClaimName == "" {
+			continue
+		}
+		if evidence != "" {
+			evidence += ", "
+		}
+		evidence += step.name + " sandbox " + step.info.ClaimName
+	}
+	if run.Annotations[rbacNamespacesAnnotation] != "" {
+		if evidence != "" {
+			evidence += ", "
+		}
+		evidence += "remote execution RBAC annotation"
+	}
+	if evidence == "" {
+		for _, condition := range run.Status.Conditions {
+			if condition.Status == metav1.ConditionUnknown && condition.Type != agenticv1alpha1.AgenticRunConditionStopping {
+				evidence = "active workflow condition " + condition.Type
+				break
+			}
+		}
+	}
+	if evidence == "" {
+		return ""
+	}
+	return fmt.Sprintf("remote execution/access unverified for %s/%s uid=%s target=%s: %s",
+		run.Namespace, run.Name, run.UID, run.Spec.TargetCluster, evidence)
+}
+
+func suspensionFailureCondition(phase agenticv1alpha1.AgenticRunPhase) string {
+	switch phase {
+	case agenticv1alpha1.AgenticRunPhasePending, agenticv1alpha1.AgenticRunPhaseAnalyzing:
+		return agenticv1alpha1.AgenticRunConditionAnalyzed
+	case agenticv1alpha1.AgenticRunPhaseProposed, agenticv1alpha1.AgenticRunPhaseExecuting:
+		return agenticv1alpha1.AgenticRunConditionExecuted
+	case agenticv1alpha1.AgenticRunPhaseVerifying:
+		return agenticv1alpha1.AgenticRunConditionVerified
+	case agenticv1alpha1.AgenticRunPhaseEscalating:
+		return agenticv1alpha1.AgenticRunConditionEscalated
+	default:
+		return ""
+	}
 }
 
 // handleEscalation runs the escalation step: checks approval, calls the
@@ -441,6 +832,9 @@ func (r *AgenticRunReconciler) handleEscalation(
 	}
 
 	if err := r.Agent.Escalate(ctx, run, step); err != nil {
+		if isStopAcceptedError(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionEscalated, err)
 	}
 

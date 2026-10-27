@@ -10,10 +10,10 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 - Builds controller-runtime `Manager` with core + `agenticv1alpha1` scheme.
 - Creates `configuration.Cache` (starts nil). Eagerly attempts `configwatch.TryLoad` for the `lightspeed-agentic-configuration` ConfigMap. Registers `configwatch.Watcher` for runtime changes. [PLANNED: OLS-3928] The cache also holds the effective tool-result inspection value.
 - Wires **dependency injection** directly (no `controller/setup.go`):
-  - `agenticrun.NewSandboxManager(mgr.GetClient(), cfgCache, namespace, auditLogger)` → `SandboxLifecycle`.
-  - `&agenticrun.SandboxAgentCaller{Sandbox, K8sClient, ClientFactory, Namespace, Audit}` → satisfies `agenticrun.AgentCaller`.
-  - `agenticrun.AgenticRunReconciler{Client, Agent, Config, Namespace, Audit, TempLog}` → `SetupWithManager(mgr)`.
-  - `agenticolsconfig.Reconciler` → `SetupWithManager(mgr)` — maintains `AgenticOLSConfig` `Suspended` condition.
+  - `sandboxMgr := agenticrun.NewSandboxManager(mgr.GetClient(), mgr.GetAPIReader(), cfgCache, namespace, auditLogger)` → shared concrete `SandboxManager`.
+  - `&agenticrun.SandboxAgentCaller{Sandbox: sandboxMgr, APIReader: mgr.GetAPIReader(), K8sClient, Namespace, Audit}` → satisfies `agenticrun.AgentCaller`.
+  - `agenticrun.AgenticRunReconciler{Client, APIReader: mgr.GetAPIReader(), Agent, Sandbox: sandboxMgr, Config, Namespace, Audit, TempLog}` → `SetupWithManager(mgr)`.
+  - `agenticolsconfig.Reconciler{Client, APIReader: mgr.GetAPIReader(), Sandbox: sandboxMgr}` → `SetupWithManager(mgr)`; `Now` defaults to `time.Now` and is injectable in tests.
 - Ensures `lightspeed-agent` ServiceAccount unconditionally (idempotent create).
 - Registers health/readiness probes and webhook.
 
@@ -24,7 +24,7 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 | File | Types / primary responsibilities | Key functions / methods |
 | ------ | ---------------------------------- | ------------------------- |
 | `reconciler.go` | `AgenticRunReconciler` (embeds `client.Client`, `Agent AgentCaller`, `Log`) | `Reconcile`, `SetupWithManager`, termination guard ordering |
-| `handlers.go` | (methods on `AgenticRunReconciler`) | `handleAnalysis`, `handleRevision`, `handleExecution`, `handleVerification`, `handleEscalation`, `handleFailed`, `handleSuspension`, `denyAgenticRun`, `conditionTime`, `hasMutationSuccess`, `isObservationAction`, `analysisFailureMessage`, `executionFailureMessage` |
+| `handlers.go` | (methods on `AgenticRunReconciler`) | `handleAnalysis`, `handleRevision`, `handleExecution`, `handleVerification`, `handleEscalation`, `handleFailed`, `handleSuspensionAt`, `denyAgenticRun`, `conditionTime`, `hasMutationSuccess`, `isObservationAction`, `analysisFailureMessage`, `executionFailureMessage` |
 | `helpers.go` | `revisionData`, `analysisQuery`, `executionQuery`, `verificationQuery`, `escalationData`; embedded templates via `//go:embed templates/*.tmpl` | `renderTemplate`, `failStep`, `statusPatch`, `hasSandboxClaims`, `isTerminal`, `setVerificationSkipped`, `getLatestAnalysisResult`, `selectedOption`, `trimNonSelectedOptions`, `resetExecutionAndVerification`, `buildEscalationRequest`, `needsRevision`, `buildRevisionContext`, `buildAnalysisQuery`, `buildExecutionQuery`, `buildVerificationQuery`, `prettyJSON` |
 | `approval.go` | — | `getApprovalPolicy`, `getAgenticRunApproval`, `ensureAgenticRunApproval`, `isStageApproved`, `isStageDenied`, `getStageOverrideAgent`, `getStageOption` |
 | `resolve.go` | `resolvedStep`, `resolvedWorkflow` | `resolveAgenticRun`, `stepAgentName`; [DONE: OLS-4060] resolves one run-level `ToolsSpec` from `AgenticRun.spec.tools` for all steps |
@@ -58,10 +58,10 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 | File | Types | Key functions |
 | ------ | ------- | ---------------- |
-| `reconciler.go` | `Reconciler` (embeds `client.Client`, `EventRecorder`) | `Reconcile`, `SetupWithManager`, `handleActivation`, `handleDeactivation` |
-| `reconciler_test.go` | — | Activation/deactivation, event emission, non-terminal run requeue |
+| `reconciler.go` | `Reconciler` (`client.Client`, `APIReader`, `Sandbox`, `EventRecorder`, optional `Now`) | `Reconcile`, `SetupWithManager`, `ensureActivationStatus`, `reconcileSuspension`, `persistRunStop`, `patchActivationOutcome`, `handleDeactivation`, `activationStart`, `setConditionAt` |
+| `reconciler_test.go` | — | Actual-Reconcile activation, deadline/restart, generation, cleanup/safety, marker-conflict, remote-evidence, and deactivation cases |
 
-**Integration note:** Registered in `cmd/main.go`. Watches the cluster `AgenticOLSConfig` named `cluster` and **Watches** `AgenticRun` objects to requeue the config when run phases change.
+**Integration note:** Registered in `cmd/main.go`. Reads the singleton config and AgenticRun inventory through the uncached API reader, watches AgenticRun changes, and requeues every five seconds while suspension remains active to discover late resources.
 
 ---
 
@@ -80,11 +80,11 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 
 1. **Watch / enqueue:** controller-runtime delivers `ctrl.Request` for a `AgenticRun` namespaced name. `SetupWithManager` `Owns` child CRs (`AgenticRunApproval`, `AnalysisResult`, `ExecutionResult`, `VerificationResult`, `EscalationResult`), `Owns` Pods and ConfigMaps [OLS-3066], and **Watches** cluster `ApprovalPolicy` and `AgenticOLSConfig` to enqueue all non-terminal runs when either changes. [OLS-3066] Pod watches serve **failure detection** (pod `Failed`, `ImagePullBackOff`); Result CR watches serve **completion detection** (CR created with `Completed` condition).
 2. **`Reconcile` load:** `Get` `AgenticRun`; ignore not-found.
-3. **Deletion path:** If `DeletionTimestamp` is set: (a) RBAC finalizer `agentic.openshift.io/execution-rbac-cleanup` present → `Agent.ReleaseSandboxes(ctx, &run, false)` (which calls `Release` per recorded step — handles pod/claim deletion, SA reader-subject removal, execution RBAC cleanup via GC and explicit cross-namespace delete), remove finalizer; (b) templog finalizer present → `Agent.CleanupTemplogs`, remove finalizer. Both finalizers are processed in a **single reconcile pass** — no intermediate requeue.
-4. **Finalizer and configuration guards:** On a non-deleting run, add missing cleanup finalizers and re-fetch; then wait for the `lightspeed-agentic-configuration` cache. If it is unavailable, return an error.
-5. **Phase:** `agenticv1alpha1.DerivePhase(run.Status.Conditions)` — see **what/** for semantics. Includes `EmergencyStopped` as the highest-precedence terminal phase.
-6. **Terminal / failed shortcuts:** Completed/Denied/Escalated/EmergencyStopped → optional sandbox release via `Agent.ReleaseSandboxes(..., false)`; `AgenticRunPhaseFailed` → `handleFailed`. Revisions that fall through reach the suspension guard.
-7. **Suspension check:** Runs after terminal dispatch; non-terminal runs and revisable Completed/Failed runs that bypass terminal cleanup reach `isSuspended()`. If suspended, `handleSuspension` calls `Agent.ReleaseSandboxes(ctx, run, true)` only when a step `status.steps.*.sandbox.claimName` is recorded; errors are logged. It returns if the derived phase is already terminal; otherwise it writes `EmergencyStopped=True`, reason `SystemSuspended`, and returns without a run-level `Stopping` condition or teardown confirmation. If the config CR is not found, treat it as not suspended. [PLANNED: OLS-4131] Run-level `Stopping`, confirmation-gated outcomes, managed-resource discovery, and retries remain future; see **what/system-config.md**.
+3. **Deletion and stop checks:** A deleting run first reads authoritative suspension and its persisted stop marker. Accepted stop intent or a suspended config routes through stop handling before ordinary release; outside stop mode, the RBAC finalizer uses `Agent.ReleaseSandboxes(ctx, &run, false)` and the templog finalizer is processed as usual. For non-deleting runs, missing cleanup finalizers are added and re-fetched before the same stop check.
+4. **Stop handling:** Before configuration-cache readiness, approval, revision, or terminal shortcuts, current suspension and persisted stop acceptance route to `handleSuspensionAt`. A current activation without current-generation status blocks progression until the config controller establishes it. The run controller persists `Stopping=True/SystemSuspended` before cleanup, uses the copied, second-precision global activation time, and writes confirmed (`Stopping=False/TeardownComplete` plus `EmergencyStopped=True`) or failed (`Stopping=False/TeardownFailed`) outcomes with optimistic locking. For a terminal run with `TerminalTime` at/after activation or absent, `Stopping` is auxiliary intent: cleanup may finalize that marker but must not alter workflow conditions or TTL; a definitively pre-activation terminal run remains unchanged. Stop cleanup continues to discover late resources and does not invent another ten-second window.
+5. **Configuration guard:** Runs not in stop mode wait for the `lightspeed-agentic-configuration` cache. If it is unavailable, return an error.
+6. **Phase:** `agenticv1alpha1.DerivePhase(run.Status.Conditions)` — see **what/** for semantics. `EmergencyStopped` is the highest-precedence terminal phase.
+7. **Terminal / failed shortcuts:** Completed/Denied/Escalated/EmergencyStopped use ordinary terminal cleanup; `AgenticRunPhaseFailed` reaches `handleFailed`. These shortcuts occur only after the stop guard.
 8. **Shared prelude:** `getApprovalPolicy` (cluster singleton name `cluster`), `ensureAgenticRunApproval`, `resolveAgenticRun`. Resolution failure → set `AgenticRunConditionAnalyzed=False` with `reasonWorkflowFailed`, status patch, return (no requeue).
 9. **Phase switch:** Routes to `handleRevision` (if `needsRevision`) before analysis/execution/escalation arms; otherwise `handleAnalysis`, `handleExecution`, `handleVerification`, `handleEscalation`, or no-op.
 10. **Handlers** set step conditions (`Unknown` → check Result CR / pod status → `True`/`False`), process Result CRs created by sandbox, append `Status.Steps.*.Results`, `statusPatch` proposal.
@@ -106,7 +106,8 @@ Audience: AI agents. Behavioral rules and phase semantics live in **what/** spec
 Unified sandbox lifecycle manager. Fully encapsulates SA, RBAC, ConfigMap, and pod creation/cleanup for every step.
 
 - **`Create(ctx, run, step, agent, llm, tools, deadline, query, agentCtx)`:** Orchestrates: (1) creates a per-step ServiceAccount via `ensureSA` (`sandboxSAName(run, step, namespace)` → `ls-{step}-{namespace}-{runUID}`); (2) adds the per-step SA to all reader ClusterRoleBindings via `addReaderSubject`; (3) for execution step with non-empty RBAC: calls `ensureExecutionRBAC` and persists the RBAC namespaces annotation on the `AgenticRun`; (4) builds and creates the input ConfigMap (`buildInputConfigMap` + `createInputConfigMap`) with owner reference; (5) reads base PodSpec from config cache, overlays agent config via `PodSpecBuilder.Build`, creates either a bare Pod or SandboxClaim+SandboxTemplate; (6) sets SA owner reference to pod/claim via `setSAOwner`. Both resource types set OwnerReferences to the AgenticRun. Idempotent via `AlreadyExists`.
-- **`Release(ctx, run, step, spoke, zeroGrace)`:** Ordinary per-step, terminal, and finalizer calls pass `false`; bare-Pod deletion uses Kubernetes default grace, while claim release does not directly force-delete the backing Pod. Suspension alone passes `true`: bare-pod mode requests zero-grace deletion of the status-recorded Pod; claim mode follows `status.sandbox.name`, verifies controller ownership claim→Sandbox→Pod, uses the `agents.x-k8s.io/pod-name` annotation or Sandbox-name fallback, then requests zero-grace deletion of that Pod before deleting the claim. Current claim release also deletes its derived `SandboxTemplate`. `Release` cleans per-step reader subjects and execution RBAC. [PLANNED: OLS-3298, OLS-4018, OLS-4131] Per-run release MUST preserve shared templates; garbage collection must be separate (rule 4). NotFound is ignored.
+- **`Release(ctx, run, step, spoke, zeroGrace)`:** Ordinary per-step, terminal, and finalizer calls pass `false` and retain their existing graceful cleanup behavior. The suspension-specific low-level path may pass `true` for applicable spoke requests. Global and per-run hub cleanup is driven by `CleanupSuspension`, which performs managed inventory and authoritative confirmation rather than relying only on recorded sandbox references. `Release` still cleans per-step reader subjects and execution RBAC.
+- **`CleanupSuspension(ctx, runUID)`:** Performs one uncached inventory, deletion, and confirmation pass. An empty UID sweeps managed hub-local inventory; a non-empty UID scopes it to one run. Confirmation verifies active workload removal and temporary-access cleanup; completed Pods need not be deleted, and a successful DELETE alone is insufficient. It preserves input ConfigMaps, Result CRs, shared reader bindings, and reusable templates, and does not discover or confirm spoke resources.
 
 ### `PodSpecBuilder` (internal to `SandboxManager`)
 
@@ -119,10 +120,10 @@ Unified sandbox lifecycle manager. Fully encapsulates SA, RBAC, ConfigMap, and p
 
 ## `SandboxAgentCaller` [OLS-3066: batch model]
 
-- **Constructor:** Struct literal with `Sandbox SandboxLifecycle`, `K8sClient`, `Namespace`, `Audit`.
+- **Constructor:** Struct literal with `Sandbox SandboxLifecycle`, `APIReader client.Reader`, `K8sClient`, `Namespace`, `Audit`.
 - **[OLS-3066] Batch flow:** Each `Analyze`/`Execute`/`Verify`/`Escalate` method calls `launchSandbox` which: (a) calls `Sandbox.Create` (which fully encapsulates SA, RBAC, ConfigMap, and pod creation — see `SandboxManager.Create` above), (b) patches sandbox info on the run, (c) returns nil (handler returns `ctrl.Result{}, nil`; re-entry is watch-driven via pod events and the background timeout ticker). No `WaitReady`, no HTTP call, no `serviceAccount` parameter.
 - **`buildAgentContext`:** Adds `ApprovedOption` / `ExecutionResult` per step and `PreviousAttempts` from failed `StepResultRef` outcomes; target namespaces are carried by approved namespace-scoped RBAC rules, not as a separate context field.
-- **`ReleaseSandboxes(ctx, run, zeroGrace)`:** Iterates sandbox names recorded in `status.steps.*.sandbox.claimName` and calls `Release(..., spoke, zeroGrace)`; if execution has no recorded sandbox, it separately attempts RBAC cleanup from the run annotation. It does not discover managed Pods/SandboxClaims absent from status. Suspension passes `true` only when `hasSandboxClaims` is set; finalizer deletion and terminal cleanup pass `false`. The ordinary per-step `ReleaseSandbox(ctx, run, step)` wrapper also passes `false`. [PLANNED: OLS-3298, OLS-4018, OLS-4131] Shared hard-stop discovery, confirmation, and retries remain future.
+- **`ReleaseSandboxes(ctx, run, zeroGrace)`:** Retains the ordinary reference-driven release helper and existing spoke cleanup requests. Global suspension does not rely on run references: the config controller calls `CleanupSuspension(ctx, "")`, while run stop handling uses the run UID and continues late-resource cleanup. Ordinary terminal/finalizer paths preserve their non-zero-grace behavior.
 
 ## `AgentHTTPClient` [OLS-3066: removed]
 
@@ -183,26 +184,29 @@ Two handlers — a unified pod watcher and a timeout loop.
 cmd/main.go
   ├─ configuration.NewCache → cfgCache (starts nil)
   ├─ configwatch.Watcher → populates cfgCache on ConfigMap event
-  ├─ NewSandboxManager(client, cfgCache, namespace, auditLogger) → SandboxLifecycle
-  ├─ SandboxAgentCaller{Sandbox, K8sClient, Namespace, Audit}
-  ├─ AgenticRunReconciler{Client, Agent, Config: cfgCache, Namespace}.SetupWithManager
-  ├─ agenticolsconfig.Reconciler.SetupWithManager
+  ├─ `sandboxMgr := NewSandboxManager(client, APIReader, cfgCache, namespace, auditLogger)` → shared manager
+  ├─ `SandboxAgentCaller{Sandbox: sandboxMgr, APIReader, K8sClient, Namespace, Audit}`
+  ├─ `AgenticRunReconciler{Client, APIReader, Agent, Sandbox: sandboxMgr, Config, Namespace}.SetupWithManager`
+  ├─ `agenticolsconfig.Reconciler{Client, APIReader, Sandbox: sandboxMgr}.SetupWithManager`
   └─ inline lightspeed-agent SA creation (manager.RunnableFunc)
 
 AgenticRunReconciler.Reconcile
-  ├─ config guard: cfgCache.Available() → false: fail with clear error
-  ├─ approval.go, resolve.go [DONE: OLS-4060: run-level tools for all steps]
-  ├─ handlers.go → results.go (read Result CRs), rbac.go, helpers.go (status, option trim)
-  └─ Agent (SandboxAgentCaller) [OLS-3066: batch model]
-        ├─ First entry: launchSandbox
-        │   └─ Sandbox.Create (SA + reader CRB + execution RBAC + ConfigMap + PodSpec → bare Pod / SandboxClaim)
-        │   └─ patchSandboxInfo → return (watch-driven re-entry)
-        ├─ Re-entry: check Result CR (Completed condition) → process result
-        │   └─ Update run conditions, append result ref
-        ├─ handlePodEvent (both modes): pod terminated → resolveBarePodMetadata or resolveSandboxPodMetadata → process result → patch condition → releaseSandbox
-        ├─ runTimeoutLoop → handleTimeEvent: dispatches to listBarePods or listSandboxPods based on mode
-        └─ `Sandbox.Release(..., false)` for per-step, terminal, and deletion cleanup; suspension calls it through `ReleaseSandboxes(..., true)` → zero-grace bare-Pod or claim-owned backing-Pod deletion before claim cleanup
-```
+  ├─ uncached AgenticRun load and persisted-stop/current-suspension guard
+  ├─ accepted stop → per-run suspension cleanup/outcome before config-cache, approval, revision, or terminal dispatch
+  ├─ otherwise: config-cache guard → terminal handling → approval.go / resolve.go → handlers.go
+  ├─ Agent (SandboxAgentCaller) [OLS-3066: batch model]
+  │     ├─ First entry: launchSandbox → Sandbox.Create → patchSandboxInfo → return (watch-driven re-entry)
+  │     ├─ Re-entry: read Result CR / Pod event → update run workflow status
+  │     └─ handlePodEvent / runTimeoutLoop remain guarded against stale workflow writes
+  └─ ordinary Agent.Release(..., false) retains graceful cleanup
+
+AgenticOLSConfigReconciler.Reconcile
+  ├─ uncached config read; persist current-generation Suspended=Stopping and SafeToResume=False on activation
+  ├─ uncached run inventory; persist UID-bound run stop acceptance before the global sweep
+  ├─ SandboxManager.CleanupSuspension(ctx, "") with the original remaining ten-second window
+  ├─ aggregate cleanup report, run outcomes, unsaved markers, and known unverified remote evidence
+  ├─ patch Suspended and SafeToResume through the live reconcile context
+  └─ requeue while suspended, including clean/error completion, to discover late resources
 
 ---
 
@@ -211,7 +215,7 @@ AgenticRunReconciler.Reconcile
 - **`cmd/main.go` scheme:** Registers core + `agenticv1alpha1` + `consolev1` + `openshiftv1`. No separate `controller/setup.go` — all wiring is inline in `main.go`. Watching or applying arbitrary CRDs from tests may need extended schemes (see `reconciler_test.go`).
 - **Max concurrent reconciles:** `SetupWithManager` reads cluster `ApprovalPolicy` via API reader for `MaxConcurrentRuns`, else `DefaultMaxConcurrentRuns` from API package.
 - **Policy watch:** Enqueues **all** non-terminal runs on any `ApprovalPolicy` event — can be chatty.
-- **AgenticOLSConfig watch:** Enqueues runs affected by configuration changes. When `suspended` flips to `true`, non-terminal runs hit the global termination guard. The config controller currently counts only non-terminal AgenticRuns, requeueing while any remain; it reports the global `AgenticOLSConfig` `Suspended=True` condition with reason `Stopping` until none remain, then `AdminActivated`. It does not discover or track managed sandbox teardown; this global reason is distinct from the run-level `Stopping` condition. [PLANNED: OLS-4131] Run-level condition handling, managed-workload tracking, and confirmed-teardown/retry behavior remain future.
+- **AgenticOLSConfig watch:** Run events enqueue the singleton config reconcile as an accelerator; the controller also requeues every five seconds while `spec.suspended` remains true. It persists current-generation `Suspended=True/Stopping` and `SafeToResume=False` before cleanup, normalizes a fresh activation time to second precision, and uses the persisted timestamp plus generation as activation identity. Nonterminal runs and terminal runs with absent or at/after-activation `TerminalTime` receive UID-bound auxiliary stop acceptance; definitively pre-activation terminal runs keep their history untouched. Run-marker reads/patches and cleanup use a pass context bounded by the original remaining ten seconds, then a separate five-second background timeout; final global outcome/safety patches use the live reconcile context. Suspension reconciliation requires both the uncached `APIReader` and concrete `SandboxManager`; missing dependencies are errors, not success fallbacks. The global sweep uses uncached `CleanupSuspension(ctx, "")`. Clean `AdminActivated` requires confirmed cleanup and affected outcomes. At the original deadline, unresolved cleanup, outcomes, inventory, or markers produce terminal `AdminActivatedWithErrors`. `SafeToResume` independently requires confirmed cleanup, durable run acceptance, and no known unverified remote workload/access; it may become true during later recovery without changing the terminal error reason. Both conditions observe the current suspended generation. A target cluster alone is not remote-resource evidence. Activation Events are best-effort, and terminal/clean/error states requeue to discover late resources.
 - **Workflow resolution errors:** Patched onto `AgenticRunConditionAnalyzed` false — see API for exact condition ordering vs `DerivePhase`.
 - **`selectedOption` vs trim:** Verification uses latest analysis result’s **first** option (`Options[0]`) when resolving; execution path uses `trimNonSelectedOptions` which respects `AgenticRunApproval` execution option index when multiple options exist.
 - **No execution retries:** Execution runs exactly once per analysis iteration; verification failure escalates directly via the `Escalating` phase — there is no `maxAttempts`/retry loop (see **what/run-lifecycle.md** and **what/approval.md**).

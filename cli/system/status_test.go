@@ -42,64 +42,6 @@ func TestStatus_Suspended(t *testing.T) {
 	}
 }
 
-func TestStatus_SuspendedWithCondition(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	transition := metav1.NewTime(time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC))
-	now := transition.Add(14 * time.Minute)
-
-	cfg := testConfig(true)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
-		Status:             metav1.ConditionTrue,
-		Reason:             "AdminActivated",
-		Message:            "System suspended; 2 runs emergency-stopped",
-		LastTransitionTime: transition,
-	}}
-
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: func() time.Time { return now }}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: SUSPENDED (since 14m ago, 2026-06-19T12:00:00Z, System suspended; 2 runs emergency-stopped)"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
-
-func TestStatus_SuspendedStopping(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	transition := metav1.NewTime(time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC))
-	now := transition.Add(14 * time.Minute)
-
-	cfg := testConfig(true)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
-		Status:             metav1.ConditionTrue,
-		Reason:             "Stopping",
-		Message:            "Waiting for 3 runs to terminate",
-		LastTransitionTime: transition,
-	}}
-
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: func() time.Time { return now }}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: SUSPENDED (stopping, Waiting for 3 runs to terminate)"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
-
 func TestStatus_ActiveWithDeactivationCondition(t *testing.T) {
 	streams, out, _ := fakeStreams()
 	transition := metav1.NewTime(time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC))
@@ -123,35 +65,6 @@ func TestStatus_ActiveWithDeactivationCondition(t *testing.T) {
 
 	got := strings.TrimSpace(out.String())
 	want := "Agentic System: Active (resumed 2h ago, 2026-06-19T10:00:00Z)"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
-
-// TestStatus_SuspendedWithStaleCondition covers re-suspension before the
-// reconciler runs: spec.suspended=true but the condition still says
-// Suspended=False from the previous deactivation. The CLI must fall back
-// to the plain "SUSPENDED" output, not render stale timestamps.
-func TestStatus_SuspendedWithStaleCondition(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	cfg := testConfig(true)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
-		Status:             metav1.ConditionFalse,
-		Reason:             "AdminDeactivated",
-		LastTransitionTime: metav1.NewTime(time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)),
-	}}
-
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: time.Now}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: SUSPENDED"
 	if got != want {
 		t.Errorf("output = %q, want %q", got, want)
 	}

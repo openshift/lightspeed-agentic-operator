@@ -29,9 +29,9 @@ Audience: AI agents. Command behavior and user-facing rules belong in **what/** 
 | `suspend.go` | `SuspendOptions` | `NewSuspendCmd`, `Complete`, `Run` |
 | `resume.go` | `ResumeOptions` | `NewResumeCmd`, `Complete`, `Run` |
 
-- **`status`:** Gets `AgenticOLSConfig` named `cluster`; prints `"Agentic System: SUSPENDED"` or `"Active"`. When the `Suspended` status condition is present, includes relative/absolute transition time and condition message (suspended) or resume time (`AdminDeactivated`). Falls back to spec-only lines while suspension is in progress. `NotFound` = Active.
+- **`status`:** Gets `AgenticOLSConfig` named `cluster`; prints whether the system is active or suspended. For current-generation `Suspended=True`, it shows the outcome/progress and diagnostics, including terminal `AdminActivatedWithErrors` details; terminal outcomes include relative/absolute transition time. While suspended it separately reports whether `SafeToResume=True` is confirmed for the current generation; missing or stale safety is shown as unconfirmed. `NotFound` = Active.
 - **`suspend`:** Prompts confirmation (skip with `--yes`); patches `spec.suspended=true` or creates the CR if absent. Idempotent (reports "already suspended" if already true).
-- **`resume`:** Patches `spec.suspended=false`. Reports "not suspended" if already false or CR absent.
+- **`resume`:** Patches `spec.suspended=false` through the Kubernetes API. Kubernetes RBAC remains the authorization mechanism; the API server's admission denial is returned to the caller when current cleanup safety is not confirmed.
 
 ---
 

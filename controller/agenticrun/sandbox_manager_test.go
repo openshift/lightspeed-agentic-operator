@@ -110,11 +110,35 @@ func newTestSandboxManager(fc client.Client, cache *configuration.Cache) *Sandbo
 	resetReaderBindings()
 	return &SandboxManager{
 		client:          fc,
+		reader:          fc,
 		config:          cache,
 		builder:         &PodSpecBuilder{},
 		namespace:       "test-ns",
 		deletionTimeout: 1 * time.Second,
 	}
+}
+func seedSandboxRun(t *testing.T, manager *SandboxManager, run *agenticv1alpha1.AgenticRun) *agenticv1alpha1.AgenticRun {
+	t.Helper()
+	key := client.ObjectKeyFromObject(run)
+	current := &agenticv1alpha1.AgenticRun{}
+	if err := manager.reader.Get(context.Background(), key, current); err == nil {
+		if run.UID == "" {
+			run.UID = current.UID
+		}
+		if current.UID != run.UID {
+			t.Fatalf("persisted run UID = %q, fixture UID = %q", current.UID, run.UID)
+		}
+		return current
+	} else if client.IgnoreNotFound(err) != nil {
+		t.Fatalf("read persisted run fixture: %v", err)
+	}
+	if run.UID == "" {
+		run.UID = types.UID("sandbox-manager-test-" + run.Name)
+	}
+	if err := manager.client.Create(context.Background(), run); err != nil {
+		t.Fatalf("persist run fixture before sandbox creation: %v", err)
+	}
+	return run
 }
 
 // --- Create tests ---
@@ -124,7 +148,7 @@ func TestCreate_BarePod(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -180,10 +204,11 @@ func TestCreate_BarePod(t *testing.T) {
 
 func TestCreate_SandboxClaim(t *testing.T) {
 	cache := testCache(t, "sandbox-claim")
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
+	fc := fake.NewClientBuilder().WithScheme(suspensionTestScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
+	run := testSMRun()
 
-	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -191,20 +216,16 @@ func TestCreate_SandboxClaim(t *testing.T) {
 		t.Fatalf("sandbox-claim name should start with 'ls-', got %q", name)
 	}
 
-	tmpl := &unstructured.Unstructured{}
-	tmpl.SetGroupVersionKind(smClaimGVK)
-	// Actually check the template was created
-	stmpl := &unstructured.Unstructured{}
-	stmpl.SetGroupVersionKind(smClaimGVK)
-	stmpl.SetGroupVersionKind(smClaimGVK)
-	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, stmpl); err != nil {
+	claim := &unstructured.Unstructured{}
+	claim.SetGroupVersionKind(smClaimGVK)
+	if err := fc.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, claim); err != nil {
 		t.Fatalf("SandboxClaim not found: %v", err)
 	}
-
-	ownerRefs, found, _ := unstructured.NestedSlice(stmpl.Object, "metadata", "ownerReferences")
+	ownerRefs, found, _ := unstructured.NestedSlice(claim.Object, "metadata", "ownerReferences")
 	if !found || len(ownerRefs) == 0 {
 		t.Fatal("expected ownerReferences on SandboxClaim")
 	}
+
 }
 
 func TestCreate_ConfigNotAvailable(t *testing.T) {
@@ -212,7 +233,7 @@ func TestCreate_ConfigNotAvailable(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	_, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	_, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err == nil {
 		t.Fatal("expected error when config is not available")
 	}
@@ -223,11 +244,11 @@ func TestCreate_Idempotent_BarePod(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name1, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name1, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("first Create failed: %v", err)
 	}
-	name2, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name2, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("second Create failed: %v", err)
 	}
@@ -241,11 +262,11 @@ func TestCreate_Idempotent_SandboxClaim(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name1, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name1, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("first Create failed: %v", err)
 	}
-	name2, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name2, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("second Create failed: %v", err)
 	}
@@ -260,7 +281,7 @@ func TestCreate_OTELEnvVars(t *testing.T) {
 	mgr := newTestSandboxManager(fc, cache)
 
 	run := testSMRun()
-	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -316,7 +337,7 @@ func TestCreate_NoOTEL_NoEnvVars(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 	mgr := newTestSandboxManager(fc, cache)
 
-	name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -340,7 +361,7 @@ func TestCreate_OTELEnvVars_SandboxClaim(t *testing.T) {
 	mgr := newTestSandboxManager(fc, cache)
 
 	run := testSMRun()
-	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -401,10 +422,14 @@ func TestRelease_BarePod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "p-analysis-test-run", Namespace: "test-ns"},
 	}
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(pod).Build()
-	mgr := newTestSandboxManager(fc, cache)
+	recorder := &podDeleteOptionsClient{Client: fc}
+	mgr := newTestSandboxManager(recorder, cache)
 
 	if err := mgr.Release(context.Background(), run, "analysis", nil, false); err != nil {
 		t.Fatalf("Release failed: %v", err)
+	}
+	if len(recorder.podDeletes) != 1 || recorder.podDeletes[0].grace != nil {
+		t.Fatalf("ordinary Release Pod deletion grace = %#v, want Kubernetes default", recorder.podDeletes)
 	}
 
 	var check corev1.Pod
@@ -445,7 +470,7 @@ func TestNamePrefix_LSPrefix(t *testing.T) {
 			fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB()).Build()
 			mgr := newTestSandboxManager(fc, cache)
 
-			name, err := mgr.Create(context.Background(), testSMRun(), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+			name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, testSMRun()), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 			if err != nil {
 				t.Fatalf("Create failed: %v", err)
 			}
@@ -464,7 +489,7 @@ func TestNamePrefix_LongNameTruncated(t *testing.T) {
 	longRun := testSMRun()
 	longRun.Name = "a-very-long-run-name-that-exceeds-sixty-three-characters-in-total-length"
 
-	name, err := mgr.Create(context.Background(), longRun, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, longRun), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -579,7 +604,7 @@ func TestCreate_SpokeRun(t *testing.T) {
 	mgr := newTestSandboxManager(hubFC, cache)
 
 	run := testSpokeRun()
-	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create spoke run failed: %v", err)
 	}
@@ -759,7 +784,7 @@ func TestCreate_SpokeRun_KubeconfigSecretAlreadyExists(t *testing.T) {
 	mgr := newTestSandboxManager(hubFC, cache)
 
 	// Should succeed — Secret data refreshed with new token.
-	_, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	_, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create with existing Secret failed: %v", err)
 	}
@@ -802,7 +827,7 @@ func TestCreate_SpokeRun_KubeconfigSecretAlreadyExists(t *testing.T) {
 		WithObjects(testReaderCRB(), testSpokeKubeconfigSecret(), collisionSecret).Build()
 	mgr2 := newTestSandboxManager(hubFC2, cache)
 
-	_, err = mgr2.Create(context.Background(), run2, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	_, err = mgr2.Create(context.Background(), seedSandboxRun(t, mgr2, run2), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err == nil {
 		t.Fatal("expected error when kubeconfig Secret belongs to a different run")
 	}
@@ -927,7 +952,7 @@ func TestCreate_LocalRun_Unchanged(t *testing.T) {
 	mgr := newTestSandboxManager(fc, cache)
 
 	run := testSMRun()
-	name, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	name, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -996,7 +1021,7 @@ func TestCreate_OwnerPatchFailure_DoesNotDeleteWorkload(t *testing.T) {
 	mgr := newTestSandboxManager(fc, cache)
 	run := testSMRun()
 
-	_, err := mgr.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
+	_, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil)
 	if err == nil {
 		t.Fatal("expected error from owner-ref patch failure")
 	}
@@ -1020,5 +1045,79 @@ func TestCreate_OwnerPatchFailure_DoesNotDeleteWorkload(t *testing.T) {
 	var sa corev1.ServiceAccount
 	if err := fc.Get(context.Background(), types.NamespacedName{Name: saName, Namespace: "test-ns"}, &sa); err != nil {
 		t.Fatalf("SA should still exist after owner-patch failure, got: %v", err)
+	}
+}
+
+func TestCreateRejectsAcceptedStopAfterResumptionBeforeSideEffects(t *testing.T) {
+	cache := testCache(t, "bare-pod")
+	run := testSMRun()
+	run.Status.Conditions = []metav1.Condition{{
+		Type:               agenticv1alpha1.AgenticRunConditionStopping,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonSystemSuspended,
+		LastTransitionTime: metav1.NewTime(time.Unix(100, 0).UTC()),
+		ObservedGeneration: run.Generation,
+	}}
+	config := &agenticv1alpha1.AgenticOLSConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Spec:       agenticv1alpha1.AgenticOLSConfigSpec{Suspended: false},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(testReaderCRB(), run, config).
+		Build()
+	mgr := newTestSandboxManager(fc, cache)
+
+	if _, err := mgr.Create(context.Background(), seedSandboxRun(t, mgr, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil); err != errStopAccepted {
+		t.Fatalf("Create error = %v, want %v", err, errStopAccepted)
+	}
+
+	var pods corev1.PodList
+	if err := fc.List(context.Background(), &pods, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("stopped Create created Pods: %v", pods.Items)
+	}
+	var serviceAccounts corev1.ServiceAccountList
+	if err := fc.List(context.Background(), &serviceAccounts, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(serviceAccounts.Items) != 0 {
+		t.Fatalf("stopped Create created ServiceAccounts: %v", serviceAccounts.Items)
+	}
+	var configMaps corev1.ConfigMapList
+	if err := fc.List(context.Background(), &configMaps, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(configMaps.Items) != 0 {
+		t.Fatalf("stopped Create created input ConfigMaps: %v", configMaps.Items)
+	}
+}
+
+func TestCreateRequiresUncachedReaderBeforeSideEffects(t *testing.T) {
+	cache := testCache(t, "bare-pod")
+	run := testSMRun()
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(testReaderCRB(), run).Build()
+	manager := newTestSandboxManager(fc, cache)
+	manager.reader = nil
+
+	if _, err := manager.Create(context.Background(), run, "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil); err == nil {
+		t.Fatal("Create succeeded without the required uncached reader")
+	}
+	var pods corev1.PodList
+	if err := fc.List(context.Background(), &pods, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	var accounts corev1.ServiceAccountList
+	if err := fc.List(context.Background(), &accounts, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	var configMaps corev1.ConfigMapList
+	if err := fc.List(context.Background(), &configMaps, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 0 || len(accounts.Items) != 0 || len(configMaps.Items) != 0 {
+		t.Fatalf("Create had side effects without its required reader: Pods=%v SAs=%v ConfigMaps=%v", pods.Items, accounts.Items, configMaps.Items)
 	}
 }

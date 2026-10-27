@@ -49,7 +49,7 @@ func newReconcilerWithPolicy(t *testing.T, run *agenticv1alpha1.AgenticRun, agen
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 	agent.withClient(t, fc, "default")
-	r := &AgenticRunReconciler{Client: fc, Agent: agent, Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent, Namespace: "default"}
 	// Initial reconcile creates AgenticRunApproval (auto-approved stages based on policy).
 	reconcileOnce(r, run.Name)
 	return r, fc
@@ -415,7 +415,7 @@ func TestNoPolicy_DefaultsToManual(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 	agent.withClient(t, fc, "default")
-	r := &AgenticRunReconciler{Client: fc, Agent: agent, Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent, Namespace: "default"}
 
 	// Initial reconcile creates AgenticRunApproval; analysis should wait for approval
 	reconcileOnce(r, "fix-crash")

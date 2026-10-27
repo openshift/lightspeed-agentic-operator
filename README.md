@@ -82,6 +82,16 @@ Default namespace is `openshift-lightspeed` unless overridden with `-n` or kubec
 
 Suspension requests zero-grace deletion of sandbox Pods in both bare-pod and sandbox-claim modes, bypassing graceful shutdown. Ordinary cleanup keeps its existing termination behavior. This API request does not guarantee immediate process termination on an unreachable node.
 
+Global suspension separates its terminal outcome from permission to resume. The
+current-generation `SafeToResume=True` condition is required alongside current
+`Suspended=True/AdminActivated` or `AdminActivatedWithErrors` before resuming or
+deleting a suspended `AgenticOLSConfig`. The initial cleanup deadline is ten
+seconds; unresolved work produces terminal error completion but does not itself
+authorize either action. `oc agentic status` shows
+the safety state and diagnostics; `oc agentic resume` remains an API-authorized
+request and reports the admission denial when safety is unconfirmed. Control-plane
+confirmation does not prove process death on an unreachable node.
+
 ### Preserve a Failed Sandbox for Debugging
 
 To retain the sandbox Pod and associated diagnostic resources after a failed run, add this annotation to the `AgenticRun`:
@@ -127,6 +137,10 @@ Upstream install details: [Agent Sandbox installation](https://agent-sandbox.sig
 ### CRDs and manifests
 
 Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make manifests`**.
+
+Downstream OLM installations must synchronize the updated role before relying on suspension confirmation.
+`lightspeed-operator` consumes these permissions through its pinned-source `make sync-agentic-crds` and bundle regeneration workflow.
+Updating this repository does not update an installed OLM bundle.
 
 ### Makefile defaults
 

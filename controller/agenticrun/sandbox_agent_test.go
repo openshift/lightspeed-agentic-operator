@@ -61,6 +61,7 @@ func newTestSandboxAgentCallerWithAgenticRun(sandbox *mockSandboxProvider, run *
 	return &SandboxAgentCaller{
 		Sandbox:   sandbox,
 		K8sClient: fc,
+		APIReader: fc,
 		Namespace: "test-ns",
 	}
 }
@@ -75,6 +76,28 @@ func testSandboxStep() resolvedStep {
 		Agent: testDefaultAgent(),
 		LLM:   testLLM("smart"),
 		Tools: &tools,
+	}
+}
+
+func TestPatchSandboxInfoRejectsAcceptedStopAfterResumption(t *testing.T) {
+	run := testSandboxAgenticRun()
+	run.Status.Conditions = []metav1.Condition{{
+		Type:               agenticv1alpha1.AgenticRunConditionStopping,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonSystemSuspended,
+		LastTransitionTime: metav1.NewTime(time.Unix(100, 0).UTC()),
+		ObservedGeneration: run.Generation,
+	}}
+	caller := newTestSandboxAgentCallerWithAgenticRun(&mockSandboxProvider{}, run)
+	if err := caller.patchSandboxInfo(context.Background(), run, "analysis", "late-sandbox"); err != errStopAccepted {
+		t.Fatalf("patchSandboxInfo error = %v, want %v", err, errStopAccepted)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := caller.K8sClient.Get(context.Background(), client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Steps.Analysis.Sandbox != (agenticv1alpha1.SandboxInfo{}) {
+		t.Fatalf("stopped run received sandbox info: %+v", got.Status.Steps.Analysis.Sandbox)
 	}
 }
 
@@ -232,7 +255,7 @@ func TestSandboxAgentCaller_ReleaseUsesKubernetesDefaultPodGrace(t *testing.T) {
 			fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objects...).Build()
 			recorder := &podDeleteOptionsClient{Client: fc}
 			manager := newTestSandboxManager(recorder, testCache(t, "bare-pod"))
-			caller := &SandboxAgentCaller{Sandbox: manager, K8sClient: recorder, Namespace: "test-ns"}
+			caller := &SandboxAgentCaller{Sandbox: manager, K8sClient: recorder, APIReader: recorder, Namespace: "test-ns"}
 
 			var err error
 			if tt.bulk {
@@ -279,7 +302,7 @@ func TestSandboxAgentCaller_ReleaseSandboxes_PartialError(t *testing.T) {
 	tracker := &trackingMockSandbox{released: &released, errOnClaim: "ls-execution-test"}
 	fc := fake.NewClientBuilder().WithScheme(testScheme()).Build()
 	_ = fc.Create(context.Background(), fakeBaseTemplate())
-	caller := &SandboxAgentCaller{Sandbox: tracker, K8sClient: fc, Namespace: "test-ns"}
+	caller := &SandboxAgentCaller{Sandbox: tracker, K8sClient: fc, APIReader: fc, Namespace: "test-ns"}
 
 	if err := caller.ReleaseSandboxes(context.Background(), run, false); err == nil {
 		t.Fatal("expected error when one release fails")

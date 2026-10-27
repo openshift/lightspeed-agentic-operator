@@ -65,6 +65,14 @@ Skip the confirmation prompt:
 bash hack/quickstart/uninstall.sh --force
 ```
 
+Normal resumption uses `oc agentic resume`; while cleanup or affected-run stop
+protection is unconfirmed, the API server rejects resume and deletion of the
+suspended config. The initial cleanup deadline is ten seconds; unresolved work
+is reported as terminal error completion, not permission to resume.
+`uninstall.sh` is an explicit teardown path: it removes the safety binding
+before its policy and both before CRD teardown, rather than deleting the config
+while the safety gate remains installed.
+
 Or remove components individually (run from the repo root):
 
 ```bash
@@ -123,7 +131,7 @@ bash hack/quickstart/deploy-operator.sh \
 | Postgres | `deploy-postgres.sh` | Minimal Postgres instance (emptyDir), auto-deployed by `deploy-otel.sh --postgres` |
 | Alerts adapter | `deploy-alerts-adapter.sh` | Polls Alertmanager, creates AgenticRuns, RBAC for agenticruns + alertmanager |
 | Configuration | `deploy-configmap.sh` | `lightspeed-agentic-configuration` ConfigMap + OTEL CA secret |
-| Operator | `deploy-operator.sh` | CRDs, SA, cluster-admin, Deployment, agent RBAC, ApprovalPolicy, webhook |
+| Operator | `deploy-operator.sh` | CRDs, SA, cluster-admin, Deployment, agent RBAC, ApprovalPolicy, webhook, and static admission policies |
 | Console | `deploy-console.sh` | Console plugin with nginx + TLS, registers with OpenShift Console |
 
 ## LLM Provider Examples
