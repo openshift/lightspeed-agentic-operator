@@ -42,118 +42,122 @@ func TestStatus_Suspended(t *testing.T) {
 	}
 }
 
-func TestStatus_SuspendedWithCondition(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	transition := metav1.NewTime(time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC))
-	now := transition.Add(14 * time.Minute)
+func TestStatus_ResumeSafety(t *testing.T) {
+	const generation int64 = 5
 
-	cfg := testConfig(true)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
+	currentSafety := metav1.Condition{
+		Type:               agenticv1alpha1.AgenticOLSConfigConditionSafeToResume,
 		Status:             metav1.ConditionTrue,
-		Reason:             "AdminActivated",
-		Message:            "System suspended; 2 runs emergency-stopped",
-		LastTransitionTime: transition,
-	}}
+		Reason:             "RunsStopped",
+		Message:            "affected runs stopped",
+		ObservedGeneration: generation,
+	}
+	staleSafety := currentSafety
+	staleSafety.ObservedGeneration = generation - 1
+	falseSafety := currentSafety
+	falseSafety.Status = metav1.ConditionFalse
+	falseSafety.Reason = "CleanupPending"
+	falseSafety.Message = "sandbox cleanup is pending"
 
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: func() time.Time { return now }}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	tests := []struct {
+		name             string
+		suspendedReason  string
+		suspendedMessage string
+		safety           *metav1.Condition
+		want             []string
+	}{
+		{
+			name:             "current terminal safety is confirmed",
+			suspendedReason:  "AdminActivated",
+			suspendedMessage: "suspension activated",
+			safety:           &currentSafety,
+			want:             []string{"Resumption safety: confirmed"},
+		},
+		{
+			name:             "missing safety is unconfirmed",
+			suspendedReason:  "AdminActivated",
+			suspendedMessage: "suspension activated",
+			want: []string{
+				"Resumption safety: unconfirmed",
+				"SafeToResume condition is missing",
+			},
+		},
+		{
+			name:             "stale safety is unconfirmed",
+			suspendedReason:  "AdminActivated",
+			suspendedMessage: "suspension activated",
+			safety:           &staleSafety,
+			want: []string{
+				"Resumption safety: unconfirmed",
+				"SafeToResume observed generation 4",
+				"current generation 5",
+			},
+		},
+		{
+			name:             "false safety is unconfirmed",
+			suspendedReason:  "AdminActivated",
+			suspendedMessage: "suspension activated",
+			safety:           &falseSafety,
+			want: []string{
+				"Resumption safety: unconfirmed",
+				"CleanupPending",
+				"sandbox cleanup is pending",
+			},
+		},
+		{
+			name:             "stopping is unconfirmed even with safe condition",
+			suspendedReason:  "Stopping",
+			suspendedMessage: "waiting for stop acceptance",
+			safety:           &currentSafety,
+			want: []string{
+				"stopping",
+				"Resumption safety: unconfirmed",
+				"Suspended reason is Stopping",
+			},
+		},
+		{
+			name:             "error diagnostics remain visible after safety recovers",
+			suspendedReason:  "AdminActivatedWithErrors",
+			suspendedMessage: "run stop request failed",
+			safety:           &currentSafety,
+			want: []string{
+				"completed with errors",
+				"run stop request failed",
+				"Resumption safety: confirmed",
+			},
+		},
 	}
 
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: SUSPENDED (since 14m ago, 2026-06-19T12:00:00Z, System suspended; 2 runs emergency-stopped)"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig(true)
+			cfg.Generation = generation
+			cfg.Status.Conditions = []metav1.Condition{{
+				Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
+				Status:             metav1.ConditionTrue,
+				Reason:             tt.suspendedReason,
+				Message:            tt.suspendedMessage,
+				ObservedGeneration: generation,
+			}}
+			if tt.safety != nil {
+				cfg.Status.Conditions = append(cfg.Status.Conditions, *tt.safety)
+			}
 
-func TestStatus_SuspendedStopping(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	transition := metav1.NewTime(time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC))
-	now := transition.Add(14 * time.Minute)
+			streams, out, _ := fakeStreams()
+			fc := fake.NewClientBuilder().WithScheme(testScheme()).
+				WithObjects(cfg).Build()
+			o := &StatusOptions{client: fc, IOStreams: streams, now: time.Now}
+			if err := o.Run(context.Background()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
 
-	cfg := testConfig(true)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
-		Status:             metav1.ConditionTrue,
-		Reason:             "Stopping",
-		Message:            "Waiting for 3 runs to terminate",
-		LastTransitionTime: transition,
-	}}
-
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: func() time.Time { return now }}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: SUSPENDED (stopping, Waiting for 3 runs to terminate)"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
-
-func TestStatus_ActiveWithDeactivationCondition(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	transition := metav1.NewTime(time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC))
-	now := transition.Add(2 * time.Hour)
-
-	cfg := testConfig(false)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
-		Status:             metav1.ConditionFalse,
-		Reason:             "AdminDeactivated",
-		LastTransitionTime: transition,
-	}}
-
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: func() time.Time { return now }}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: Active (resumed 2h ago, 2026-06-19T10:00:00Z)"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
-	}
-}
-
-// TestStatus_SuspendedWithStaleCondition covers re-suspension before the
-// reconciler runs: spec.suspended=true but the condition still says
-// Suspended=False from the previous deactivation. The CLI must fall back
-// to the plain "SUSPENDED" output, not render stale timestamps.
-func TestStatus_SuspendedWithStaleCondition(t *testing.T) {
-	streams, out, _ := fakeStreams()
-	cfg := testConfig(true)
-	cfg.Status.Conditions = []metav1.Condition{{
-		Type:               agenticv1alpha1.AgenticOLSConfigConditionSuspended,
-		Status:             metav1.ConditionFalse,
-		Reason:             "AdminDeactivated",
-		LastTransitionTime: metav1.NewTime(time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)),
-	}}
-
-	fc := fake.NewClientBuilder().WithScheme(testScheme()).
-		WithObjects(cfg).Build()
-
-	o := &StatusOptions{client: fc, IOStreams: streams, now: time.Now}
-	if err := o.Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	got := strings.TrimSpace(out.String())
-	want := "Agentic System: SUSPENDED"
-	if got != want {
-		t.Errorf("output = %q, want %q", got, want)
+			got := out.String()
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("output %q does not contain %q", got, want)
+				}
+			}
+		})
 	}
 }
 

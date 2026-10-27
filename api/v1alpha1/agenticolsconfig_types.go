@@ -22,22 +22,23 @@ import (
 
 // Condition type for AgenticOLSConfig status.
 const (
-	// AgenticOLSConfigConditionSuspended tracks whether the system kill
-	// switch is active. True means all agentic runs have been emergency-stopped
-	// and the system is suspended; False means the admin has deactivated
-	// suspension and the system is accepting new agentic runs.
+	// AgenticOLSConfigConditionSuspended tracks whether cluster suspension is
+	// active. True means agentic operations remain blocked; the reason
+	// distinguishes stopping from terminal completion. False means the
+	// administrator deactivated suspension.
 	AgenticOLSConfigConditionSuspended = "Suspended"
+	// AgenticOLSConfigConditionSafeToResume reports whether required cleanup and
+	// accepted stop intent are confirmed for the current suspended generation.
+	AgenticOLSConfigConditionSafeToResume = "SafeToResume"
 )
 
 // AgenticOLSConfigSpec defines the desired state of AgenticOLSConfig.
 //
 // +kubebuilder:validation:MinProperties=1
 type AgenticOLSConfigSpec struct {
-	// suspended halts all agentic operations cluster-wide when set to true.
-	// All non-terminal agentic runs are immediately terminated with an
-	// EmergencyStopped condition. Setting back to false re-enables the
-	// system for new agentic runs only — EmergencyStopped runs remain
-	// terminal and must be recreated explicitly.
+	// suspended halts new agentic operations cluster-wide and requests a stop
+	// for in-flight runs. A terminal run outcome does not by itself authorize
+	// resumption; the current generation must be confirmed by SafeToResume=True.
 	// +optional
 	// +default=false
 	Suspended bool `json:"suspended,omitempty"` //nolint:kubeapilinter // kill switch is genuinely binary; bool is the right type
@@ -48,9 +49,9 @@ type AgenticOLSConfigSpec struct {
 //
 // +kubebuilder:validation:MinProperties=1
 type AgenticOLSConfigStatus struct {
-	// conditions represent the latest available observations of the
-	// config's state. The "Suspended" condition tracks whether the
-	// kill switch is active and all agentic runs have been terminated.
+	// conditions represent the latest available observations of config state.
+	// "Suspended" reports activation progress and outcome; "SafeToResume"
+	// separately reports stop safety for the current suspended generation.
 	// +listType=map
 	// +listMapKey=type
 	// +patchStrategy=merge
@@ -70,8 +71,9 @@ type AgenticOLSConfigStatus struct {
 
 // AgenticOLSConfig is a cluster-scoped singleton that controls system-wide
 // agentic behavior. The cluster admin creates a single AgenticOLSConfig
-// named "cluster". When spec.suspended is true, all non-terminal agentic runs
-// are terminated and no new workflow steps are started.
+// named "cluster". When spec.suspended is true, new work is blocked and
+// in-flight runs are stopped. Resumption requires SafeToResume=True for the
+// current suspended generation.
 //
 // When no AgenticOLSConfig CR exists, the system behaves as if
 // suspended is false — the CR is not required for normal operation.

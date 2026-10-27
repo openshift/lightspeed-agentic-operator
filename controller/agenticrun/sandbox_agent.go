@@ -19,6 +19,10 @@ const (
 	sandboxStartupTimeout = 5 * time.Minute
 	sandboxRunningGrace   = 1 * time.Minute
 
+	// sandboxInfoPatchAttempts bounds conflict retries when the Pod event
+	// handler updates the same run immediately after sandbox creation.
+	sandboxInfoPatchAttempts = 5
+
 	analysisStepTimeout     = 10 * time.Minute
 	executionStepTimeout    = 10 * time.Minute
 	verificationStepTimeout = 30 * time.Minute
@@ -130,6 +134,7 @@ type SandboxLifecycle interface {
 type SandboxAgentCaller struct {
 	Sandbox   SandboxLifecycle
 	K8sClient client.Client
+	APIReader client.Reader
 	Namespace string
 	Audit     AuditLogger
 }
@@ -251,32 +256,46 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 }
 
 func (s *SandboxAgentCaller) patchSandboxInfo(ctx context.Context, run *agenticv1alpha1.AgenticRun, step, claimName string) error {
-	var current agenticv1alpha1.AgenticRun
-	if err := s.K8sClient.Get(ctx, client.ObjectKeyFromObject(run), &current); err != nil {
-		return fmt.Errorf("get run for sandbox info patch: %w", err)
+	if s.APIReader == nil {
+		return fmt.Errorf("uncached API reader is required before patching sandbox info")
 	}
+	// The Pod event handler patches the same run when the sandbox Pod appears,
+	// so a conflict here is expected. Re-read and retry instead of failing the
+	// step: the sandbox exists and would otherwise leak without a recorded name.
+	var lastErr error
+	for range sandboxInfoPatchAttempts {
+		current, err := readRunnableRun(ctx, s.APIReader, client.ObjectKeyFromObject(run), run.UID)
+		if err != nil {
+			return err
+		}
 
-	base := current.DeepCopy()
-	info := agenticv1alpha1.SandboxInfo{
-		ClaimName: claimName,
-		Namespace: s.Namespace,
-	}
+		base := current.DeepCopy()
+		info := agenticv1alpha1.SandboxInfo{
+			ClaimName: claimName,
+			Namespace: s.Namespace,
+		}
 
-	switch step {
-	case "analysis":
-		current.Status.Steps.Analysis.Sandbox = info
-	case "execution":
-		current.Status.Steps.Execution.Sandbox = info
-	case "verification":
-		current.Status.Steps.Verification.Sandbox = info
-	case "escalation":
-		current.Status.Steps.Escalation.Sandbox = info
-	}
+		switch step {
+		case "analysis":
+			current.Status.Steps.Analysis.Sandbox = info
+		case "execution":
+			current.Status.Steps.Execution.Sandbox = info
+		case "verification":
+			current.Status.Steps.Verification.Sandbox = info
+		case "escalation":
+			current.Status.Steps.Escalation.Sandbox = info
+		}
 
-	if err := s.K8sClient.Status().Patch(ctx, &current, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("patch sandbox info for step %s: %w", step, err)
+		err = s.K8sClient.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+		if err == nil {
+			return nil
+		}
+		if !apierrors.IsConflict(err) {
+			return fmt.Errorf("patch sandbox info for step %s: %w", step, err)
+		}
+		lastErr = err
 	}
-	return nil
+	return fmt.Errorf("patch sandbox info for step %s: %w", step, lastErr)
 }
 
 func collectFailedResults(results []agenticv1alpha1.StepResultRef, stepName string) []agentPreviousAttempt {

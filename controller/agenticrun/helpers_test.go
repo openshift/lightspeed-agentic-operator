@@ -8,65 +8,13 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
 
 func ptr32(v int32) *int32 { return &v }
-
-func TestIsSuspended(t *testing.T) {
-	tests := []struct {
-		name    string
-		objects []client.Object
-		want    bool
-		wantErr bool
-	}{
-		{
-			name: "suspended=true returns true",
-			objects: []client.Object{&agenticv1alpha1.AgenticOLSConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
-				Spec:       agenticv1alpha1.AgenticOLSConfigSpec{Suspended: true},
-			}},
-			want: true,
-		},
-		{
-			name: "suspended=false returns false",
-			objects: []client.Object{&agenticv1alpha1.AgenticOLSConfig{
-				ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
-				Spec:       agenticv1alpha1.AgenticOLSConfigSpec{Suspended: false},
-			}},
-			want: false,
-		},
-		{
-			name:    "config not found returns false",
-			objects: nil,
-			want:    false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			objects := tt.objects
-			if objects == nil {
-				objects = []client.Object{}
-			}
-			fc := fake.NewClientBuilder().
-				WithScheme(testScheme()).
-				WithObjects(objects...).
-				Build()
-			got, err := isSuspended(context.Background(), fc)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("isSuspended() error = %v, wantErr %v", err, tt.wantErr)
-			}
-			if got != tt.want {
-				t.Fatalf("isSuspended() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestSelectedOption_ReturnsFirstOption(t *testing.T) {
 	scheme := testScheme()
@@ -86,7 +34,7 @@ func TestSelectedOption_ReturnsFirstOption(t *testing.T) {
 	}
 
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(analysisResult).Build()
-	r := &AgenticRunReconciler{Client: fc, Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Namespace: "default"}
 
 	got, err := r.selectedOption(context.Background(), run)
 	if err != nil {
@@ -108,7 +56,7 @@ func TestSelectedOption_NoResults(t *testing.T) {
 	run.Namespace = "default"
 
 	fc := fake.NewClientBuilder().WithScheme(scheme).Build()
-	r := &AgenticRunReconciler{Client: fc, Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Namespace: "default"}
 
 	got, err := r.selectedOption(context.Background(), run)
 	if err != nil {
@@ -144,7 +92,7 @@ func TestTrimNonSelectedOptions_SingleOptionNoop(t *testing.T) {
 	}
 
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(analysisResult).WithStatusSubresource(analysisResult).Build()
-	r := &AgenticRunReconciler{Client: fc, Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Namespace: "default"}
 
 	got, err := r.trimNonSelectedOptions(context.Background(), run, approval)
 	if err != nil {
@@ -193,7 +141,7 @@ func TestTrimThenSelectedOption_EndToEnd(t *testing.T) {
 			}
 
 			fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(analysisResult).WithStatusSubresource(analysisResult).Build()
-			r := &AgenticRunReconciler{Client: fc, Namespace: "default"}
+			r := &AgenticRunReconciler{Client: fc, APIReader: fc, Namespace: "default"}
 
 			got, err := r.trimNonSelectedOptions(context.Background(), run, approval)
 			if err != nil {
@@ -235,7 +183,7 @@ func TestTrimNonSelectedOptions_OutOfRange(t *testing.T) {
 	}
 
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(analysisResult).WithStatusSubresource(analysisResult).Build()
-	r := &AgenticRunReconciler{Client: fc, Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Namespace: "default"}
 
 	_, err := r.trimNonSelectedOptions(context.Background(), run, approval)
 	if err == nil {

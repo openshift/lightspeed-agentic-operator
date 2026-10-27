@@ -82,6 +82,16 @@ Default namespace is `openshift-lightspeed` unless overridden with `-n` or kubec
 
 Suspension requests zero-grace deletion of sandbox Pods in both bare-pod and sandbox-claim modes, bypassing graceful shutdown. Ordinary cleanup keeps its existing termination behavior. This API request does not guarantee immediate process termination on an unreachable node.
 
+Global suspension separates its terminal outcome from permission to resume. The
+current-generation `SafeToResume=True` condition is required alongside current
+`Suspended=True/AdminActivated` or `AdminActivatedWithErrors` before resuming or
+deleting a suspended `AgenticOLSConfig`. The initial cleanup deadline is ten
+seconds; unresolved work produces terminal error completion but does not itself
+authorize either action. `oc agentic status` shows
+the safety state and diagnostics; `oc agentic resume` remains an API-authorized
+request and reports the admission denial when safety is unconfirmed. Control-plane
+confirmation does not prove process death on an unreachable node.
+
 ### Preserve a Failed Sandbox for Debugging
 
 To retain the sandbox Pod and associated diagnostic resources after a failed run, add this annotation to the `AgenticRun`:
@@ -123,6 +133,12 @@ make install-agent-sandbox   # optional; also run automatically before make run 
 ```
 
 Upstream install details: [Agent Sandbox installation](https://agent-sandbox.sigs.k8s.io/docs/getting_started/install_prerequisites/). The Makefile target applies **`manifest.yaml`** and **`extensions.yaml`** for **`AGENT_SANDBOX_VERSION`** (default pinned in the Makefile). You still need a **`SandboxTemplate`** named like **`TEMPLATE_NAME`** (default `lightspeed-agent`) in **`OPERATOR_NAMESPACE`** — usually from Lightspeed / your platform, not from this target.
+
+Startup checks all required Sandbox CRDs within one shared 30-second deadline.
+A missing CRD selects bare-Pod mode; other discovery failures stop startup.
+In forced bare-Pod mode, suspension cleanup verifies each unavailable optional API against its own CRD.
+Installed APIs remain part of cleanup and confirmation.
+Verification failures keep cleanup unconfirmed.
 
 ### Leader election and metrics
 
@@ -175,6 +191,10 @@ kustomize replacement.
 
 Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make manifests`**.
 
+Downstream OLM installations must synchronize the updated role before relying on suspension confirmation.
+`lightspeed-operator` consumes these permissions through its pinned-source `make sync-agentic-crds` and bundle regeneration workflow.
+Updating this repository does not update an installed OLM bundle.
+
 ### Makefile defaults
 
 **`OPERATOR_NAMESPACE`** defaults to **`default`**: used for **`make run`** (`--namespace`), and for **`make deploy`** / **`make undeploy`** (Namespace, Deployment, ServiceAccount, RBAC subject namespace). Manifests under `config/` use **`__OPERATOR_NAMESPACE__`**; the Makefile substitutes **`$(OPERATOR_NAMESPACE)`** before `kustomize build`. Local **`make run`** uses metrics **`:18080`** and health **`:18081`** by default; override with **`METRICS_BIND_ADDRESS`** and **`HEALTH_PROBE_BIND_ADDRESS`** if needed.
@@ -197,6 +217,11 @@ make api-lint       # Kube API linter on api/ (golangci-lint custom + plugin; se
 ### Testing
 
 **`make test`** runs **`fmt-check`** (fails if any file needs reformatting — run **`make fmt`** to fix), **`vet`**, root-module tests, and **`cd api && GOWORK=off go test ./... -count=1`** (the API tree is a separate module; **`GOWORK=off`** avoids a repo-root **`go.work`** hijacking module choice). The **`test/e2e`** package is excluded from this target — it requires **`-tags=e2e`** and a running mock agent.
+
+`KUBEBUILDER_ASSETS=/path/to/kubernetes-1.35-binaries make test` also runs the isolated API admission regression with shipped CRD, policy, and binding.
+It runs without a controller.
+Without assets, the regression skips; the directory needs `kube-apiserver`, `etcd`, and `kubectl`.
+The regression rejects resume/deletion while `Suspended=True/Stopping` and `SafeToResume=True`; it accepts current safe terminal outcomes.
 
 **`make test-e2e`** runs the configuration failover tests first, then **`go test -tags=e2e ./test/e2e/...`** against a live cluster with the operator running. Prerequisites: **`make run TEMPLATE_NAME=lightspeed-agent-mock`** (or deployed operator with **`--template-name=lightspeed-agent-mock`**) and mock agent SandboxTemplate applied (**`kubectl apply -k test/agent/sandboxtemplate`**). See `test/e2e/` package doc for details.
 

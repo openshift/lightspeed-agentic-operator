@@ -72,15 +72,25 @@ func (o *StatusOptions) Run(ctx context.Context) error {
 	}
 
 	suspendedCond := meta.FindStatusCondition(cfg.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
-	if cfg.Spec.Suspended && suspendedCond != nil && suspendedCond.Status == metav1.ConditionTrue {
-		relative, absolute := formatConditionTimes(suspendedCond.LastTransitionTime, o.now())
-		switch suspendedCond.Reason {
-		case "Stopping":
-			fmt.Fprintf(o.Out, "Agentic System: SUSPENDED (stopping, %s)\n", suspendedCond.Message)
-		default:
-			fmt.Fprintf(o.Out, "Agentic System: SUSPENDED (since %s ago, %s, %s)\n",
-				relative, absolute, suspendedCond.Message)
+	safetyCond := meta.FindStatusCondition(cfg.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+	if cfg.Spec.Suspended {
+		if suspendedCond != nil && suspendedCond.Status == metav1.ConditionTrue &&
+			suspendedCond.ObservedGeneration == cfg.Generation {
+			relative, absolute := formatConditionTimes(suspendedCond.LastTransitionTime, o.now())
+			switch suspendedCond.Reason {
+			case "Stopping":
+				fmt.Fprintf(o.Out, "Agentic System: SUSPENDED (stopping, %s)\n", suspendedCond.Message)
+			case "AdminActivatedWithErrors":
+				fmt.Fprintf(o.Out, "Agentic System: SUSPENDED (completed with errors, since %s ago, %s, %s)\n",
+					relative, absolute, suspendedCond.Message)
+			default:
+				fmt.Fprintf(o.Out, "Agentic System: SUSPENDED (since %s ago, %s, %s)\n",
+					relative, absolute, suspendedCond.Message)
+			}
+		} else {
+			fmt.Fprintln(o.Out, "Agentic System: SUSPENDED")
 		}
+		fmt.Fprintln(o.Out, formatResumeSafety(cfg.Generation, suspendedCond, safetyCond))
 		return nil
 	}
 	if !cfg.Spec.Suspended && suspendedCond != nil && suspendedCond.Reason == "AdminDeactivated" {
@@ -89,12 +99,45 @@ func (o *StatusOptions) Run(ctx context.Context) error {
 		return nil
 	}
 
-	if cfg.Spec.Suspended {
-		fmt.Fprintln(o.Out, "Agentic System: SUSPENDED")
-	} else {
-		fmt.Fprintln(o.Out, "Agentic System: Active")
-	}
+	fmt.Fprintln(o.Out, "Agentic System: Active")
 	return nil
+}
+
+func formatResumeSafety(generation int64, suspended, safety *metav1.Condition) string {
+	if suspended == nil {
+		return "Resumption safety: unconfirmed (current Suspended condition is missing)"
+	}
+	if suspended.ObservedGeneration != generation {
+		return fmt.Sprintf(
+			"Resumption safety: unconfirmed (Suspended observed generation %d; current generation %d)",
+			suspended.ObservedGeneration, generation,
+		)
+	}
+	if suspended.Status != metav1.ConditionTrue {
+		return fmt.Sprintf("Resumption safety: unconfirmed (Suspended status is %s)", suspended.Status)
+	}
+	if suspended.Reason != "AdminActivated" && suspended.Reason != "AdminActivatedWithErrors" {
+		return fmt.Sprintf("Resumption safety: unconfirmed (Suspended reason is %s)", suspended.Reason)
+	}
+	if safety == nil {
+		return "Resumption safety: unconfirmed (SafeToResume condition is missing)"
+	}
+	if safety.ObservedGeneration != generation {
+		return fmt.Sprintf(
+			"Resumption safety: unconfirmed (SafeToResume observed generation %d; current generation %d)",
+			safety.ObservedGeneration, generation,
+		)
+	}
+	if safety.Status == metav1.ConditionTrue {
+		return "Resumption safety: confirmed"
+	}
+	if safety.Reason != "" && safety.Message != "" {
+		return fmt.Sprintf("Resumption safety: unconfirmed (%s: %s)", safety.Reason, safety.Message)
+	}
+	if safety.Message != "" {
+		return fmt.Sprintf("Resumption safety: unconfirmed (%s)", safety.Message)
+	}
+	return fmt.Sprintf("Resumption safety: unconfirmed (%s)", safety.Status)
 }
 
 func formatConditionTimes(lastTransition metav1.Time, now time.Time) (relative, absolute string) {
