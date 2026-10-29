@@ -3,7 +3,7 @@ module github.com/openshift/lightspeed-agentic-operator
 go 1.25.7
 
 require (
-	github.com/openshift/lightspeed-agentic-operator/api v0.0.0-20261016153916-14da92cf6efa
+	github.com/openshift/lightspeed-agentic-operator/api v0.0.0-20261028115751-c5a0a65b007d
 	github.com/spf13/cobra v1.10.2
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.22.0
