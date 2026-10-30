@@ -268,11 +268,11 @@ resolve_model() {
         return
     fi
     case "$provider" in
-        claude) echo "claude-sonnet-4-6" ;;
+        claude) echo "claude-haiku-5-5" ;;
         gemini) echo "gemini-3.1-flash-lite" ;;
         openai|azure-openai) echo "gpt-6-luna" ;;
         bedrock-deepseek) echo "deepseek.v3.2" ;;
-        bedrock-claude) echo "anthropic.claude-sonnet-4-6" ;;
+        bedrock-claude) echo "global.anthropic.claude-haiku-5-5" ;;
         *) log_error "Unknown provider: $provider"; return 1 ;;
     esac
 }
