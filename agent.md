@@ -54,7 +54,3 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ## This repository
 
 **Behavior and scope** live in this file. **Architecture** → **`CLAUDE.md`**. **Commands and cluster workflow** → **`README.md`**. Edit those sources; do not duplicate them here.
-
-### Cursor
-
-Optional repo skills under **`.cursor/skills/`** (e.g. Go / test review).
