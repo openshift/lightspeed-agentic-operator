@@ -161,8 +161,9 @@ type AgentSpec struct {
 // and runtime settings. AgenticRuns reference agents by name per step.
 //
 // Agent is cluster-scoped. The metadata.name serves as the tier identifier.
-// The "default" agent must exist; "smart" and "fast" are optional (the
-// operator auto-links to "default" if absent).
+// The "default" agent must exist. Any other named agent is optional;
+// when an AgenticRun references a non-existent agent, the operator
+// falls back to "default" and logs a warning.
 //
 // Example — a high-capability agent tier with extended thinking:
 //
