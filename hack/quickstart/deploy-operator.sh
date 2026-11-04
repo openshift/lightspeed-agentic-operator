@@ -2,7 +2,7 @@
 #
 # Deploy the agentic operator as a standalone workload.
 # Installs CRDs, creates the operator Deployment, agent RBAC,
-# ApprovalPolicy, webhook resources, and suspension ValidatingAdmissionPolicy.
+# ApprovalPolicy, webhook resources, and static suspension admission policies.
 #
 # Can be called from install.sh or run independently.
 #
@@ -306,6 +306,19 @@ else
   oc apply -f "${GITHUB_RAW}/config/admission/agenticrun-suspension-policy.yaml"
   oc apply -f "${GITHUB_RAW}/config/admission/agenticrun-suspension-binding.yaml"
   info "ValidatingAdmissionPolicy applied (from GitHub)"
+fi
+
+# --- AgenticOLSConfig safety ValidatingAdmissionPolicy ------------------------
+
+step "Installing AgenticOLSConfig safety ValidatingAdmissionPolicy..."
+if [ -n "${REPO_ROOT}" ]; then
+  oc apply -f "${REPO_ROOT}/config/admission/agenticolsconfig-safety-policy.yaml"
+  oc apply -f "${REPO_ROOT}/config/admission/agenticolsconfig-safety-binding.yaml"
+  info "AgenticOLSConfig safety policy applied (from local checkout)"
+else
+  oc apply -f "${GITHUB_RAW}/config/admission/agenticolsconfig-safety-policy.yaml"
+  oc apply -f "${GITHUB_RAW}/config/admission/agenticolsconfig-safety-binding.yaml"
+  info "AgenticOLSConfig safety policy applied (from GitHub)"
 fi
 
 info "Agentic operator deployed successfully"

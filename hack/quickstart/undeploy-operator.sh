@@ -13,13 +13,20 @@ NAMESPACE="${NAMESPACE:-openshift-lightspeed}"
 info()  { echo "  ✓ $*"; }
 step()  { echo "[operator] $*"; }
 
-# Delete admission policy first so fail-closed VAP/webhook don't block cleanup.
+# Remove admission bindings before their policies so fail-closed gates do not block CRD teardown.
 step "Deleting suspension ValidatingAdmissionPolicy"
 oc delete validatingadmissionpolicybinding agentic.openshift.io-agenticrun-suspension --ignore-not-found ||
   step "Warning: could not delete ValidatingAdmissionPolicyBinding (managed cluster?)"
 oc delete validatingadmissionpolicy agentic.openshift.io-agenticrun-suspension --ignore-not-found ||
   step "Warning: could not delete ValidatingAdmissionPolicy (managed cluster?)"
 info "Suspension ValidatingAdmissionPolicy deleted"
+
+step "Deleting AgenticOLSConfig safety ValidatingAdmissionPolicy"
+oc delete validatingadmissionpolicybinding agentic.openshift.io-agenticolsconfig-safety --ignore-not-found ||
+  step "Warning: could not delete AgenticOLSConfig safety ValidatingAdmissionPolicyBinding (managed cluster?)"
+oc delete validatingadmissionpolicy agentic.openshift.io-agenticolsconfig-safety --ignore-not-found ||
+  step "Warning: could not delete AgenticOLSConfig safety ValidatingAdmissionPolicy (managed cluster?)"
+info "AgenticOLSConfig safety ValidatingAdmissionPolicy deleted"
 
 step "Deleting webhook resources"
 oc delete mutatingwebhookconfiguration agentic-operator-mutating-webhook --ignore-not-found ||

@@ -143,7 +143,7 @@ func TestStandbyConfigurationDeletion(t *testing.T) {
 	if standby.config.Available() {
 		t.Fatal("promoted standby retained deleted configuration")
 	}
-	sandbox := agenticrun.NewSandboxManager(standby.manager.GetClient(), standby.config, ns.Name, nil)
+	sandbox := agenticrun.NewSandboxManager(standby.manager.GetClient(), standby.manager.GetAPIReader(), standby.config, ns.Name, nil)
 	if _, err := sandbox.Create(ctx, &agenticv1alpha1.AgenticRun{}, "analysis", nil, nil, nil, time.Minute, nil); err == nil || !strings.Contains(err.Error(), "configuration not available") {
 		t.Fatalf("sandbox creation was not blocked by missing configuration: %v", err)
 	}

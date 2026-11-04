@@ -230,7 +230,8 @@ func (a AnalysisOutput) IsZero() bool {
 //	Verified=False      -> verification failed; run escalates (Escalated=Unknown)
 //	Denied=True         -> user denied a step (terminal)
 //	Escalated=True      -> escalation complete (terminal)
-//	Any condition=False -> step failed; check reason and message
+//
+// Any workflow-step condition=False -> step failed; check its reason and message.
 const (
 	// AgenticRunConditionAnalyzed indicates whether analysis has completed.
 	// Status=True when analysis succeeds, Status=False on failure,
@@ -252,6 +253,9 @@ const (
 	// escalation completes (terminal), Status=False on escalation failure.
 	AgenticRunConditionEscalated        string = "Escalated"
 	AgenticRunConditionEmergencyStopped string = "EmergencyStopped"
+	// AgenticRunConditionStopping records accepted stop intent and stop progress.
+	// It does not participate in phase derivation.
+	AgenticRunConditionStopping string = "Stopping"
 )
 
 // AgenticRunStep defines per-step configuration on an AgenticRun. The agent
@@ -381,8 +385,8 @@ type AgenticRunSpec struct {
 // +kubebuilder:validation:MinProperties=1
 type AgenticRunStatus struct {
 	// conditions represent the latest available observations using the
-	// standard Kubernetes condition pattern. Condition types include:
-	// Analyzed, Approved, Executed, Verified, and Escalated.
+	// standard Kubernetes condition pattern. Condition types include Analyzed,
+	// Executed, Verified, Denied, Escalated, EmergencyStopped, and Stopping.
 	// +listType=map
 	// +listMapKey=type
 	// +patchStrategy=merge

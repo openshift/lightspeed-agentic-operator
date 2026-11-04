@@ -53,8 +53,7 @@ info "AgenticRun resources deleted"
 
 oc delete agents --all --ignore-not-found >/dev/null 2>&1 || true
 oc delete llmproviders --all --ignore-not-found >/dev/null 2>&1 || true
-oc delete agenticolsconfig cluster --ignore-not-found >/dev/null 2>&1 || true
-info "Agents, LLMProviders, AgenticOLSConfig deleted"
+info "Agents and LLMProviders deleted"
 
 # --- Delete secrets -----------------------------------------------------------
 

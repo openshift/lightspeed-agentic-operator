@@ -148,7 +148,7 @@ func TestReconcile_WorkflowVariants(t *testing.T) {
 				WithObjects(objs...).
 				WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-			r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+			r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 			if _, err := reconcileOnce(r, "fix-crash"); err != nil {
 				t.Fatalf("analysis reconcile: %v", err)
@@ -187,7 +187,7 @@ func TestReconcile_HappyPath_FullLifecycle(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Reconcile 1: Pending → Proposed (analysis complete)
 	result, err := reconcileOnce(r, "fix-crash")
@@ -289,7 +289,7 @@ func TestReconcile_VerificationWithLongSource_Succeeds(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis → approve → execution → verification
 	mustReconcile(t, r, "fix-crash")
@@ -325,7 +325,7 @@ func TestReconcile_AnalysisSystemFailure_Terminal(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Reconcile 1: Pending → Failed (system failure)
 	result, err := reconcileOnce(r, "fix-crash")
@@ -364,7 +364,7 @@ func TestReconcile_VerificationObjectiveFailure_Escalates(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis → approve → execution → verifying
 	mustReconcile(t, r, "fix-crash")
@@ -401,7 +401,7 @@ func TestReconcile_SystemFailure_Execution_Terminal(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis → approve
 	mustReconcile(t, r, "fix-crash")
@@ -438,7 +438,7 @@ func TestReconcile_SystemFailure_Verification_Terminal(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis → approve → execution → verifying
 	mustReconcile(t, r, "fix-crash")
@@ -475,7 +475,7 @@ func TestReconcile_RevisionHappyPath(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Reconcile 1: Pending → Executing (analysis complete)
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -524,7 +524,7 @@ func TestReconcile_RevisionMultipleRounds(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Initial analysis
 	mustReconcile(t, r, "fix-crash")
@@ -562,7 +562,7 @@ func TestReconcile_RevisionNoOp_WhenObserved(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Initial analysis
 	mustReconcile(t, r, "fix-crash")
@@ -611,7 +611,7 @@ func TestReconcile_RevisionReanalysis(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis → Executing
 	mustReconcile(t, r, "fix-crash")
@@ -632,7 +632,7 @@ func TestReconcile_RevisionAnalysisFailure(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Initial analysis succeeds
 	mustReconcile(t, r, "fix-crash")
@@ -675,7 +675,7 @@ func TestReconcile_RevisionWithFeedback(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Initial analysis
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -718,7 +718,7 @@ func TestReconcile_RevisionFromCompleted(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Reconcile 1: Pending → Proposed (analysis complete)
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -772,7 +772,7 @@ func TestReconcile_RevisionClearsTerminalTime(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Reconcile 1: Pending → Proposed (advisory-only, analysis complete)
 	if _, err := reconcileOnce(r, "fix-crash"); err != nil {
@@ -840,7 +840,7 @@ func TestReconcile_RevisionFromFailed(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Make analysis fail
 	agent.analyzeErr = fmt.Errorf("LLM timeout")
@@ -886,7 +886,7 @@ func TestReconcile_ExecutingPhase_DoesNotReExecute(t *testing.T) {
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
 	agent := newTestAgentCaller()
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Run analysis
 	mustReconcile(t, r, "fix-crash")
@@ -933,7 +933,7 @@ func TestReconcile_ExecutionMutationFailed_FailsStep(t *testing.T) {
 		Success:      false,
 		ActionsTaken: []agenticv1alpha1.ExecutionAction{{Type: "patch", Description: "Failed patch", Outcome: agenticv1alpha1.ActionOutcomeFailed}},
 	}
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	mustReconcile(t, r, "fix-crash")
 	approveAgenticRun(t, fc, "fix-crash")
@@ -961,7 +961,7 @@ func TestReconcile_ExecutionPreCheckFailed_ProceedsToVerification(t *testing.T) 
 			{Type: "patch", Description: "Patched deployment", Outcome: agenticv1alpha1.ActionOutcomeSucceeded},
 		},
 	}
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	mustReconcile(t, r, "fix-crash")
 	approveAgenticRun(t, fc, "fix-crash")
@@ -990,7 +990,7 @@ func TestReconcile_ExecutionInlineVerificationFailed_ProceedsToVerification(t *t
 			{Type: "verification", Description: "Checked frontend logs", Outcome: agenticv1alpha1.ActionOutcomeFailed},
 		},
 	}
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	mustReconcile(t, r, "fix-crash")
 	approveAgenticRun(t, fc, "fix-crash")
@@ -1021,7 +1021,7 @@ func TestReconcile_ExecutionSelectsOption(t *testing.T) {
 			{Title: "Option C", Diagnosis: agenticv1alpha1.DiagnosisResult{Summary: "diag-C"}},
 		},
 	}
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis
 	mustReconcile(t, r, "fix-crash")
@@ -1064,7 +1064,7 @@ func TestReconcile_ExecutionSingleOption(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: newTestAgentCaller().withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis (default stub returns 1 option)
 	mustReconcile(t, r, "fix-crash")
@@ -1104,7 +1104,7 @@ func TestReconcile_TrimOptionsOnExecution(t *testing.T) {
 		Checks:  []agenticv1alpha1.VerifyCheck{{Name: "health", Result: agenticv1alpha1.CheckResultFailed}},
 		Summary: "Health check failed",
 	}
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	// Analysis
 	mustReconcile(t, r, "fix-crash")
@@ -1197,7 +1197,7 @@ func TestResultCR_FailureConditions(t *testing.T) {
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	mustReconcile(t, r, "fix-crash")
 	p, _ := getAgenticRun(r, "fix-crash")

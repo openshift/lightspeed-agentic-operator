@@ -2,6 +2,7 @@ package agenticrun
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -49,7 +50,7 @@ func newVerifyingReconciler(t *testing.T) (*AgenticRunReconciler, *agenticv1alph
 	fc := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
 		WithStatusSubresource(run, &agenticv1alpha1.AnalysisResult{}, &agenticv1alpha1.ExecutionResult{}, &agenticv1alpha1.VerificationResult{}, &agenticv1alpha1.EscalationResult{}).Build()
 
-	r := &AgenticRunReconciler{Client: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
+	r := &AgenticRunReconciler{Client: fc, APIReader: fc, Agent: agent.withClient(t, fc, "default"), Namespace: "default"}
 
 	mustReconcile(t, r, "fix-crash")      // analysis → proposed
 	approveAgenticRun(t, fc, "fix-crash") // approve execution
@@ -68,6 +69,129 @@ func newVerifyingReconciler(t *testing.T) (*AgenticRunReconciler, *agenticv1alph
 		t.Fatalf("expected Verified=Unknown (Verifying) before completeStep, got %+v", c)
 	}
 	return r, run
+}
+
+func TestLateResultPreservesAcceptedSuspension(t *testing.T) {
+	ctx := context.Background()
+	r, stale := newVerifyingReconciler(t)
+	current := stale.DeepCopy()
+	meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+		Type:               agenticv1alpha1.AgenticRunConditionStopping,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonSystemSuspended,
+		LastTransitionTime: metav1.NewTime(time.Unix(100, 0).UTC()),
+		ObservedGeneration: current.Generation,
+	})
+	if err := r.Status().Patch(ctx, current, client.MergeFromWithOptions(stale.DeepCopy(), client.MergeFromWithOptimisticLock{})); err != nil {
+		t.Fatalf("persist accepted stop: %v", err)
+	}
+
+	late := &agenticv1alpha1.VerificationResult{
+		ObjectMeta: metav1.ObjectMeta{Name: "late-verification", Namespace: "default"},
+	}
+	err := r.patchStepResult(ctx, stale, "verification",
+		agenticv1alpha1.AgenticRunConditionVerified, late.Name, late,
+		metav1.ConditionTrue, "Passed", "late result")
+	if !errors.Is(err, errStopAccepted) {
+		t.Fatalf("late result error = %v, want %v", err, errStopAccepted)
+	}
+	if err := r.patchStepCondition(ctx, stale, agenticv1alpha1.AgenticRunConditionVerified,
+		metav1.ConditionFalse, ReasonSandboxTimeout, "late timeout"); !errors.Is(err, errStopAccepted) {
+		t.Fatalf("late timeout condition error = %v, want %v", err, errStopAccepted)
+	}
+	if err := r.completeStep(ctx, stale, &corev1.Pod{}, "verification",
+		agenticv1alpha1.AgenticRunConditionVerified, "late timeout", ReasonSandboxTimeout); !errors.Is(err, errStopAccepted) {
+		t.Fatalf("timeout completion error = %v, want %v", err, errStopAccepted)
+	}
+	got, err := getAgenticRun(r, stale.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	verified := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionVerified)
+	if stopping == nil || stopping.Status != metav1.ConditionTrue ||
+		verified == nil || verified.Status != metav1.ConditionUnknown {
+		t.Fatalf("late result changed stopped workflow: %+v", got.Status.Conditions)
+	}
+	if len(got.Status.Steps.Verification.Results) != 0 {
+		t.Fatal("late result was linked into the stopped run")
+	}
+}
+
+func TestStoppedPodEventResolvesByUIDWithoutOwnerChain(t *testing.T) {
+	ctx := context.Background()
+	run := testAgenticRun()
+	run.UID = "stopped-run-uid"
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonTeardownFailed,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonEmergencyStopFailed,
+			ObservedGeneration: run.Generation,
+		},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(run).
+		WithStatusSubresource(run).
+		Build()
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Config:    testCache(t, "sandbox-claim"),
+		Namespace: "default",
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "late-claim-pod",
+			Namespace: "default",
+			Labels:    map[string]string{LabelRun: string(run.UID), LabelStep: "analysis"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	requests := r.handlePodEvent(ctx, pod)
+	if len(requests) != 1 || requests[0].NamespacedName != client.ObjectKeyFromObject(run) {
+		t.Fatalf("late stopped Pod requests = %+v, want run UID fallback request", requests)
+	}
+	got, err := getAgenticRun(r, run.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionVerified); verified != nil {
+		t.Fatalf("late Pod event advanced a stopped run: %+v", verified)
+	}
+}
+
+func TestPodNameAnnotationCannotSelectReplacementRun(t *testing.T) {
+	ctx := context.Background()
+	run := testAgenticRun()
+	run.UID = "replacement-run-uid"
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).
+		WithObjects(run).
+		WithStatusSubresource(run).
+		Build()
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Config:    testCache(t, "sandbox-claim"),
+		Namespace: "default",
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "stale-pod",
+			Namespace:   "default",
+			Labels:      map[string]string{LabelRun: "deleted-run-uid", LabelStep: "analysis"},
+			Annotations: map[string]string{AnnotationRunName: run.Name},
+		},
+	}
+	if requests := r.handlePodEvent(ctx, pod); len(requests) != 0 {
+		t.Fatalf("stale Pod identity enqueued replacement run: %+v", requests)
+	}
 }
 
 // createVerificationResult creates a VerificationResult CR named exactly as the

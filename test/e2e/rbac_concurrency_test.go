@@ -14,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -124,6 +125,9 @@ func findAnalysisPod(ctx context.Context, c client.Client, run *agenticv1alpha1.
 		runLabel:  string(run.UID),
 		stepLabel: "analysis",
 	}); err != nil {
+		if meta.IsNoMatchError(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	if len(claims.Items) == 0 {
