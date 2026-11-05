@@ -72,6 +72,38 @@ subjects:
 
 **Scope decision:** Cluster-wide read is shown above. Execution Roles are scoped to the namespaces declared by the approved remediation option's namespace-scoped RBAC rules.
 
+**Custom resources are not covered by broad read roles.** Clusters commonly seed the reader binding from OpenShift's `cluster-reader`, an *aggregated* role holding the union of ClusterRoles labelled `aggregate-to-cluster-reader` or `aggregate-to-view`. A CRD's resources are in it only if its operator ships a labelled viewer role, and many do not — so an agent with apparent cluster-wide read still gets `Forbidden` on them.
+
+Grant one with a read-only ClusterRole plus a binding naming `lightspeed-agent`; discovery selects on the subject, so it reaches every per-step SA and nothing else. Do not label the role for aggregation — that widens `cluster-reader` for every principal holding it. OLM v1, which is not aggregated:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lightspeed-agent-olm-v1-reader
+rules:
+- apiGroups: ["olm.operatorframework.io"]
+  resources: ["clusterextensions", "clustercatalogs"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lightspeed-agent-olm-v1-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lightspeed-agent-olm-v1-reader
+subjects:
+- kind: ServiceAccount
+  name: lightspeed-agent
+  namespace: default
+```
+
+The CRB watch invalidates the discovery cache, so no operator restart is needed. Not applicable on spokes — `spokeReaderBindingNames` in `controller/agenticrun/rbac.go` is a fixed list.
+
+This matters most for **analysis** and **verification**: neither receives RBAC derived from the analysis result, so a resource missing here cannot be inspected at all. Execution can also get reads via the analysis result (prerequisite #2).
+
 ### 2. Operator escalation privilege
 
 **Why:** When the operator creates an execution Role granting (e.g.) `configmaps patch` in namespace `staging`, Kubernetes checks: "does the operator SA itself have `configmaps patch` in `staging`?" If not, it rejects the Role creation. This is Kubernetes' built-in escalation prevention — you can't grant permissions you don't hold.
@@ -104,6 +136,8 @@ subjects:
 ```
 
 **Production alternative:** Scope the ClusterRole to only the resources and verbs agents are expected to request (e.g. `deployments patch`, `configmaps get/update` in specific API groups), rather than `"*"` on everything.
+
+**Include custom resource reads.** The analysis template has the agent derive read rules for custom resources (prerequisite #1), and those land in the execution Role — so the operator must hold them too. The example above covers only core, `apps`, `batch`, and `networking.k8s.io`; a plan reading a CRD outside them hits the escalation error below.
 
 
 ## Dynamic execution RBAC (per-AgenticRun)
@@ -147,6 +181,12 @@ Reader CRB subjects are added by `SandboxManager.Create` and removed by `Release
 **Cause:** The operator SA lacks sufficient permissions to create a Role with the content the analysis agent requested. Kubernetes RBAC escalation prevention blocks it.
 
 **Fix:** Expand the operator's escalation privilege (external prerequisite #2) to include the missing permissions. The error message lists exactly which `{APIGroups, Resources, Verbs}` are needed.
+
+**Error:** `cannot get resource "<custom-resource>" in API group "<group>" at the cluster scope`, for a per-step SA (`ls-anl-…`, `ls-exe-…`, `ls-ver-…`)
+
+**Cause:** The CRD's operator ships no aggregated viewer role, so the resource is absent from `cluster-reader` and from the reader bindings per-step SAs inherit. Broad read access does not imply every custom resource.
+
+**Fix:** Grant it explicitly (prerequisite #1, "Custom resources are not covered by broad read roles"). For execution only, analysis can instead derive the read into the per-run Role, which the operator must also hold (prerequisite #2).
 
 ## Security boundaries
 
