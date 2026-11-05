@@ -97,7 +97,7 @@ func TestTroubleshooting_PhaseTransitions(t *testing.T) {
 
 			requireDisconnectedWatch(t, suiteCtx)
 			runName := fmt.Sprintf("e2e-ts-%s", strings.ReplaceAll(sc.Name, "_", "-"))
-			run := createTroubleshootingRun(ctx, t, c, runName, sc.Spec.Request, sc.Spec.TargetNamespaces, tools)
+			run := createTroubleshootingRun(ctx, t, c, runName, sc.Spec.Request, tools)
 			// Registered after createTroubleshootingRun's cleanup, so this runs
 			// first and exports templogs before the AgenticRun finalizer deletes
 			// them from the collector.
@@ -134,7 +134,7 @@ func TestTroubleshooting_PhaseTransitions(t *testing.T) {
 	}
 }
 
-func createTroubleshootingRun(ctx context.Context, t *testing.T, c client.Client, name, request string, targetNamespaces []string, tools agenticv1alpha1.ToolsSpec) *agenticv1alpha1.AgenticRun {
+func createTroubleshootingRun(ctx context.Context, t *testing.T, c client.Client, name, request string, tools agenticv1alpha1.ToolsSpec) *agenticv1alpha1.AgenticRun {
 	t.Helper()
 	labels := map[string]string{}
 	if os.Getenv("E2E_DISCONNECTED") == "true" {
