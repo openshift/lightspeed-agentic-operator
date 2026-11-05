@@ -1,6 +1,6 @@
 module github.com/openshift/lightspeed-agentic-operator
 
-go 1.25.7
+go 1.26.0
 
 require (
 	github.com/openshift/lightspeed-agentic-operator/api v0.0.0-20261028115751-c5a0a65b007d
