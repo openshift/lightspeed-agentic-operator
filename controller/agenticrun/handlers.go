@@ -807,7 +807,16 @@ func (r *AgenticRunReconciler) handleEscalation(
 	if override := getStageOverrideAgent(approval, agenticv1alpha1.SandboxStepEscalation); override != "" {
 		var agent agenticv1alpha1.Agent
 		if err := r.Get(ctx, types.NamespacedName{Name: override}, &agent); err != nil {
-			return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionEscalated, fmt.Errorf("%s %q: %w", ErrGetOverrideAgent, override, err))
+			// Fall back to "default" when the override agent is absent,
+			// matching the resolution behavior in validateAgentDependencies.
+			if apierrors.IsNotFound(err) && override != defaultAgentName {
+				log.Info("Escalation override Agent not found, falling back to default", LogKeyName, override)
+				if fbErr := r.Get(ctx, types.NamespacedName{Name: defaultAgentName}, &agent); fbErr != nil {
+					return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionEscalated, fmt.Errorf("%s %q: %w", ErrGetOverrideAgent, defaultAgentName, fbErr))
+				}
+			} else {
+				return r.failStep(ctx, run, agenticv1alpha1.AgenticRunConditionEscalated, fmt.Errorf("%s %q: %w", ErrGetOverrideAgent, override, err))
+			}
 		}
 		var llm agenticv1alpha1.LLMProvider
 		if err := r.Get(ctx, types.NamespacedName{Name: agent.Spec.LLMProvider.Name}, &llm); err != nil {
