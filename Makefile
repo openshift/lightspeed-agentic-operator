@@ -74,11 +74,14 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: fmt-check vet ## Run unit tests (main + api + cli modules).
+test: fmt-check vet ## Run unit tests (main + api + cli modules) and upload coverage from CI.
 	# Root module: controller, cli, etc. (exclude test/e2e — needs -tags=e2e and a running mock; see test-e2e).
-	go test $$(go list ./... | grep -vF 'github.com/openshift/lightspeed-agentic-operator/test/e2e') -count=1
+	go test $$(go list ./... | grep -vF 'github.com/openshift/lightspeed-agentic-operator/test/e2e') -count=1 -coverprofile cover.out -covermode=atomic
 	# API module is separate go.mod; GOWORK=off avoids picking up a repo root go.work.
-	cd api && GOWORK=off go test ./... -count=1
+	cd api && GOWORK=off go test ./... -count=1 -coverprofile cover.out -covermode=atomic
+	# Upload coverage to codecov.io; soft-fails (local runs skip the upload).
+	hack/codecov.sh cover.out unit
+	hack/codecov.sh api/cover.out api
 
 ##@ Testing
 
