@@ -7,7 +7,19 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch == "main" && ("Dockerfile".pathChanged() || "go.mod".pathChanged() || "go.sum".pathChanged() || "api/**".pathChanged() || "cmd/**".pathChanged() || "controller/**".pathChanged() || "LICENSE".pathChanged() || ".tekton/lightspeed-agentic-operator-push.yaml".pathChanged())
+    pipelinesascode.tekton.dev/on-cel-expression: >-
+      event == "push" && target_branch == "main" && (
+        "Dockerfile".pathChanged() ||
+        ".dockerignore".pathChanged() ||
+        "go.mod".pathChanged() ||
+        "go.sum".pathChanged() ||
+        "api/**".pathChanged() ||
+        "cmd/**".pathChanged() ||
+        "controller/**".pathChanged() ||
+        "pkg/**".pathChanged() ||
+        "LICENSE".pathChanged() ||
+        ".tekton/lightspeed-agentic-operator-push.yaml".pathChanged()
+      )
   labels:
     appstudio.openshift.io/application: ols
     appstudio.openshift.io/component: lightspeed-agentic-operator
