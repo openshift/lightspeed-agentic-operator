@@ -542,8 +542,9 @@ type discoveredScenario struct {
 	ExpectedPhase agenticv1alpha1.AgenticRunPhase
 }
 
-// discoverScenarios walks E2E_SCENARIOS_DIR/agentic/ and returns scenarios
-// whose evals.yaml contains all the required tags. Tags default to ["core"]
+// discoverScenarios walks E2E_SCENARIOS_DIR/evals/scenarios and returns scenarios
+// whose evals-ols-agentic.yaml (or legacy evals.yaml) contains all the required tags.
+// Tags default to ["core"]
 // and can be overridden via E2E_SCENARIO_TAGS (comma-separated).
 //
 // Known tags in rhobs/troubleshooting-scenarios (see its README for updates):
@@ -583,7 +584,10 @@ func discoverScenarios(t *testing.T, scenariosDir string) []discoveredScenario {
 		}
 		dir := filepath.Join(agenticDir, entry.Name())
 
-		evalsPath := filepath.Join(dir, "evals.yaml")
+		evalsPath := filepath.Join(dir, "evals-ols-agentic.yaml")
+		if _, err := os.Stat(evalsPath); os.IsNotExist(err) {
+			evalsPath = filepath.Join(dir, "evals.yaml")
+		}
 		if _, err := os.Stat(evalsPath); err != nil {
 			continue
 		}
@@ -593,12 +597,12 @@ func discoverScenarios(t *testing.T, scenariosDir string) []discoveredScenario {
 
 		data, err := os.ReadFile(evalsPath)
 		if err != nil {
-			t.Logf("skip %s: read evals.yaml: %v", entry.Name(), err)
+			t.Logf("skip %s: read %s: %v", entry.Name(), filepath.Base(evalsPath), err)
 			continue
 		}
 		var evals []evalsEntry
 		if err := yaml.Unmarshal(data, &evals); err != nil {
-			t.Logf("skip %s: parse evals.yaml: %v", entry.Name(), err)
+			t.Logf("skip %s: parse %s: %v", entry.Name(), filepath.Base(evalsPath), err)
 			continue
 		}
 		if len(evals) == 0 || len(evals[0].Turns) == 0 {

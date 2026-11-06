@@ -116,7 +116,7 @@ product-e2e-disconnected: ## Provision Gemma via a pinned service checkout, then
 
 .PHONY: test-product-e2e-unit
 test-product-e2e-unit: ## Run cluster-free product harness and provisioning-entrypoint tests.
-	go test -tags=product_e2e ./test/e2e/... -run '^Test(OpenAIFixtureCustomURL|DisconnectedWatch)' -count=1
+	go test -tags=product_e2e ./test/e2e/... -run '^Test(OpenAIFixtureCustomURL|DisconnectedWatch|ScenarioDiscovery)' -count=1
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/test_e2e_disconnected.py
 
 .PHONY: api-lint
