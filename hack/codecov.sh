@@ -117,7 +117,7 @@ resolve_cli() {
     cli_bin="${TMPDIR:-/tmp}/codecovcli-${CODECOV_CLI_VERSION}"
     if [ ! -x "$cli_bin" ]; then
         log "codecovcli not found on PATH, downloading ${asset} v${CODECOV_CLI_VERSION}"
-        if ! curl -fsSL --retry 3 -o "$cli_bin" \
+        if ! curl -fsSL --retry 3 --connect-timeout 30 --max-time 120 --retry-max-time 300 -o "$cli_bin" \
             "https://github.com/codecov/codecov-cli/releases/download/v${CODECOV_CLI_VERSION}/${asset}"; then
             report_not_uploaded "failed to download the codecov CLI"
         fi
@@ -126,7 +126,11 @@ resolve_cli() {
     CLI=("$cli_bin")
 }
 
-upload_log="${ARTIFACT_DIR:-.}/codecov_upload.log"
+if [ -n "${flag:-}" ]; then
+    flag_note=" (flag: ${flag})"
+else
+    flag_note=""
+fi
 pr_note=""
 if [ -n "$pr" ]; then
     pr_note=", pr: ${pr}"
@@ -136,7 +140,8 @@ resolve_cli
 
 attempt=1
 while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
-    log "upload attempt ${attempt}/${MAX_ATTEMPTS} (flag: ${flag:-none}, branch: ${branch}${pr_note})"
+    upload_log="${ARTIFACT_DIR:-.}/codecov_upload_${flag:-noflag}_attempt${attempt}.log"
+    log "upload attempt ${attempt}/${MAX_ATTEMPTS}${flag_note}, log: ${upload_log}, branch: ${branch}${pr_note}"
     if timeout "$UPLOAD_TIMEOUT_SECONDS" "${CLI[@]}" "${cli_args[@]}" > "$upload_log" 2>&1; then
         cat "$upload_log"
         log "upload succeeded - report available on codecov.io"
@@ -150,4 +155,4 @@ while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
     fi
 done
 
-report_not_uploaded "codecov CLI exited non-zero after ${MAX_ATTEMPTS} attempt(s), see ${upload_log} above"
+report_not_uploaded "codecov CLI exited non-zero after ${MAX_ATTEMPTS} attempt(s), see codecov_upload_${flag:-noflag}_attempt*.log above"
