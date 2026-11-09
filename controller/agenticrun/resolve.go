@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -34,15 +35,25 @@ type resolvedWorkflow struct {
 	Verification *resolvedStep // nil = skip verification
 }
 
+const defaultAgentName = "default"
+
 func validateAgentDependencies(ctx context.Context, c client.Client, namespace, agentName string) (*agenticv1alpha1.Agent, *agenticv1alpha1.LLMProvider, []error) {
 	if agentName == "" {
-		agentName = "default"
+		agentName = defaultAgentName
 	}
 	var issues []error
 	agent := &agenticv1alpha1.Agent{}
 	var llm *agenticv1alpha1.LLMProvider
 	if err := c.Get(ctx, types.NamespacedName{Name: agentName}, agent); err != nil {
 		if apierrors.IsNotFound(err) {
+			// Named agent is absent — fall back to "default" per the Agent
+			// type contract (agent_types.go). Log a warning so the admin
+			// knows resolution was not exact.
+			if agentName != defaultAgentName {
+				log := logf.FromContext(ctx)
+				log.Info("Agent not found, falling back to default", LogKeyName, agentName)
+				return validateAgentDependencies(ctx, c, namespace, defaultAgentName)
+			}
 			issues = append(issues, fmt.Errorf("Agent %q not found", agentName))
 		} else {
 			issues = append(issues, fmt.Errorf("get Agent %q: %w", agentName, err))
@@ -103,6 +114,10 @@ func validateAgenticRun(ctx context.Context, c client.Client, run *agenticv1alph
 			continue
 		}
 		agents = append(agents, agentName)
+		// validateAgentDependencies may fall back to "default" when agentName
+		// is absent. The returned Agent is stored under the original requested
+		// name so resolveAgenticRun's map lookup by effectiveStepAgentName
+		// finds the fallback result without extra translation.
 		agent, llm, issues := validateAgentDependencies(ctx, c, operatorNamespace, agentName)
 		errors = append(errors, issues...)
 		if len(issues) == 0 {
@@ -166,7 +181,7 @@ func stepAgentName(step agenticv1alpha1.AgenticRunStep) string {
 	if step.Agent != "" {
 		return step.Agent
 	}
-	return "default"
+	return defaultAgentName
 }
 
 // effectiveStepAgentName is the single source of truth for selecting a stage's

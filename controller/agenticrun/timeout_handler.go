@@ -286,6 +286,17 @@ func (r *AgenticRunReconciler) resolveStepAgent(ctx context.Context, run *agenti
 
 	agent := &agenticv1alpha1.Agent{}
 	if err := r.Get(ctx, client.ObjectKey{Name: agentName}, agent); err != nil {
+		// Fall back to "default" when a named agent is absent, matching
+		// the resolution behavior in validateAgentDependencies.
+		if apierrors.IsNotFound(err) && agentName != defaultAgentName {
+			log := logf.FromContext(ctx)
+			log.Info("Agent not found, falling back to default for timeout resolution", LogKeyName, agentName)
+			fallback := &agenticv1alpha1.Agent{}
+			if fbErr := r.Get(ctx, client.ObjectKey{Name: defaultAgentName}, fallback); fbErr != nil {
+				return nil, fbErr
+			}
+			return fallback, nil
+		}
 		return nil, err
 	}
 

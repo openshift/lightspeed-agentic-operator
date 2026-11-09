@@ -38,8 +38,8 @@ func TestAgentDependencyValidator_ReportsMissingDependencies(t *testing.T) {
 		wantErrors []string
 	}{
 		{
-			name:       "agent",
-			wantErrors: []string{`Agent "missing" not found`},
+			name:       "agent falls back to default then fails",
+			wantErrors: []string{`Agent "default" not found`},
 			agentName:  "missing",
 		},
 		{
@@ -308,7 +308,26 @@ func TestResolveAgenticRun_ValidatesWorkflowAgents(t *testing.T) {
 	}
 }
 
-func TestResolveAgenticRun_MissingAgent(t *testing.T) {
+func TestResolveAgenticRun_MissingAgentFallsBackToDefault(t *testing.T) {
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request:  "fix it",
+			Analysis: agenticv1alpha1.AgenticRunStep{Agent: "nonexistent"},
+		},
+	}
+
+	fc := buildFakeClient(testDefaultAgent(), testLLM("smart"), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "llm-secret", Namespace: "default"}}, run)
+	resolved, err := resolveAgenticRun(context.Background(), fc, run, nil, "default")
+	if err != nil {
+		t.Fatalf("expected fallback to default, got error: %v", err)
+	}
+	if resolved.Analysis.Agent.Name != "default" {
+		t.Errorf("analysis agent = %s, want default (fallback)", resolved.Analysis.Agent.Name)
+	}
+}
+
+func TestResolveAgenticRun_MissingAgentAndDefaultFails(t *testing.T) {
 	run := &agenticv1alpha1.AgenticRun{
 		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
 		Spec: agenticv1alpha1.AgenticRunSpec{
@@ -320,7 +339,39 @@ func TestResolveAgenticRun_MissingAgent(t *testing.T) {
 	fc := buildFakeClient(run)
 	_, err := resolveAgenticRun(context.Background(), fc, run, nil, "default")
 	if err == nil {
-		t.Fatal("expected error for missing agent")
+		t.Fatal("expected error when both named and default agents are missing")
+	}
+	if !strings.Contains(err.Error(), `Agent "default" not found`) {
+		t.Fatalf("error = %q, want missing default Agent error", err)
+	}
+}
+
+func TestResolveAgenticRun_MultiStepFallbackToDefault(t *testing.T) {
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "p1", Namespace: "default"},
+		Spec: agenticv1alpha1.AgenticRunSpec{
+			Request:      "fix it",
+			Tools:        agenticv1alpha1.ToolsSpec{Skills: []agenticv1alpha1.SkillsSource{{Image: "s:v1"}}},
+			Analysis:     agenticv1alpha1.AgenticRunStep{Agent: "smart"},
+			Execution:    agenticv1alpha1.AgenticRunStep{Agent: "fast"},
+			Verification: agenticv1alpha1.AgenticRunStep{Agent: "default"},
+		},
+	}
+
+	// Only "default" exists — "smart" and "fast" should fall back.
+	fc := buildFakeClient(testDefaultAgent(), testLLM("smart"), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "llm-secret", Namespace: "default"}}, run)
+	resolved, err := resolveAgenticRun(context.Background(), fc, run, nil, "default")
+	if err != nil {
+		t.Fatalf("expected multi-step fallback, got error: %v", err)
+	}
+	if resolved.Analysis.Agent.Name != "default" {
+		t.Errorf("analysis agent = %s, want default (fallback from smart)", resolved.Analysis.Agent.Name)
+	}
+	if resolved.Execution == nil || resolved.Execution.Agent.Name != "default" {
+		t.Error("execution should fall back to default (from fast)")
+	}
+	if resolved.Verification == nil || resolved.Verification.Agent.Name != "default" {
+		t.Error("verification should resolve default directly")
 	}
 }
 
