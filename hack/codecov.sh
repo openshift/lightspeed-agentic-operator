@@ -86,6 +86,7 @@ fi
 
 cli_args=(
     upload-process
+    --disable-search
     --git-service github
     --slug "${REPO_OWNER:-openshift}/${REPO_NAME:-lightspeed-agentic-operator}"
     --token "$CODECOV_TOKEN"

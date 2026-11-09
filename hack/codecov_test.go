@@ -214,6 +214,9 @@ func TestPresubmitUploadPassesCommonArguments(t *testing.T) {
 	if got := optionValue(t, args, "--flag"); got != "unit" {
 		t.Errorf("expected flag unit, got %q", got)
 	}
+	if !contains(args, "--disable-search") {
+		t.Errorf("expected --disable-search so only the requested profile is uploaded, got %v", args)
+	}
 	if !contains(args, "--fail-on-error") {
 		t.Errorf("expected --fail-on-error, got %v", args)
 	}
