@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -377,12 +378,19 @@ func ensureExecutionRBAC(
 
 	if len(rbacResult.NamespaceScoped) > 0 {
 		targetNS := rbacTargetNamespaces(rbacResult)
-
-		if len(targetNS) > 0 {
+		namespaces := append(annotatedRBACNamespaces(run), targetNS...)
+		sort.Strings(namespaces)
+		unique := namespaces[:0]
+		for _, namespace := range namespaces {
+			if namespace != "" && (len(unique) == 0 || unique[len(unique)-1] != namespace) {
+				unique = append(unique, namespace)
+			}
+		}
+		if len(unique) > 0 {
 			if run.Annotations == nil {
 				run.Annotations = make(map[string]string)
 			}
-			run.Annotations[rbacNamespacesAnnotation] = strings.Join(targetNS, ",")
+			run.Annotations[rbacNamespacesAnnotation] = strings.Join(unique, ",")
 		}
 
 		for _, ns := range targetNS {

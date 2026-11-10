@@ -2,8 +2,8 @@ package agenticrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -359,11 +359,15 @@ func (r *AgenticRunReconciler) handleFailed(
 	return ctrl.Result{}, nil
 }
 
-func (r *AgenticRunReconciler) handleSuspensionAt(
+func (r *AgenticRunReconciler) handleRunStop(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
-	activationStart metav1.Time,
+	source stopSource,
+	start metav1.Time,
 ) (ctrl.Result, error) {
+	if source != stopSourceSuspension {
+		return ctrl.Result{}, fmt.Errorf("unsupported run stop source %q", source)
+	}
 	log := logf.FromContext(ctx)
 	if r.APIReader == nil {
 		return ctrl.Result{}, fmt.Errorf("uncached API reader is required for suspension cleanup")
@@ -387,7 +391,7 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 
 	phase := agenticv1alpha1.DerivePhase(current.Status.Conditions)
 	historicalTerminal := isTerminal(phase) && !HasAcceptedStop(current)
-	stopStart := activationStart
+	stopStart := start
 	stopping := meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	if stopping != nil && stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended &&
 		!stopping.LastTransitionTime.IsZero() {
@@ -403,7 +407,7 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 		}
 		acceptanceCtx, cancelAcceptance := context.WithTimeout(ctx, remaining)
-		updated, err := r.persistRunStop(acceptanceCtx, key, run.UID, stopStart)
+		updated, err := r.persistStopAcceptance(acceptanceCtx, key, run.UID, source, stopStart)
 		cancelAcceptance()
 		if err != nil {
 			return ctrl.Result{}, err
@@ -422,7 +426,7 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 		remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
 	}
 	if !historicalTerminal && !finalOutcome && !stopStart.IsZero() && remaining <= 0 {
-		updated, err := r.writeSuspensionOutcome(ctx, key, run.UID, false)
+		updated, err := r.writeStopOutcome(ctx, key, run.UID, source, false, SuspensionCleanup{})
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -432,11 +436,11 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 		current = updated
 		*run = *current
 
-		report, cleanupErr, remoteEvidence := r.suspensionCleanupPass(ctx, current, cleanupTimeout)
+		report, cleanupErr := r.runStopCleanupPass(ctx, current, cleanupTimeout)
 		if cleanupErr != nil {
 			log.Error(cleanupErr, "background cleanup after suspension deadline failed", LogKeyName, current.Name)
 		}
-		if cleanupErr == nil && report.Confirmed() && len(remoteEvidence) == 0 {
+		if cleanupErr == nil && report.Confirmed() {
 			cleaned, err := r.clearRunSandboxInfo(ctx, key, run.UID)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -452,11 +456,11 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 	if remaining > 0 && !finalOutcome {
 		passTimeout = remaining
 	}
-	report, cleanupErr, remoteEvidence := r.suspensionCleanupPass(ctx, current, passTimeout)
+	report, cleanupErr := r.runStopCleanupPass(ctx, current, passTimeout)
 	if cleanupErr != nil {
 		log.Error(cleanupErr, "suspension cleanup pass failed", LogKeyName, current.Name)
 	}
-	confirmed := cleanupErr == nil && report.Confirmed() && len(remoteEvidence) == 0
+	confirmed := cleanupErr == nil && report.Confirmed()
 	current = &agenticv1alpha1.AgenticRun{}
 	if err := r.APIReader.Get(ctx, key, current); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -471,7 +475,7 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 
 	if confirmed {
 		if !historicalTerminal && !finalOutcome {
-			updated, err := r.writeSuspensionOutcome(ctx, key, run.UID, true)
+			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, true, report)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -492,7 +496,7 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 
 	deadlineReached := !stopStart.IsZero() && !r.now().Before(stopStart.Add(SuspensionStopWindow))
 	if deadlineReached && !historicalTerminal && !finalOutcome {
-		updated, err := r.writeSuspensionOutcome(ctx, key, run.UID, false)
+		updated, err := r.writeStopOutcome(ctx, key, run.UID, source, false, report)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -511,35 +515,41 @@ func (r *AgenticRunReconciler) handleSuspensionAt(
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
-func (r *AgenticRunReconciler) suspensionCleanupPass(
+func (r *AgenticRunReconciler) runStopCleanupPass(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
 	timeout time.Duration,
-) (SuspensionCleanup, error, []string) {
+) (SuspensionCleanup, error) {
 	passCtx, cancel := context.WithTimeout(ctx, timeout)
 	report, cleanupErr := r.Sandbox.CleanupSuspension(passCtx, run.UID, nil)
-	remoteEvidence := RemoteExecutionEvidence(run)
-	if len(remoteEvidence) != 0 && r.Agent != nil {
-		if err := r.Agent.ReleaseSandboxes(passCtx, run, true); err != nil {
-			logf.FromContext(ctx).Error(
-				err,
-				"best-effort remote sandbox release during suspension",
-				"evidence",
-				fmt.Sprintf("remote execution/access unverified for %s/%s uid=%s target=%s: %s",
-					run.Namespace, run.Name, run.UID, run.Spec.TargetCluster, strings.Join(remoteEvidence, ", ")),
-			)
+	if run.Spec.TargetCluster != "" {
+		spoke, spokeErr := spokeAccessForRun(passCtx, r.Client, run, r.Namespace)
+		if spokeErr != nil {
+			logf.FromContext(ctx).Error(spokeErr, "spoke access unavailable during run-stop cleanup", LogKeyName, run.Name)
 		}
+
+		spokeReport, spokeCleanupErr := cleanupSpokeRunAccess(passCtx, run, spoke)
+		if spokeCleanupErr != nil {
+			cleanupErr = errors.Join(cleanupErr, spokeCleanupErr)
+		}
+		report.Pending = append(report.Pending, spokeReport.Pending...)
+		report.Failures = append(report.Failures, spokeReport.Failures...)
+		report.Unverified = append(report.Unverified, spokeReport.Unverified...)
 	}
 	cancel()
-	return report, cleanupErr, remoteEvidence
+	return report, cleanupErr
 }
 
-func (r *AgenticRunReconciler) persistRunStop(
+func (r *AgenticRunReconciler) persistStopAcceptance(
 	ctx context.Context,
 	key types.NamespacedName,
 	uid types.UID,
+	source stopSource,
 	start metav1.Time,
 ) (*agenticv1alpha1.AgenticRun, error) {
+	if source != stopSourceSuspension {
+		return nil, fmt.Errorf("unsupported run stop source %q", source)
+	}
 	for range 5 {
 		current := &agenticv1alpha1.AgenticRun{}
 		if err := r.APIReader.Get(ctx, key, current); err != nil {
@@ -573,12 +583,17 @@ func (r *AgenticRunReconciler) persistRunStop(
 	return nil, fmt.Errorf("persist run stop acceptance: status conflict retry limit reached")
 }
 
-func (r *AgenticRunReconciler) writeSuspensionOutcome(
+func (r *AgenticRunReconciler) writeStopOutcome(
 	ctx context.Context,
 	key types.NamespacedName,
 	uid types.UID,
+	source stopSource,
 	confirmed bool,
+	report SuspensionCleanup,
 ) (*agenticv1alpha1.AgenticRun, error) {
+	if source != stopSourceSuspension {
+		return nil, fmt.Errorf("unsupported run stop source %q", source)
+	}
 	for range 5 {
 		current := &agenticv1alpha1.AgenticRun{}
 		if err := r.APIReader.Get(ctx, key, current); err != nil {

@@ -76,6 +76,10 @@ func readBuiltinTemplate(name string) (string, error) {
 	return string(content), nil
 }
 
+type stopSource string
+
+const stopSourceSuspension stopSource = "suspension"
+
 const (
 	preserveSandboxAnnotation = "agentic.openshift.io/preserve-sandbox"
 	cleanupTimeout            = 30 * time.Second
