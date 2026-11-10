@@ -234,6 +234,18 @@ func HasAcceptedStop(run *agenticv1alpha1.AgenticRun) bool {
 	return accepted
 }
 
+// StopCleanupConfirmed reports whether the run's recorded state satisfies stop-cleanup resolution.
+func StopCleanupConfirmed(run *agenticv1alpha1.AgenticRun) bool {
+	if run == nil || hasRunSandboxInfo(run) {
+		return false
+	}
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping == nil {
+		return true
+	}
+	return stopping.Status == metav1.ConditionFalse && stopping.Reason == reasonTeardownComplete
+}
+
 func readRunnableRun(ctx context.Context, reader client.Reader, key types.NamespacedName, uid types.UID) (*agenticv1alpha1.AgenticRun, error) {
 	if reader == nil {
 		return nil, fmt.Errorf("uncached API reader is required before run workflow work")

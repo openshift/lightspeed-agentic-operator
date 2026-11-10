@@ -256,7 +256,6 @@ type activationEvidence struct {
 	runInventoryErr    error
 	unsavedMarkers     []string
 	pendingRunOutcomes []string
-	unverifiedRemote   []string
 }
 
 func (e activationEvidence) cleanupConfirmed() bool {
@@ -270,20 +269,19 @@ func (e activationEvidence) runAcceptanceConfirmed() bool {
 func (e activationEvidence) safeToResume() bool {
 	return e.cleanupConfirmed() &&
 		e.runAcceptanceConfirmed() &&
-		len(e.unverifiedRemote) == 0
+		len(e.pendingRunOutcomes) == 0
 }
 
 func (e activationEvidence) unresolved() bool {
 	return !e.cleanupConfirmed() ||
 		!e.runAcceptanceConfirmed() ||
-		len(e.pendingRunOutcomes) > 0 ||
-		len(e.unverifiedRemote) > 0
+		len(e.pendingRunOutcomes) > 0
 }
 
 func (e activationEvidence) diagnostic(prefix string) string {
 	items := make([]string, 0,
 		len(e.cleanup.Pending)+len(e.cleanup.Failures)+len(e.cleanup.Unverified)+
-			len(e.unsavedMarkers)+len(e.pendingRunOutcomes)+len(e.unverifiedRemote)+2,
+			len(e.unsavedMarkers)+len(e.pendingRunOutcomes)+2,
 	)
 	for _, item := range e.cleanup.Pending {
 		items = append(items, "cleanup pending: "+item)
@@ -296,7 +294,6 @@ func (e activationEvidence) diagnostic(prefix string) string {
 	}
 	items = append(items, e.unsavedMarkers...)
 	items = append(items, e.pendingRunOutcomes...)
-	items = append(items, e.unverifiedRemote...)
 	if e.cleanupErr != nil {
 		items = append(items, "cleanup pass returned an error")
 	}
@@ -306,13 +303,12 @@ func (e activationEvidence) diagnostic(prefix string) string {
 	items = sortedUnique(items)
 
 	counts := fmt.Sprintf(
-		"%d cleanup pending, %d cleanup failures, %d cleanup unverified, %d unsaved stop markers, %d run outcomes pending, %d remote executions/access unverified",
+		"%d cleanup pending, %d cleanup failures, %d cleanup unverified, %d unsaved stop markers, %d run outcomes pending",
 		len(e.cleanup.Pending),
 		len(e.cleanup.Failures),
 		len(e.cleanup.Unverified),
 		len(e.unsavedMarkers),
 		len(e.pendingRunOutcomes),
-		len(e.unverifiedRemote),
 	)
 	if e.cleanupErr != nil {
 		counts += ", cleanup pass error"
@@ -422,14 +418,11 @@ func (r *Reconciler) reconcileSuspension(
 				}
 			}
 
-			if remoteEvidence := knownRemoteEvidence(current); remoteEvidence != "" {
-				evidence.unverifiedRemote = append(evidence.unverifiedRemote, remoteEvidence)
-			}
-			if initiallyNonTerminal && markerSaved && current != nil &&
-				!isTerminal(agenticv1alpha1.DerivePhase(current.Status.Conditions)) &&
-				!agenticrun.HasFinalStopOutcome(current) {
-				evidence.pendingRunOutcomes = append(evidence.pendingRunOutcomes,
-					fmt.Sprintf("run outcome pending: %s/%s uid=%s", current.Namespace, current.Name, current.UID))
+			if acceptStop && !agenticrun.StopCleanupConfirmed(current) {
+				evidence.pendingRunOutcomes = append(
+					evidence.pendingRunOutcomes,
+					fmt.Sprintf("run stop unresolved: %s/%s uid=%s", current.Namespace, current.Name, current.UID),
+				)
 			}
 		}
 	}
@@ -541,18 +534,6 @@ func (r *Reconciler) persistRunStop(
 func terminalRunMayBeAffected(run *agenticv1alpha1.AgenticRun, start metav1.Time) bool {
 	terminalTime := run.Status.TerminalTime
 	return terminalTime == nil || terminalTime.IsZero() || !terminalTime.Time.Before(start.Time)
-}
-
-func knownRemoteEvidence(run *agenticv1alpha1.AgenticRun) string {
-	evidence := agenticrun.RemoteExecutionEvidence(run)
-	if len(evidence) == 0 {
-		return ""
-	}
-	sort.Strings(evidence)
-	return boundedDiagnostic(fmt.Sprintf(
-		"remote execution/access unverified for %s/%s uid=%s target=%s: %s",
-		run.Namespace, run.Name, run.UID, run.Spec.TargetCluster, strings.Join(evidence, ", "),
-	))
 }
 
 func (r *Reconciler) patchActivationOutcome(
