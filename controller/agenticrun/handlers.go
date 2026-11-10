@@ -459,7 +459,7 @@ func (r *AgenticRunReconciler) handleRunStop(
 	}
 	if !historicalTerminal && !finalOutcome && !stopStart.IsZero() && remaining <= 0 {
 		if source == stopSourceCancellation {
-			report, cleanupErr := r.runStopCleanupPass(ctx, current, time.Nanosecond)
+			report, cleanupErr := r.runStopCleanupPass(ctx, current, cleanupTimeout)
 			if cleanupErr != nil {
 				log.Error(cleanupErr, "cleanup pass failed after run-stop deadline", "source", source, LogKeyName, current.Name)
 				if report.Confirmed() {
@@ -603,6 +603,7 @@ func (r *AgenticRunReconciler) runStopCleanupPass(
 		spoke, spokeErr := spokeAccessForRun(passCtx, r.Client, run, r.Namespace)
 		if spokeErr != nil {
 			logf.FromContext(ctx).Error(spokeErr, "spoke access unavailable during run-stop cleanup", LogKeyName, run.Name)
+			report.Unverified = append(report.Unverified, spokeErr.Error())
 		}
 
 		spokeReport, spokeCleanupErr := cleanupSpokeRunAccess(passCtx, run, spoke)
