@@ -952,7 +952,7 @@ users:
 				Name:      sandboxSAName(run, "analysis"),
 				Namespace: spokeManagedNamespace,
 				UID:       types.UID("analysis-sa-uid"),
-				Labels: spokeLabels(string(run.UID), run.Name, run.Spec.TargetCluster, "sandbox-sa"),
+				Labels:    spokeLabels(string(run.UID), run.Name, run.Spec.TargetCluster, "sandbox-sa"),
 			},
 		}).Build(),
 	}

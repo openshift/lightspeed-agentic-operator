@@ -79,7 +79,7 @@ func readBuiltinTemplate(name string) (string, error) {
 type stopSource string
 
 const (
-	stopSourceSuspension  stopSource = "suspension"
+	stopSourceSuspension   stopSource = "suspension"
 	stopSourceCancellation stopSource = "cancellation"
 )
 
