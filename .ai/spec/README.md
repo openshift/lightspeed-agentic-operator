@@ -28,6 +28,7 @@ AI agents. Content is optimized for precision and machine consumption.
 | Understand sandbox pod lifecycle | `what/sandbox-execution.md` |
 | Understand product e2e testing | `what/product-e2e-testing.md` |
 | Run disconnected Gemma product e2e | `how/disconnected-product-e2e.md` |
+| Understand the model compatibility smoke job and model-versions file | `what/product-e2e-testing.md` (Model compatibility smoke) |
 | Understand Agentic data collection traces | `what/data-collection.md` |
 | Navigate the project layout | `how/project-structure.md` |
 | Understand the kill switch / system config | `what/system-config.md` |
