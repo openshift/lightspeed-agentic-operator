@@ -498,7 +498,7 @@ func (r *Reconciler) persistRunStop(
 		if current.UID != snapshot.UID {
 			return nil, false, true, nil
 		}
-		if agenticrun.HasAcceptedStop(current) {
+		if agenticrun.HasAcceptedSuspension(current) || agenticrun.HasFinalStopOutcome(current) {
 			return current, true, false, nil
 		}
 

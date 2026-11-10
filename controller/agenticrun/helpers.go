@@ -234,6 +234,84 @@ func HasAcceptedStop(run *agenticv1alpha1.AgenticRun) bool {
 	return accepted
 }
 
+// HasAcceptedSuspension reports whether a durable stop outcome belongs to global suspension.
+func HasAcceptedSuspension(run *agenticv1alpha1.AgenticRun) bool {
+	source, _, accepted := acceptedStopSource(run)
+	return accepted && source == stopSourceSuspension
+}
+
+func isDegradableSpokeError(err error) bool {
+	if err == nil || errors.IsForbidden(err) || errors.IsUnauthorized(err) {
+		return false
+	}
+	if stderrors.Is(err, context.DeadlineExceeded) ||
+		errors.IsServiceUnavailable(err) ||
+		errors.IsTimeout(err) ||
+		errors.IsServerTimeout(err) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if stderrors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if stderrors.As(err, &opErr) {
+		return true
+	}
+	var netErr net.Error
+	return stderrors.As(err, &netErr) && netErr.Timeout()
+}
+
+func hasNonDegradableSpokeDiagnostic(diagnostic string) bool {
+	if len([]rune(diagnostic)) >= 1024 {
+		return true
+	}
+	message := strings.ToLower(diagnostic)
+	for _, marker := range []string{
+		"forbidden",
+		"unauthorized",
+		"label mismatch",
+		"name mismatch",
+		"uid is missing",
+		"missing \"kubeconfig\" key",
+		"parse spoke kubeconfig",
+		"insecure tls",
+		"external credential providers",
+		"bad request",
+		"method not allowed",
+		"permission denied",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func degradableSpokeDiagnostic(diagnostic string) bool {
+	if hasNonDegradableSpokeDiagnostic(diagnostic) {
+		return false
+	}
+	message := strings.ToLower(diagnostic)
+	for _, marker := range []string{
+		"connection refused",
+		"connection reset",
+		"network is unreachable",
+		"no such host",
+		"dial tcp",
+		"i/o timeout",
+		"tls handshake timeout",
+		"context deadline exceeded",
+		"service unavailable",
+		"server timeout",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // StopCleanupConfirmed reports whether the run's recorded state satisfies stop-cleanup resolution.
 func StopCleanupConfirmed(run *agenticv1alpha1.AgenticRun) bool {
 	if run == nil || hasRunSandboxInfo(run) {
