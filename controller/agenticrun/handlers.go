@@ -921,7 +921,6 @@ func HasFinalStopOutcome(run *agenticv1alpha1.AgenticRun) bool {
 	return false
 }
 
-
 func suspensionFailureCondition(phase agenticv1alpha1.AgenticRunPhase) string {
 	switch phase {
 	case agenticv1alpha1.AgenticRunPhasePending, agenticv1alpha1.AgenticRunPhaseAnalyzing:

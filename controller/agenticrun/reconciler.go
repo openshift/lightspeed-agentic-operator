@@ -28,16 +28,16 @@ import (
 )
 
 const (
-	ErrRemoveFinalizer             = "remove finalizer"
-	ErrAddFinalizer                = "add finalizer"
-	ErrPatchTemplogCleanupAttempts = "patch templog cleanup attempts"
-	ErrPatchRBACCleanupAttempts    = "patch rbac cleanup attempts"
-	ErrStampTerminalTTL            = "stamp terminal TTL"
-	ErrConfigNotReady              = "operator configuration not yet available"
-	ErrDeleteExpiredRun            = "delete expired run"
-	ErrLabelTerminalRun            = "label terminal run"
-	terminalTTLLabel               = "agentic.openshift.io/ttl-managed"
-	suspensionRequeueAfter         = 5 * time.Second
+	ErrRemoveFinalizer              = "remove finalizer"
+	ErrAddFinalizer                 = "add finalizer"
+	ErrPatchTemplogCleanupAttempts  = "patch templog cleanup attempts"
+	ErrPatchRBACCleanupAttempts     = "patch rbac cleanup attempts"
+	ErrStampTerminalTTL             = "stamp terminal TTL"
+	ErrConfigNotReady               = "operator configuration not yet available"
+	ErrDeleteExpiredRun             = "delete expired run"
+	ErrLabelTerminalRun             = "label terminal run"
+	terminalTTLLabel                = "agentic.openshift.io/ttl-managed"
+	suspensionRequeueAfter          = 5 * time.Second
 	rbacCleanupFinalizerRetryWindow = time.Minute
 	eventReasonSpokeCleanupDegraded = "SpokeCleanupDegraded"
 )
@@ -52,11 +52,11 @@ type TempLogCleaner interface {
 // Agent, APIReader, and Sandbox must be set before calling SetupWithManager.
 type AgenticRunReconciler struct {
 	client.Client
-	APIReader client.Reader
-	Agent     AgentCaller
-	Sandbox   *SandboxManager
-	Config    *configuration.Cache
-	Namespace string
+	APIReader     client.Reader
+	Agent         AgentCaller
+	Sandbox       *SandboxManager
+	Config        *configuration.Cache
+	Namespace     string
 	Audit         AuditLogger
 	EventRecorder record.EventRecorder
 	TempLog       TempLogCleaner

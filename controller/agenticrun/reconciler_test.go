@@ -3,7 +3,6 @@ package agenticrun
 import (
 	"context"
 	"fmt"
-	"strings"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -20,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"strings"
 	"testing"
 	"time"
 
@@ -1643,7 +1643,7 @@ func TestCancellationDeadlineFailureStaysFinalAfterCleanupRecovery(t *testing.T)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "held-cancellation-pod",
-			Namespace: "default",
+			Namespace:  "default",
 			UID:        types.UID("cancellation-pod-uid"),
 			Labels:     map[string]string{LabelRun: string(run.UID), LabelStep: "analysis"},
 			Finalizers: []string{"test/hold"},
@@ -2253,10 +2253,10 @@ func TestStoppedTerminalCleanupRecordsCancellationReasonOnceAndKeepsTTL(t *testi
 
 func TestTerminalCancellationWithRevisionFeedbackStillRecordsOutcome(t *testing.T) {
 	tests := []struct {
-		name             string
-		reason           string
-		terminalReason   string
-		acceptedStop     bool
+		name           string
+		reason         string
+		terminalReason string
+		acceptedStop   bool
 	}{
 		{
 			name:           "accepted CancelledByUser outcome",

@@ -626,11 +626,11 @@ func TestPersistRunStopPrecedence(t *testing.T) {
 		UID: config.UID, Generation: config.Generation, Start: metav1.NewTime(start),
 	}
 	tests := []struct {
-		name        string
-		run         *agenticv1alpha1.AgenticRun
-		wantReason  string
-		wantAt      time.Time
-		unchanged   bool
+		name       string
+		run        *agenticv1alpha1.AgenticRun
+		wantReason string
+		wantAt     time.Time
+		unchanged  bool
 	}{
 		{
 			name: "suspension takes over pending cancellation",
