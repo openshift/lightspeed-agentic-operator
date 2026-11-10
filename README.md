@@ -189,7 +189,7 @@ kustomize replacement.
 
 ### CRDs and manifests
 
-Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make manifests`**.
+Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make generate`** and **`make manifests`**.
 
 Downstream OLM installations must synchronize the updated role before relying on suspension confirmation.
 `lightspeed-operator` consumes these permissions through its pinned-source `make sync-agentic-crds` and bundle regeneration workflow.
@@ -202,6 +202,7 @@ Updating this repository does not update an installed OLM bundle.
 ### Common targets
 
 ```bash
+make generate  # controller-gen → DeepCopy implementations
 make manifests # controller-gen → config/crd/bases + config/rbac/role.yaml
 make test      # fmt-check + vet + go test (root + api module)
 make install   # kubectl apply CRDs from config/crd only

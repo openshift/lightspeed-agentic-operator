@@ -115,6 +115,10 @@ spec:
                 x-kubernetes-validations:
                 - message: schema is required when mode is Minimal
                   rule: self.mode != 'Minimal' || has(self.schema)
+              cancelled:
+                description: cancelled requests that this run stop. Omission and false
+                  both mean no cancellation request.
+                type: boolean
               execution:
                 description: |-
                   execution defines the agent used for the execution step.
@@ -155,7 +159,7 @@ spec:
                   the operator detects (generation > observedGeneration) and triggers
                   re-analysis with the feedback appended to the original request.
 
-                  Mutable: this and terminalTTL below are the only mutable spec
+                  Mutable: revisionFeedback, cancelled, and terminalTTL are the only mutable spec
                   fields. All other spec fields are immutable via CEL rules.
                 maxLength: 32768
                 minLength: 1
@@ -591,6 +595,9 @@ spec:
             - message: verification is immutable once set
               rule: '!has(oldSelf.verification) || (has(self.verification) && self.verification
                 == oldSelf.verification)'
+            - message: cancelled cannot be cleared or removed
+              rule: '!has(oldSelf.cancelled) || (has(self.cancelled) && (!oldSelf.cancelled
+                || self.cancelled))'
           status:
             description: status defines the observed state of AgenticRun.
             minProperties: 1
