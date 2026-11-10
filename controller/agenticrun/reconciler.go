@@ -140,9 +140,13 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				return result, err
 			}
 			if result.Requeue || result.RequeueAfter > 0 {
-				released, releaseErr := r.releaseDegradedStopFinalizer(ctx, &run, stopSourceToHandle)
-				if releaseErr != nil {
-					return ctrl.Result{}, releaseErr
+				released := !controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer)
+				if !released {
+					var releaseErr error
+					released, releaseErr = r.releaseDegradedStopFinalizer(ctx, &run, stopSourceToHandle)
+					if releaseErr != nil {
+						return ctrl.Result{}, releaseErr
+					}
 				}
 				if !released {
 					return result, nil
@@ -265,12 +269,13 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	switch phase {
 	case agenticv1alpha1.AgenticRunPhaseCompleted:
 		revisable := isNoActionRequired(&run) || run.Spec.Execution.IsZero()
-		if !(revisable && needsRevision(&run) && !terminalCancellationRequest) {
-			if skipTerminalCleanup {
-				return ctrl.Result{}, nil
-			}
-			return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
+		if revisable && needsRevision(&run) && !terminalCancellationRequest {
+			break
 		}
+		if skipTerminalCleanup {
+			return ctrl.Result{}, nil
+		}
+		return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 
 	case agenticv1alpha1.AgenticRunPhaseDenied,
 		agenticv1alpha1.AgenticRunPhaseEscalated,
@@ -281,15 +286,16 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 
 	case agenticv1alpha1.AgenticRunPhaseFailed:
-		if !(run.Spec.Execution.IsZero() && needsRevision(&run) && !terminalCancellationRequest) {
-			if skipTerminalCleanup {
-				return ctrl.Result{}, nil
-			}
-			if result, err := r.handleFailed(ctx, &run); err != nil {
-				return result, err
-			}
-			return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
+		if run.Spec.Execution.IsZero() && needsRevision(&run) && !terminalCancellationRequest {
+			break
 		}
+		if skipTerminalCleanup {
+			return ctrl.Result{}, nil
+		}
+		if result, err := r.handleFailed(ctx, &run); err != nil {
+			return result, err
+		}
+		return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 	}
 
 	// --- Ensure AgenticRunApproval exists ---
