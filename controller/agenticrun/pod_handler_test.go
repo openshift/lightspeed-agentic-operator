@@ -118,6 +118,45 @@ func TestLateResultPreservesAcceptedSuspension(t *testing.T) {
 	}
 }
 
+func TestLateResultPreservesCancellationRequest(t *testing.T) {
+	ctx := context.Background()
+	r, stale := newVerifyingReconciler(t)
+	current := stale.DeepCopy()
+	cancelled := true
+	current.Spec.Cancelled = &cancelled
+	if err := r.Patch(ctx, current, client.MergeFrom(stale.DeepCopy())); err != nil {
+		t.Fatalf("persist cancellation request: %v", err)
+	}
+
+	late := &agenticv1alpha1.VerificationResult{
+		ObjectMeta: metav1.ObjectMeta{Name: "late-cancellation-verification", Namespace: "default"},
+	}
+	if err := r.patchStepResult(ctx, stale, "verification",
+		agenticv1alpha1.AgenticRunConditionVerified, late.Name, late,
+		metav1.ConditionTrue, "Passed", "late result"); !errors.Is(err, errStopAccepted) {
+		t.Fatalf("late result error = %v, want %v", err, errStopAccepted)
+	}
+	if err := r.patchStepCondition(ctx, stale, agenticv1alpha1.AgenticRunConditionVerified,
+		metav1.ConditionFalse, ReasonSandboxTimeout, "late timeout"); !errors.Is(err, errStopAccepted) {
+		t.Fatalf("late timeout condition error = %v, want %v", err, errStopAccepted)
+	}
+	if err := r.completeStep(ctx, stale, &corev1.Pod{}, "verification",
+		agenticv1alpha1.AgenticRunConditionVerified, "late timeout", ReasonSandboxTimeout); !errors.Is(err, errStopAccepted) {
+		t.Fatalf("timeout completion error = %v, want %v", err, errStopAccepted)
+	}
+	got, err := getAgenticRun(r, stale.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionVerified)
+	if verified == nil || verified.Status != metav1.ConditionUnknown {
+		t.Fatalf("late result changed workflow condition before stop acceptance: %+v", got.Status.Conditions)
+	}
+	if len(got.Status.Steps.Verification.Results) != 0 {
+		t.Fatalf("late result was linked after cancellation request: %+v", got.Status.Steps.Verification.Results)
+	}
+}
+
 func TestStoppedPodEventResolvesByUIDWithoutOwnerChain(t *testing.T) {
 	ctx := context.Background()
 	run := testAgenticRun()

@@ -365,15 +365,15 @@ func (r *AgenticRunReconciler) handleRunStop(
 	source stopSource,
 	start metav1.Time,
 ) (ctrl.Result, error) {
-	if source != stopSourceSuspension {
+	if source != stopSourceSuspension && source != stopSourceCancellation {
 		return ctrl.Result{}, fmt.Errorf("unsupported run stop source %q", source)
 	}
 	log := logf.FromContext(ctx)
 	if r.APIReader == nil {
-		return ctrl.Result{}, fmt.Errorf("uncached API reader is required for suspension cleanup")
+		return ctrl.Result{}, fmt.Errorf("uncached API reader is required for run-stop cleanup")
 	}
 	if r.Sandbox == nil {
-		return ctrl.Result{}, fmt.Errorf("sandbox manager is required for suspension cleanup")
+		return ctrl.Result{}, fmt.Errorf("sandbox manager is required for run-stop cleanup")
 	}
 
 	key := client.ObjectKeyFromObject(run)
@@ -385,28 +385,49 @@ func (r *AgenticRunReconciler) handleRunStop(
 		return ctrl.Result{}, nil
 	}
 	if current.UID == "" {
-		return ctrl.Result{}, fmt.Errorf("run UID is required for suspension cleanup")
+		return ctrl.Result{}, fmt.Errorf("run UID is required for run-stop cleanup")
 	}
 	*run = *current
 
 	phase := agenticv1alpha1.DerivePhase(current.Status.Conditions)
 	historicalTerminal := isTerminal(phase) && !HasAcceptedStop(current)
-	stopStart := start
-	stopping := meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
-	if stopping != nil && stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended &&
-		!stopping.LastTransitionTime.IsZero() {
-		stopStart = stopping.LastTransitionTime
+	acceptedSource, acceptedAt, hasAccepted := acceptedStopSource(current)
+	takingOverCancellation := source == stopSourceSuspension &&
+		hasAccepted && acceptedSource == stopSourceCancellation && !HasFinalStopOutcome(current)
+	if hasAccepted && !takingOverCancellation {
+		source = acceptedSource
+		if !acceptedAt.IsZero() {
+			start = acceptedAt
+		}
 	}
 
+	stopStart := start
+	if source == stopSourceCancellation {
+		if hasAccepted && acceptedSource == stopSourceCancellation && !acceptedAt.IsZero() {
+			stopStart = acceptedAt
+		} else if !hasAccepted && !historicalTerminal {
+			stopStart = metav1.NewTime(r.now().UTC().Truncate(time.Second))
+		}
+	}
 	remaining := time.Duration(0)
 	if !stopStart.IsZero() {
 		remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
 	}
-	if !historicalTerminal && !HasAcceptedStop(current) {
-		if stopStart.IsZero() || remaining <= 0 {
+	needsAcceptance := !historicalTerminal && (!HasAcceptedStop(current) || takingOverCancellation)
+	if needsAcceptance {
+		if source == stopSourceSuspension &&
+			(stopStart.IsZero() || (!takingOverCancellation && remaining <= 0)) {
 			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 		}
-		acceptanceCtx, cancelAcceptance := context.WithTimeout(ctx, remaining)
+		if stopStart.IsZero() && source == stopSourceCancellation {
+			stopStart = metav1.NewTime(r.now().UTC().Truncate(time.Second))
+			remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
+		}
+		acceptanceCtx := ctx
+		cancelAcceptance := func() {}
+		if source == stopSourceSuspension && remaining > 0 && !takingOverCancellation {
+			acceptanceCtx, cancelAcceptance = context.WithTimeout(ctx, remaining)
+		}
 		updated, err := r.persistStopAcceptance(acceptanceCtx, key, run.UID, source, stopStart)
 		cancelAcceptance()
 		if err != nil {
@@ -416,9 +437,20 @@ func (r *AgenticRunReconciler) handleRunStop(
 			return ctrl.Result{}, nil
 		}
 		current = updated
+		acceptedSource, acceptedAt, hasAccepted = acceptedStopSource(current)
+		if hasAccepted {
+			source = acceptedSource
+			if !acceptedAt.IsZero() {
+				stopStart = acceptedAt
+			}
+		}
 		*run = *current
 		phase = agenticv1alpha1.DerivePhase(current.Status.Conditions)
 		historicalTerminal = isTerminal(phase) && !HasAcceptedStop(current)
+		remaining = time.Duration(0)
+		if !stopStart.IsZero() {
+			remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
+		}
 	}
 
 	finalOutcome := HasFinalStopOutcome(current)
@@ -426,6 +458,30 @@ func (r *AgenticRunReconciler) handleRunStop(
 		remaining = stopStart.Add(SuspensionStopWindow).Sub(r.now())
 	}
 	if !historicalTerminal && !finalOutcome && !stopStart.IsZero() && remaining <= 0 {
+		if source == stopSourceCancellation {
+			report, cleanupErr := r.runStopCleanupPass(ctx, current, time.Nanosecond)
+			if cleanupErr != nil {
+				log.Error(cleanupErr, "cleanup pass failed after run-stop deadline", "source", source, LogKeyName, current.Name)
+				if report.Confirmed() {
+					report.Unverified = append(report.Unverified, "cleanup pass: "+cleanupErr.Error())
+				}
+			}
+			appendRunSandboxDiagnostics(&report, current)
+			confirmed := cleanupErr == nil && report.Confirmed()
+			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, confirmed, report)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if updated == nil {
+				return ctrl.Result{}, nil
+			}
+			*run = *updated
+			if confirmed {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+		}
+
 		updated, err := r.writeStopOutcome(ctx, key, run.UID, source, false, SuspensionCleanup{})
 		if err != nil {
 			return ctrl.Result{}, err
@@ -438,7 +494,7 @@ func (r *AgenticRunReconciler) handleRunStop(
 
 		report, cleanupErr := r.runStopCleanupPass(ctx, current, cleanupTimeout)
 		if cleanupErr != nil {
-			log.Error(cleanupErr, "background cleanup after suspension deadline failed", LogKeyName, current.Name)
+			log.Error(cleanupErr, "background cleanup after run-stop deadline failed", "source", source, LogKeyName, current.Name)
 		}
 		if cleanupErr == nil && report.Confirmed() {
 			cleaned, err := r.clearRunSandboxInfo(ctx, key, run.UID)
@@ -458,7 +514,13 @@ func (r *AgenticRunReconciler) handleRunStop(
 	}
 	report, cleanupErr := r.runStopCleanupPass(ctx, current, passTimeout)
 	if cleanupErr != nil {
-		log.Error(cleanupErr, "suspension cleanup pass failed", LogKeyName, current.Name)
+		log.Error(cleanupErr, "run-stop cleanup pass failed", "source", source, LogKeyName, current.Name)
+	}
+	if source == stopSourceCancellation {
+		if cleanupErr != nil && report.Confirmed() {
+			report.Unverified = append(report.Unverified, "cleanup pass: "+cleanupErr.Error())
+		}
+		appendRunSandboxDiagnostics(&report, current)
 	}
 	confirmed := cleanupErr == nil && report.Confirmed()
 	current = &agenticv1alpha1.AgenticRun{}
@@ -468,6 +530,13 @@ func (r *AgenticRunReconciler) handleRunStop(
 	if current.UID != run.UID {
 		return ctrl.Result{}, nil
 	}
+	acceptedSource, acceptedAt, hasAccepted = acceptedStopSource(current)
+	if hasAccepted && acceptedSource != source {
+		source = acceptedSource
+		if !acceptedAt.IsZero() {
+			stopStart = acceptedAt
+		}
+	}
 	*run = *current
 	phase = agenticv1alpha1.DerivePhase(current.Status.Conditions)
 	historicalTerminal = isTerminal(phase) && !HasAcceptedStop(current)
@@ -475,6 +544,14 @@ func (r *AgenticRunReconciler) handleRunStop(
 
 	if confirmed {
 		if !historicalTerminal && !finalOutcome {
+			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, true, report)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if updated != nil {
+				*run = *updated
+			}
+		} else if source == stopSourceCancellation && hasCancellationFailure(current) {
 			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, true, report)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -540,6 +617,34 @@ func (r *AgenticRunReconciler) runStopCleanupPass(
 	return report, cleanupErr
 }
 
+func appendRunSandboxDiagnostics(report *SuspensionCleanup, run *agenticv1alpha1.AgenticRun) {
+	if report == nil || report.Confirmed() || run == nil {
+		return
+	}
+	for _, step := range []struct {
+		name string
+		info agenticv1alpha1.SandboxInfo
+	}{
+		{name: "analysis", info: run.Status.Steps.Analysis.Sandbox},
+		{name: "execution", info: run.Status.Steps.Execution.Sandbox},
+		{name: "verification", info: run.Status.Steps.Verification.Sandbox},
+		{name: "escalation", info: run.Status.Steps.Escalation.Sandbox},
+	} {
+		if step.info.ClaimName == "" && step.info.Namespace == "" {
+			continue
+		}
+		resourceName := step.info.ClaimName
+		if step.info.Namespace != "" {
+			if resourceName != "" {
+				resourceName = step.info.Namespace + "/" + resourceName
+			} else {
+				resourceName = step.info.Namespace
+			}
+		}
+		appendSuspensionMessage(&report.Pending, fmt.Sprintf("%s sandbox %s", step.name, resourceName))
+	}
+}
+
 func (r *AgenticRunReconciler) persistStopAcceptance(
 	ctx context.Context,
 	key types.NamespacedName,
@@ -547,9 +652,6 @@ func (r *AgenticRunReconciler) persistStopAcceptance(
 	source stopSource,
 	start metav1.Time,
 ) (*agenticv1alpha1.AgenticRun, error) {
-	if source != stopSourceSuspension {
-		return nil, fmt.Errorf("unsupported run stop source %q", source)
-	}
 	for range 5 {
 		current := &agenticv1alpha1.AgenticRun{}
 		if err := r.APIReader.Get(ctx, key, current); err != nil {
@@ -558,19 +660,43 @@ func (r *AgenticRunReconciler) persistStopAcceptance(
 		if current.UID != uid {
 			return nil, nil
 		}
-		if isTerminal(agenticv1alpha1.DerivePhase(current.Status.Conditions)) || HasAcceptedStop(current) {
+		phase := agenticv1alpha1.DerivePhase(current.Status.Conditions)
+		currentSource, _, hasAccepted := acceptedStopSource(current)
+		if HasFinalStopOutcome(current) {
+			return current, nil
+		}
+		takingOverCancellation := source == stopSourceSuspension &&
+			hasAccepted && currentSource == stopSourceCancellation
+		if hasAccepted && !takingOverCancellation {
+			return current, nil
+		}
+		if isTerminal(phase) {
 			return current, nil
 		}
 
+		acceptedAt := start
+		if acceptedAt.IsZero() && source == stopSourceCancellation {
+			acceptedAt = metav1.NewTime(r.now().UTC().Truncate(time.Second))
+		}
+		if acceptedAt.IsZero() {
+			return current, nil
+		}
+
+		reason := reasonSystemSuspended
+		message := "Stop accepted by global system suspension"
+		if source == stopSourceCancellation {
+			reason = reasonCancelledByUser
+			message = "Stop accepted by user cancellation"
+		}
 		base := current.DeepCopy()
 		meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
 			Type:               agenticv1alpha1.AgenticRunConditionStopping,
 			Status:             metav1.ConditionTrue,
-			Reason:             reasonSystemSuspended,
-			Message:            "Stop accepted by global system suspension",
+			Reason:             reason,
+			Message:            message,
 			ObservedGeneration: current.Generation,
 		})
-		meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping).LastTransitionTime = start
+		meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping).LastTransitionTime = acceptedAt
 		err := r.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
 		if apierrors.IsConflict(err) {
 			continue
@@ -591,9 +717,6 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 	confirmed bool,
 	report SuspensionCleanup,
 ) (*agenticv1alpha1.AgenticRun, error) {
-	if source != stopSourceSuspension {
-		return nil, fmt.Errorf("unsupported run stop source %q", source)
-	}
 	for range 5 {
 		current := &agenticv1alpha1.AgenticRun{}
 		if err := r.APIReader.Get(ctx, key, current); err != nil {
@@ -602,17 +725,45 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 		if current.UID != uid {
 			return nil, nil
 		}
-		if HasFinalStopOutcome(current) {
-			return current, nil
-		}
 		phase := agenticv1alpha1.DerivePhase(current.Status.Conditions)
 		stopping := meta.FindStatusCondition(current.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
-		terminalStopIntent := isTerminal(phase) && stopping != nil &&
-			stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended
+		currentSource, _, hasAccepted := acceptedStopSource(current)
+		finalOutcome := HasFinalStopOutcome(current)
+		if finalOutcome {
+			if !confirmed || source != stopSourceCancellation ||
+				currentSource != stopSourceCancellation || !hasCancellationFailure(current) {
+				return current, nil
+			}
+			if stopping != nil && stopping.Status == metav1.ConditionFalse &&
+				stopping.Reason == reasonTeardownComplete && !hasRunSandboxInfo(current) {
+				return current, nil
+			}
+
+			base := current.DeepCopy()
+			meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+				Type:               agenticv1alpha1.AgenticRunConditionStopping,
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonTeardownComplete,
+				Message:            "Sandbox workload and access cleanup confirmed",
+				ObservedGeneration: current.Generation,
+			})
+			clearRunSandboxInfo(&current.Status)
+			err := r.Status().Patch(ctx, current, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+			if apierrors.IsConflict(err) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("persist run stop outcome: %w", err)
+			}
+			return current, nil
+		}
+
+		terminalStopIntent := source == stopSourceSuspension && isTerminal(phase) &&
+			stopping != nil && stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended
 		if isTerminal(phase) && !terminalStopIntent {
 			return current, nil
 		}
-		if !HasAcceptedStop(current) {
+		if !hasAccepted || currentSource != source {
 			return current, nil
 		}
 
@@ -625,7 +776,7 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 				Message:            "Sandbox workload and access cleanup confirmed",
 				ObservedGeneration: current.Generation,
 			})
-			if !terminalStopIntent {
+			if source == stopSourceSuspension && !terminalStopIntent {
 				meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
 					Type:               agenticv1alpha1.AgenticRunConditionEmergencyStopped,
 					Status:             metav1.ConditionTrue,
@@ -634,22 +785,43 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 					ObservedGeneration: current.Generation,
 				})
 			}
-			clearRunSandboxInfo(&current.Status)
-		} else {
-			meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
-				Type:               agenticv1alpha1.AgenticRunConditionStopping,
-				Status:             metav1.ConditionFalse,
-				Reason:             reasonTeardownFailed,
-				Message:            "Sandbox cleanup remains unconfirmed after the suspension window",
-				ObservedGeneration: current.Generation,
-			})
-			if !terminalStopIntent {
+			if source == stopSourceCancellation && !terminalStopIntent {
 				if condType := suspensionFailureCondition(phase); condType != "" {
 					meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
 						Type:               condType,
 						Status:             metav1.ConditionFalse,
-						Reason:             reasonEmergencyStopFailed,
-						Message:            "Sandbox cleanup could not be confirmed; see suspension diagnostics",
+						Reason:             reasonCancelledByUser,
+						Message:            "Run stopped by user",
+						ObservedGeneration: current.Generation,
+					})
+				}
+			}
+			clearRunSandboxInfo(&current.Status)
+		} else {
+			message := "Sandbox cleanup remains unconfirmed after the suspension window"
+			if source == stopSourceCancellation {
+				message = stopCleanupMessage(report)
+			}
+			meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+				Type:               agenticv1alpha1.AgenticRunConditionStopping,
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonTeardownFailed,
+				Message:            message,
+				ObservedGeneration: current.Generation,
+			})
+			if !terminalStopIntent {
+				if condType := suspensionFailureCondition(phase); condType != "" {
+					reason := reasonEmergencyStopFailed
+					conditionMessage := "Sandbox cleanup could not be confirmed; see suspension diagnostics"
+					if source == stopSourceCancellation {
+						reason = reasonCancellationFailed
+						conditionMessage = stopCleanupMessage(report)
+					}
+					meta.SetStatusCondition(&current.Status.Conditions, metav1.Condition{
+						Type:               condType,
+						Status:             metav1.ConditionFalse,
+						Reason:             reason,
+						Message:            conditionMessage,
 						ObservedGeneration: current.Generation,
 					})
 				}
@@ -661,11 +833,24 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("persist run suspension outcome: %w", err)
+			return nil, fmt.Errorf("persist run stop outcome: %w", err)
 		}
 		return current, nil
 	}
-	return nil, fmt.Errorf("persist run suspension outcome: status conflict retry limit reached")
+	return nil, fmt.Errorf("persist run stop outcome: status conflict retry limit reached")
+}
+
+func hasCancellationFailure(run *agenticv1alpha1.AgenticRun) bool {
+	if run == nil {
+		return false
+	}
+	for i := range run.Status.Conditions {
+		condition := &run.Status.Conditions[i]
+		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonCancellationFailed {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *AgenticRunReconciler) clearRunSandboxInfo(
@@ -726,7 +911,10 @@ func HasFinalStopOutcome(run *agenticv1alpha1.AgenticRun) bool {
 	}
 	for i := range run.Status.Conditions {
 		condition := &run.Status.Conditions[i]
-		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonEmergencyStopFailed {
+		if condition.Status == metav1.ConditionFalse &&
+			(condition.Reason == reasonEmergencyStopFailed ||
+				condition.Reason == reasonCancelledByUser ||
+				condition.Reason == reasonCancellationFailed) {
 			return true
 		}
 	}
