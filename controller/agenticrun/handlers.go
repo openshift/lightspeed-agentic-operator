@@ -921,37 +921,6 @@ func HasFinalStopOutcome(run *agenticv1alpha1.AgenticRun) bool {
 	return false
 }
 
-// RemoteExecutionEvidence returns recorded remote execution/access evidence for
-// a targeted run, in workflow order. Local, nil, or target-only runs return nil.
-func RemoteExecutionEvidence(run *agenticv1alpha1.AgenticRun) []string {
-	if run == nil || run.Spec.TargetCluster == "" {
-		return nil
-	}
-	var evidence []string
-	for _, step := range []struct {
-		name string
-		info agenticv1alpha1.SandboxInfo
-	}{
-		{name: "analysis", info: run.Status.Steps.Analysis.Sandbox},
-		{name: "execution", info: run.Status.Steps.Execution.Sandbox},
-		{name: "verification", info: run.Status.Steps.Verification.Sandbox},
-		{name: "escalation", info: run.Status.Steps.Escalation.Sandbox},
-	} {
-		if step.info.ClaimName != "" {
-			evidence = append(evidence, step.name+" sandbox "+step.info.Namespace+"/"+step.info.ClaimName)
-		}
-	}
-	if run.Annotations[rbacNamespacesAnnotation] != "" {
-		evidence = append(evidence, "remote execution RBAC annotation")
-	}
-	for _, condition := range run.Status.Conditions {
-		if condition.Status == metav1.ConditionUnknown && condition.Type != agenticv1alpha1.AgenticRunConditionStopping {
-			evidence = append(evidence, "active workflow condition "+condition.Type)
-			break
-		}
-	}
-	return evidence
-}
 
 func suspensionFailureCondition(phase agenticv1alpha1.AgenticRunPhase) string {
 	switch phase {
