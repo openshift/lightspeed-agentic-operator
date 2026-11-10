@@ -118,7 +118,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if suspended && !currentActivation && !accepted {
 				return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 			}
-			result, err := r.handleSuspensionAt(ctx, &run, start)
+			result, err := r.handleRunStop(ctx, &run, stopSourceSuspension, start)
 			if err != nil {
 				return result, err
 			}
@@ -182,7 +182,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if suspended && !currentActivation && !accepted {
 			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 		}
-		result, err := r.handleSuspensionAt(ctx, &run, start)
+		result, err := r.handleRunStop(ctx, &run, stopSourceSuspension, start)
 		if err != nil {
 			return result, err
 		}

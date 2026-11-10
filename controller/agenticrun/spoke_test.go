@@ -2,8 +2,11 @@ package agenticrun
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -923,4 +927,201 @@ func searchString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+type listCountingClient struct {
+	client.Client
+	listCalls int
+}
+
+func (c *listCountingClient) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	c.listCalls++
+	return c.Client.List(ctx, list, opts...)
+}
+
+func TestCleanupSpokeRunAccessNeverLists(t *testing.T) {
+	ctx := context.Background()
+	run := testAgenticRun()
+	run.UID = types.UID("uid-name-cleanup")
+	run.Spec.TargetCluster = "smoke-spoke"
+	run.Annotations = map[string]string{rbacNamespacesAnnotation: "ns-a,ns-b"}
+
+	var objects []client.Object
+	for _, step := range []string{"analysis", "execution", "verification", "escalation"} {
+		objects = append(objects, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{
+			Name:      sandboxSAName(run, step),
+			Namespace: spokeManagedNamespace,
+			UID:       types.UID(fmt.Sprintf("sa-uid-%s", step)),
+			Labels:    spokeLabels(string(run.UID), run.Name, run.Spec.TargetCluster, "sandbox-sa"),
+		}})
+		for index := range spokeReaderBindingNames {
+			objects = append(objects, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+				Name:   perRunCRBName(string(run.UID), step, index),
+				UID:    types.UID(fmt.Sprintf("reader-uid-%s-%d", step, index)),
+				Labels: rbacLabels(string(run.UID), "reader-rbac"),
+			}})
+		}
+	}
+	roleName := executionRoleName(string(run.UID))
+	for _, namespace := range []string{"ns-a", "ns-b"} {
+		objects = append(objects,
+			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
+				Name: roleName, Namespace: namespace, UID: types.UID("role-uid-" + namespace),
+				Labels: rbacLabels(string(run.UID), "execution-rbac"),
+			}},
+			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+				Name: roleName, Namespace: namespace, UID: types.UID("rolebinding-uid-" + namespace),
+				Labels: rbacLabels(string(run.UID), "execution-rbac"),
+			}},
+		)
+	}
+	clusterRoleName := clusterRoleName(string(run.UID))
+	objects = append(objects,
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{
+			Name: clusterRoleName, UID: types.UID("clusterrole-uid"),
+			Labels: rbacLabels(string(run.UID), "execution-rbac"),
+		}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+			Name: clusterRoleName, UID: types.UID("clusterrolebinding-uid"),
+			Labels: rbacLabels(string(run.UID), "execution-rbac"),
+		}},
+	)
+
+	spokeClient := &listCountingClient{
+		Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(objects...).Build(),
+	}
+	report, err := cleanupSpokeRunAccess(ctx, run, &SpokeAccess{
+		Client: spokeClient, Namespace: spokeManagedNamespace,
+	})
+	if err != nil || !report.Confirmed() {
+		t.Fatalf("cleanup report = %+v, err = %v", report, err)
+	}
+	if spokeClient.listCalls != 0 {
+		t.Fatalf("spoke List calls = %d, want 0", spokeClient.listCalls)
+	}
+	for _, object := range objects {
+		got := object.DeepCopyObject().(client.Object)
+		if err := spokeClient.Get(ctx, client.ObjectKeyFromObject(object), got); !apierrors.IsNotFound(err) {
+			t.Fatalf("%T %s/%s remains after cleanup: %v", object, object.GetNamespace(), object.GetName(), err)
+		}
+	}
+}
+
+type spokeCleanupFaultClient struct {
+	client.Client
+	getErr    error
+	deleteErr error
+}
+
+func (c *spokeCleanupFaultClient) Get(
+	ctx context.Context,
+	key client.ObjectKey,
+	obj client.Object,
+	opts ...client.GetOption,
+) error {
+	if c.getErr != nil {
+		return c.getErr
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func (c *spokeCleanupFaultClient) Delete(
+	ctx context.Context,
+	obj client.Object,
+	opts ...client.DeleteOption,
+) error {
+	if c.deleteErr != nil {
+		return c.deleteErr
+	}
+	return c.Client.Delete(ctx, obj, opts...)
+}
+
+func TestCleanupSpokeRunAccessForbiddenIsUnconfirmed(t *testing.T) {
+	ctx := context.Background()
+	run := testAgenticRun()
+	run.UID = types.UID("uid-forbidden")
+	run.Spec.TargetCluster = "smoke-spoke"
+	reader := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name:   perRunCRBName(string(run.UID), "analysis", 0),
+		UID:    types.UID("reader-uid"),
+		Labels: rbacLabels(string(run.UID), "reader-rbac"),
+	}}
+	forbidden := apierrors.NewForbidden(
+		schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterrolebindings"},
+		reader.Name,
+		errors.New("forbidden"),
+	)
+	for _, tc := range []struct {
+		name              string
+		getErr, deleteErr error
+	}{
+		{name: "GET", getErr: forbidden},
+		{name: "DELETE", deleteErr: forbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spokeClient := &spokeCleanupFaultClient{
+				Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(reader.DeepCopy()).Build(),
+				getErr: tc.getErr, deleteErr: tc.deleteErr,
+			}
+			report, err := cleanupSpokeRunAccess(ctx, run, &SpokeAccess{
+				Client: spokeClient, Namespace: spokeManagedNamespace,
+			})
+			if err != nil || report.Confirmed() || len(report.Unverified) == 0 {
+				t.Fatalf("forbidden %s cleanup report = %+v, err = %v; want unconfirmed diagnostics", tc.name, report, err)
+			}
+		})
+	}
+}
+
+func TestCleanupSpokeRunAccessRejectsMismatchedOwnership(t *testing.T) {
+	ctx := context.Background()
+	run := testAgenticRun()
+	run.UID = types.UID("uid-owner-check")
+	run.Spec.TargetCluster = "smoke-spoke"
+	reader := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name:   perRunCRBName(string(run.UID), "analysis", 0),
+		UID:    types.UID("reader-uid"),
+		Labels: rbacLabels("another-run", "reader-rbac"),
+	}}
+	spokeClient := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(reader).Build()
+	report, err := cleanupSpokeRunAccess(ctx, run, &SpokeAccess{
+		Client: spokeClient, Namespace: spokeManagedNamespace,
+	})
+	if err != nil || report.Confirmed() || len(report.Unverified) == 0 {
+		t.Fatalf("mismatched owner cleanup report = %+v, err = %v; want unconfirmed diagnostics", report, err)
+	}
+	var remaining rbacv1.ClusterRoleBinding
+	if err := spokeClient.Get(ctx, client.ObjectKeyFromObject(reader), &remaining); err != nil {
+		t.Fatalf("mismatched object was deleted: %v", err)
+	}
+}
+
+func TestCleanupSpokeRunAccessUnavailableSpokeIsUnconfirmed(t *testing.T) {
+	closedPortClient, err := client.New(&rest.Config{
+		Host: "https://127.0.0.1:1", Timeout: time.Second,
+	}, client.Options{Scheme: testScheme()})
+	if err != nil {
+		t.Fatalf("create closed-port direct client: %v", err)
+	}
+	run := testAgenticRun()
+	run.UID = types.UID("uid-unavailable-spoke")
+	run.Spec.TargetCluster = "smoke-spoke"
+	for _, tc := range []struct {
+		name  string
+		spoke *SpokeAccess
+	}{
+		{name: "missing kubeconfig"},
+		{name: "closed-port direct client", spoke: &SpokeAccess{
+			Client: closedPortClient, Namespace: spokeManagedNamespace,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			report, err := cleanupSpokeRunAccess(ctx, run, tc.spoke)
+			if err != nil || report.Confirmed() || len(report.Unverified) == 0 {
+				t.Fatalf("unavailable spoke cleanup report = %+v, err = %v; want unconfirmed diagnostics", report, err)
+			}
+		})
+	}
 }

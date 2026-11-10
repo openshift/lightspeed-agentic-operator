@@ -1762,3 +1762,47 @@ func TestEnsureExecutionRBAC_SpokeLabels_ClusterScoped(t *testing.T) {
 		t.Errorf("CRB agentic-run label = %q, want %q", crb.Labels[LabelAgenticRun], "spoke-run-cs")
 	}
 }
+
+func TestEnsureExecutionRBACPreservesNamespaceUnion(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		target      string
+		extraLabels map[string]string
+	}{
+		{name: "hub"},
+		{name: "spoke", target: "smoke-spoke", extraLabels: spokeExtraLabels("fix-crash", "smoke-spoke")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := testAgenticRun()
+			run.UID = types.UID("uid-rbac-revisions")
+			run.Spec.TargetCluster = tc.target
+			run.Annotations = map[string]string{rbacNamespacesAnnotation: "ns-a,ns-a"}
+			c := fake.NewClientBuilder().WithScheme(testScheme()).Build()
+			for _, namespace := range []string{"ns-a", "ns-b"} {
+				result := &agenticv1alpha1.RBACResult{
+					NamespaceScoped: []agenticv1alpha1.RBACRule{{Namespace: namespace}},
+				}
+				if err := ensureExecutionRBAC(ctx, c, run, result, "openshift-lightspeed-managed", tc.extraLabels); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got := annotatedRBACNamespaces(run)
+			if len(got) != 2 || got[0] != "ns-a" || got[1] != "ns-b" {
+				t.Fatalf("rbac-namespaces = %v, want [ns-a ns-b]", got)
+			}
+			if err := cleanupExecutionRBAC(ctx, c, run); err != nil {
+				t.Fatal(err)
+			}
+			for _, namespace := range []string{"ns-a", "ns-b"} {
+				key := types.NamespacedName{Name: executionRoleName(string(run.UID)), Namespace: namespace}
+				if err := c.Get(ctx, key, &rbacv1.Role{}); !apierrors.IsNotFound(err) {
+					t.Fatalf("Role remains in %s: %v", namespace, err)
+				}
+				if err := c.Get(ctx, key, &rbacv1.RoleBinding{}); !apierrors.IsNotFound(err) {
+					t.Fatalf("RoleBinding remains in %s: %v", namespace, err)
+				}
+			}
+		})
+	}
+}

@@ -871,6 +871,44 @@ func TestFailStepDoesNotCreateResultForAcceptedStop(t *testing.T) {
 	}
 }
 
+func TestSuspensionStopDispatchPreservesOutcome(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_000_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("suspension-stop-dispatch")
+	config := suspendedConfigAt(start, 4)
+	objects := append(defaultObjects(), run, config)
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(objects...).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Agent:     newTestAgentCaller().withClient(t, fc, "default"),
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+		Now:       func() time.Time { return start.Add(time.Second) },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatal(err)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	emergency := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		emergency == nil || emergency.Status != metav1.ConditionTrue || emergency.Reason != reasonSystemSuspended {
+		t.Fatalf("suspension outcome changed during stop-path extraction: %+v", got.Status.Conditions)
+	}
+}
+
 func TestReconcileSuspension(t *testing.T) {
 	start := time.Unix(1_000_000, 0).UTC()
 	for _, tt := range []struct {
@@ -1273,7 +1311,7 @@ func (r *deadlineAdvancingReader) List(ctx context.Context, _ client.ObjectList,
 	return ctx.Err()
 }
 
-func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
+func TestRemoteStopRequiresSpokeAccess(t *testing.T) {
 	start := time.Unix(3_500_000, 0).UTC()
 	now := start.Add(time.Second)
 	run := testAgenticRun()
@@ -1311,8 +1349,8 @@ func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first remote cleanup request: %v", err)
 	}
-	if first.RequeueAfter == 0 || agent.releaseAllCount != 1 {
-		t.Fatalf("remote cleanup was not requested/requeued: result=%+v releases=%d", first, agent.releaseAllCount)
+	if first.RequeueAfter == 0 || agent.releaseAllCount != 0 {
+		t.Fatalf("remote stop did not remain pending without spoke access: result=%+v releases=%d", first, agent.releaseAllCount)
 	}
 	got, err := getAgenticRun(r, run.Name)
 	if err != nil {
@@ -1329,8 +1367,8 @@ func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
 	if _, err := reconcileOnce(r, run.Name); err != nil {
 		t.Fatalf("deadline remote outcome: %v", err)
 	}
-	if agent.releaseAllCount != 2 {
-		t.Fatalf("deadline background remote release calls = %d, want 2", agent.releaseAllCount)
+	if agent.releaseAllCount != 0 {
+		t.Fatalf("deadline cleanup invoked best-effort sandbox release without spoke access: %d calls", agent.releaseAllCount)
 	}
 	got, err = getAgenticRun(r, run.Name)
 	if err != nil {
@@ -1350,8 +1388,8 @@ func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
 	if _, err := reconcileOnce(r, run.Name); err != nil {
 		t.Fatalf("background remote cleanup request: %v", err)
 	}
-	if agent.releaseAllCount != 3 {
-		t.Fatalf("background remote release calls = %d, want 3", agent.releaseAllCount)
+	if agent.releaseAllCount != 0 {
+		t.Fatalf("background cleanup invoked best-effort sandbox release without spoke access: %d calls", agent.releaseAllCount)
 	}
 }
 
