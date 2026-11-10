@@ -551,7 +551,7 @@ func (r *AgenticRunReconciler) handleRunStop(
 			if updated != nil {
 				*run = *updated
 			}
-		} else if source == stopSourceCancellation && hasCancellationFailure(current) {
+		} else if hasStopTeardownFailure(current) {
 			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, true, report)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -730,8 +730,7 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 		currentSource, _, hasAccepted := acceptedStopSource(current)
 		finalOutcome := HasFinalStopOutcome(current)
 		if finalOutcome {
-			if !confirmed || source != stopSourceCancellation ||
-				currentSource != stopSourceCancellation || !hasCancellationFailure(current) {
+			if !confirmed || !hasStopTeardownFailure(current) {
 				return current, nil
 			}
 			if stopping != nil && stopping.Status == metav1.ConditionFalse &&
@@ -851,6 +850,13 @@ func hasCancellationFailure(run *agenticv1alpha1.AgenticRun) bool {
 		}
 	}
 	return false
+}
+
+// hasStopTeardownFailure reports whether a recorded stop outcome ended with
+// unconfirmed cleanup for either stop source.
+func hasStopTeardownFailure(run *agenticv1alpha1.AgenticRun) bool {
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	return stopping != nil && stopping.Status == metav1.ConditionFalse && stopping.Reason == reasonTeardownFailed
 }
 
 func (r *AgenticRunReconciler) clearRunSandboxInfo(

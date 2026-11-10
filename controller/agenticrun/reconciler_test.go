@@ -1472,8 +1472,8 @@ func TestAcceptedStopBlocksRevisionAfterConfigDeletion(t *testing.T) {
 	}
 	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
-	if stopping == nil || stopping.Reason != reasonTeardownFailed || analyzed == nil ||
-		analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonEmergencyStopFailed {
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		analyzed == nil || analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonEmergencyStopFailed {
 		t.Fatalf("revision changed accepted stop outcome: %+v", got.Status.Conditions)
 	}
 	if meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed).Status == metav1.ConditionUnknown {
@@ -1607,8 +1607,12 @@ func TestSuspensionDeadlineSurvivesRestartAndFailureStaysFinal(t *testing.T) {
 	}
 	stopping = meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	analyzed = meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
-	if stopping == nil || stopping.Reason != reasonTeardownFailed || analyzed == nil || analyzed.Reason != reasonEmergencyStopFailed {
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		analyzed == nil || analyzed.Reason != reasonEmergencyStopFailed {
 		t.Fatalf("recovery changed final stop failure: %+v", got.Status.Conditions)
+	}
+	if !StopCleanupConfirmed(got) {
+		t.Fatalf("confirmed recovery left cleanup unresolved: %+v", got.Status.Conditions)
 	}
 	if hasRunSandboxInfo(got) {
 		t.Fatalf("confirmed recovery retained sandbox references: %+v", got.Status.Steps)
@@ -2943,8 +2947,11 @@ func TestStoppedDeletionRetainsCleanupFinalizerUntilConfirmed(t *testing.T) {
 	if hasRunSandboxInfo(cleaned) {
 		t.Fatalf("confirmed deletion retained sandbox references: %+v", cleaned.Status.Steps)
 	}
-	if stopping := meta.FindStatusCondition(cleaned.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping); stopping == nil || stopping.Reason != reasonTeardownFailed {
-		t.Fatalf("cleanup recovery rewrote the final stop outcome: %+v", stopping)
+	if stopping := meta.FindStatusCondition(cleaned.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping); stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete {
+		t.Fatalf("cleanup recovery did not record confirmed teardown: %+v", stopping)
+	}
+	if analyzed := meta.FindStatusCondition(cleaned.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.Reason != reasonEmergencyStopFailed {
+		t.Fatalf("cleanup recovery rewrote the final stop outcome: %+v", analyzed)
 	}
 }
 
