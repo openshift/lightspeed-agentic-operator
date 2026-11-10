@@ -618,6 +618,136 @@ func TestStopCleanupConfirmed(t *testing.T) {
 	}
 }
 
+func TestPersistRunStopPrecedence(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	config := suspendedConfigAt(8, start, reasonStopping, metav1.ConditionFalse)
+	activation := agenticrun.SuspensionActivation{
+		UID: config.UID, Generation: config.Generation, Start: metav1.NewTime(start),
+	}
+	tests := []struct {
+		name        string
+		run         *agenticv1alpha1.AgenticRun
+		wantReason  string
+		wantAt      time.Time
+		unchanged   bool
+	}{
+		{
+			name: "suspension takes over pending cancellation",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("pending-cancellation-takeover")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{{
+					Type:               agenticv1alpha1.AgenticRunConditionStopping,
+					Status:             metav1.ConditionTrue,
+					Reason:             "CancelledByUser",
+					ObservedGeneration: run.Generation,
+					LastTransitionTime: metav1.NewTime(start.Add(-time.Minute)),
+				}}
+				return run
+			}(),
+			wantReason: "SystemSuspended",
+			wantAt:     start,
+		},
+		{
+			name: "final cancellation outcome is preserved",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("final-cancellation-outcome")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+						Status:             metav1.ConditionFalse,
+						Reason:             "CancelledByUser",
+						Message:            "Run stopped by user",
+						ObservedGeneration: run.Generation,
+					},
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionStopping,
+						Status:             metav1.ConditionFalse,
+						Reason:             "TeardownComplete",
+						ObservedGeneration: run.Generation,
+					},
+				}
+				return run
+			}(),
+			wantReason: "TeardownComplete",
+			unchanged:  true,
+		},
+		{
+			name: "final cancellation failure is preserved",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("final-cancellation-failure")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+						Status:             metav1.ConditionFalse,
+						Reason:             "CancellationFailed",
+						Message:            "Cancellation cleanup remained unconfirmed",
+						ObservedGeneration: run.Generation,
+					},
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionStopping,
+						Status:             metav1.ConditionFalse,
+						Reason:             "TeardownFailed",
+						Message:            "Cancellation cleanup remained unconfirmed",
+						ObservedGeneration: run.Generation,
+					},
+				}
+				return run
+			}(),
+			wantReason: "TeardownFailed",
+			unchanged:  true,
+		},
+		{
+			name: "accepted suspension remains suspension",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("accepted-suspension")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{{
+					Type:               agenticv1alpha1.AgenticRunConditionStopping,
+					Status:             metav1.ConditionTrue,
+					Reason:             "SystemSuspended",
+					ObservedGeneration: run.Generation,
+					LastTransitionTime: metav1.NewTime(start),
+				}}
+				return run
+			}(),
+			wantReason: "SystemSuspended",
+			wantAt:     start,
+			unchanged:  true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := tc.run.DeepCopy()
+			r, _, _, _, _ := newTestReconciler(t, nil, config.DeepCopy(), tc.run)
+			got, markerSaved, disappeared, err := r.persistRunStop(ctx, tc.run, activation)
+			if err != nil {
+				t.Fatalf("persistRunStop() error = %v", err)
+			}
+			if !markerSaved || disappeared || got == nil {
+				t.Fatalf("persistRunStop() = run %v, markerSaved %v, disappeared %v; want persisted/current run",
+					got != nil, markerSaved, disappeared)
+			}
+			stopping := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+			if stopping.Reason != tc.wantReason ||
+				(!tc.wantAt.IsZero() && !stopping.LastTransitionTime.Time.Equal(tc.wantAt)) {
+				t.Fatalf("Stopping = %+v, want reason %q at %v", stopping, tc.wantReason, tc.wantAt)
+			}
+			if tc.unchanged && !runStatusHistoryEqual(before.Status, got.Status) {
+				t.Fatalf("persistRunStop changed final/accepted stop history: before=%+v after=%+v",
+					before.Status, got.Status)
+			}
+		})
+	}
+}
+
 func TestReconcile_NotFound(t *testing.T) {
 	r, _, _, _, _ := newTestReconciler(t, nil)
 	_, err := reconcileOnce(r)
