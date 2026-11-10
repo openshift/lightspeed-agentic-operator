@@ -103,22 +103,34 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if r.Audit != nil {
 			r.Audit.Cleanup(&run)
 		}
-		accepted := HasAcceptedStop(&run)
+		acceptedSource, acceptedAt, hasAccepted := acceptedStopSource(&run)
 		suspended := false
 		var start metav1.Time
 		currentActivation := false
-		if !accepted {
+		if !hasAccepted || (acceptedSource == stopSourceCancellation && !HasFinalStopOutcome(&run)) {
 			var err error
 			suspended, start, currentActivation, err = r.readSuspensionActivation(ctx)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-		if accepted || suspended {
-			if suspended && !currentActivation && !accepted {
+		stopSourceToHandle := stopSource("")
+		stopStart := metav1.Time{}
+		if hasAccepted && (acceptedSource == stopSourceSuspension || HasFinalStopOutcome(&run)) {
+			stopSourceToHandle = acceptedSource
+			stopStart = acceptedAt
+		} else if suspended {
+			if !currentActivation {
 				return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 			}
-			result, err := r.handleRunStop(ctx, &run, stopSourceSuspension, start)
+			stopSourceToHandle = stopSourceSuspension
+			stopStart = start
+		} else if hasAccepted {
+			stopSourceToHandle = acceptedSource
+			stopStart = acceptedAt
+		}
+		if stopSourceToHandle != "" {
+			result, err := r.handleRunStop(ctx, &run, stopSourceToHandle, stopStart)
 			if err != nil {
 				return result, err
 			}
@@ -167,22 +179,27 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	accepted := HasAcceptedStop(&run)
-	suspended := false
-	var start metav1.Time
-	currentActivation := false
-	if !accepted {
-		var err error
-		suspended, start, currentActivation, err = r.readSuspensionActivation(ctx)
+	acceptedSource, acceptedAt, hasAccepted := acceptedStopSource(&run)
+	stopSourceToHandle := stopSource("")
+	var stopStart metav1.Time
+	if hasAccepted && (acceptedSource == stopSourceSuspension || HasFinalStopOutcome(&run)) {
+		stopSourceToHandle = acceptedSource
+		stopStart = acceptedAt
+	} else {
+		suspended, start, currentActivation, err := r.readSuspensionActivation(ctx)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-	if accepted || suspended {
-		if suspended && !currentActivation && !accepted {
-			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+		if suspended {
+			if !currentActivation {
+				return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+			}
+			stopSourceToHandle = stopSourceSuspension
+			stopStart = start
 		}
-		result, err := r.handleRunStop(ctx, &run, stopSourceSuspension, start)
+	}
+	if stopSourceToHandle != "" {
+		result, err := r.handleRunStop(ctx, &run, stopSourceToHandle, stopStart)
 		if err != nil {
 			return result, err
 		}
@@ -207,6 +224,12 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 		}
 		return result, nil
+	}
+	if hasAccepted {
+		return r.handleRunStop(ctx, &run, acceptedSource, acceptedAt)
+	}
+	if cancellationRequested(&run) && !isTerminal(agenticv1alpha1.DerivePhase(run.Status.Conditions)) {
+		return r.handleRunStop(ctx, &run, stopSourceCancellation, metav1.Time{})
 	}
 
 	// --- Configuration guard (wait for lightspeed-agentic-configuration ConfigMap) ---
