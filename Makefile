@@ -129,7 +129,7 @@ api-lint: golangci-lint ## Kube API linter on api/ (installs golangci-lint to bi
 
 .PHONY: build
 build: fmt vet ## Build manager binary to bin/manager.
-	go build -o bin/manager ./cmd
+	GOFIPS140=certified go build -o bin/manager ./cmd
 
 .PHONY: manifests
 manifests: controller-gen ## Regenerate CRD YAML and RBAC ClusterRole (do not edit role.yaml by hand).
@@ -305,7 +305,7 @@ run: install validate-agent-sandbox vet ## install + validate-agent-sandbox (no-
 			-days 365 -nodes -subj "/CN=localhost" 2>/dev/null; \
 		echo "Generated self-signed webhook certs"; \
 	fi
-	go run ./cmd \
+	GOFIPS140=certified go run ./cmd \
 		--namespace=$(OPERATOR_NAMESPACE) \
 		--metrics-bind-address=$(METRICS_BIND_ADDRESS) \
 		--health-probe-bind-address=$(HEALTH_PROBE_BIND_ADDRESS)

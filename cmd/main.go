@@ -66,6 +66,8 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 	log := ctrl.Log.WithName("setup")
 
+	checkFIPSMode(log.Info)
+
 	if namespace == "" {
 		ns := os.Getenv("POD_NAMESPACE")
 		if ns == "" {
