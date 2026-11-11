@@ -32,14 +32,14 @@ These must be created by a **platform admin** before the operator and agents can
 
 **Why:** Every sandbox step gets its own per-step ServiceAccount (`ls-{step}-{namespace}-{runUID}`). The operator discovers all `ClusterRoleBinding`s where `lightspeed-agent` is a subject, then adds each per-step SA to those bindings. The `lightspeed-agent` SA serves as the **discovery seed** for reader bindings — no sandbox pod runs as `lightspeed-agent` directly.
 
-**What:** A ServiceAccount + ClusterRole + ClusterRoleBinding granting read permissions. The `lightspeed-agent` SA must exist as the reference identity in the ClusterRoleBinding subjects.
+**What:** A ServiceAccount + ClusterRole + ClusterRoleBinding granting read permissions. The `lightspeed-agent` SA must exist in the operator namespace and be the reference identity in the ClusterRoleBinding subjects.
 
 ```yaml
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: lightspeed-agent
-  namespace: default
+  namespace: openshift-lightspeed
 automountServiceAccountToken: false
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -65,10 +65,12 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: lightspeed-agent
-  namespace: default
+  namespace: openshift-lightspeed
 ```
 
 **Note:** The `lightspeed-agent` ServiceAccount is created by the operator at startup (idempotent). It is the discovery seed — all per-step SAs are dynamically added to (and removed from) these ClusterRoleBindings by `SandboxManager.Create` and `Release`.
+
+**Note:** Replace `openshift-lightspeed` with your operator's namespace (`OPERATOR_NAMESPACE`, defaults to `openshift-lightspeed`) — discovery matches CRB subjects on namespace.
 
 **Scope decision:** Cluster-wide read is shown above. Execution Roles are scoped to the namespaces declared by the approved remediation option's namespace-scoped RBAC rules.
 
@@ -97,12 +99,8 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: lightspeed-agent
-  namespace: default
+  namespace: openshift-lightspeed
 ```
-
-The CRB watch invalidates the discovery cache, so no operator restart is needed. Not applicable on spokes — `spokeReaderBindingNames` in `controller/agenticrun/rbac.go` is a fixed list.
-
-This matters most for **analysis** and **verification**: neither receives RBAC derived from the analysis result, so a resource missing here cannot be inspected at all. Execution can also get reads via the analysis result (prerequisite #2).
 
 ### 2. Operator escalation privilege
 
@@ -132,7 +130,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: controller-manager
-  namespace: default
+  namespace: openshift-lightspeed
 ```
 
 **Production alternative:** Scope the ClusterRole to only the resources and verbs agents are expected to request (e.g. `deployments patch`, `configmaps get/update` in specific API groups), rather than `"*"` on everything.
@@ -182,11 +180,11 @@ Reader CRB subjects are added by `SandboxManager.Create` and removed by `Release
 
 **Fix:** Expand the operator's escalation privilege (external prerequisite #2) to include the missing permissions. The error message lists exactly which `{APIGroups, Resources, Verbs}` are needed.
 
-**Error:** `cannot get resource "<custom-resource>" in API group "<group>" at the cluster scope`, for a per-step SA (`ls-anl-…`, `ls-exe-…`, `ls-ver-…`)
+**Error:** `cannot get resource "<custom-resource>" in API group "<group>"` — ending `at the cluster scope` or `in the namespace "<ns>"` — for a per-step SA (`ls-anl-…`, `ls-exe-…`, `ls-ver-…`)
 
 **Cause:** The CRD's operator ships no aggregated viewer role, so the resource is absent from `cluster-reader` and from the reader bindings per-step SAs inherit. Broad read access does not imply every custom resource.
 
-**Fix:** Grant it explicitly (prerequisite #1, "Custom resources are not covered by broad read roles"). For execution only, analysis can instead derive the read into the per-run Role, which the operator must also hold (prerequisite #2).
+**Fix:** Grant it explicitly (prerequisite #1, "Custom resources are not covered by broad read roles"); on spokes this doesn't apply — reader bindings come only from the hub-provisioned `lightspeed-hub:cluster-reader` / `lightspeed-hub:cluster-monitoring-view` (`spokeReaderBindingNames`). For execution only, analysis can instead derive the read into the per-run Role (or ClusterRole for cluster-scope access); the operator must hold it too (prerequisite #2). This path works on spokes, checked against the spoke credentials.
 
 ## Security boundaries
 
