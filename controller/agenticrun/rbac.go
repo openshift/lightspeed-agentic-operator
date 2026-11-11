@@ -487,6 +487,51 @@ func deleteIfExists(ctx context.Context, c client.Client, obj client.Object) err
 	return nil
 }
 
+// executionRBACNamespaces returns the sorted, deduplicated union of the
+// run's persisted namespace inventory and the namespaces targeted by the
+// current execution's namespace-scoped RBAC rules.
+func executionRBACNamespaces(run *agenticv1alpha1.AgenticRun, rbacResult *agenticv1alpha1.RBACResult) []string {
+	if rbacResult == nil {
+		return nil
+	}
+	namespaces := append(annotatedRBACNamespaces(run), rbacTargetNamespaces(rbacResult)...)
+	sort.Strings(namespaces)
+	unique := namespaces[:0]
+	for _, namespace := range namespaces {
+		if namespace != "" && (len(unique) == 0 || unique[len(unique)-1] != namespace) {
+			unique = append(unique, namespace)
+		}
+	}
+	return unique
+}
+
+// persistExecutionRBACNamespaces writes the namespace union to the AgenticRun
+// before any namespace-scoped spoke RBAC is created. A partial RBAC create or
+// crash must leave every namespace in this durable inventory so deterministic
+// cleanup can visit it.
+func persistExecutionRBACNamespaces(ctx context.Context, c client.Client, run *agenticv1alpha1.AgenticRun, rbacResult *agenticv1alpha1.RBACResult) error {
+	if rbacResult == nil || len(rbacResult.NamespaceScoped) == 0 {
+		return nil
+	}
+	namespaces := executionRBACNamespaces(run, rbacResult)
+	if len(namespaces) == 0 {
+		return nil
+	}
+	value := strings.Join(namespaces, ",")
+	if run.Annotations[rbacNamespacesAnnotation] == value {
+		return nil
+	}
+	base := run.DeepCopy()
+	if run.Annotations == nil {
+		run.Annotations = make(map[string]string)
+	}
+	run.Annotations[rbacNamespacesAnnotation] = value
+	if err := c.Patch(ctx, run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("persist RBAC namespaces before creating spoke RBAC: %w", err)
+	}
+	return nil
+}
+
 func rbacTargetNamespaces(rbacResult *agenticv1alpha1.RBACResult) []string {
 	if rbacResult == nil {
 		return nil
