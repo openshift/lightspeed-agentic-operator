@@ -11,6 +11,7 @@ const (
 	KeyTerminalTTLDays             = "terminal-ttl-days"
 	KeySandboxPodSpec              = "sandbox-pod-spec"
 	KeyToolOutputInspectionEnabled = "tool-output-inspection-enabled"
+	KeyToolOutputRedactionEnabled  = "tool-output-redaction-enabled"
 	KeyTLSProfile                  = "tls-profile"
 	KeyTLSMinVersion               = "tls-min-version"
 	KeyTLSCipherSuites             = "tls-cipher-suites"

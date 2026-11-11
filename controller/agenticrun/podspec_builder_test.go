@@ -413,6 +413,43 @@ func TestBuild_ToolOutputInspectionEnv(t *testing.T) {
 	}
 }
 
+func TestBuild_ToolOutputRedactionEnvFromConfigMap(t *testing.T) {
+	tests := []struct {
+		name string
+		data map[string]string
+		want string
+	}{
+		{name: "missing defaults enabled", want: "true"},
+		{name: "explicitly enabled", data: map[string]string{"tool-output-redaction-enabled": "true"}, want: "true"},
+		{name: "explicitly disabled", data: map[string]string{"tool-output-redaction-enabled": "false"}, want: "false"},
+		{name: "trimmed false", data: map[string]string{"tool-output-redaction-enabled": " False "}, want: "false"},
+		{name: "numeric zero defaults enabled", data: map[string]string{"tool-output-redaction-enabled": "0"}, want: "true"},
+		{name: "boolean shorthand defaults enabled", data: map[string]string{"tool-output-redaction-enabled": "f"}, want: "true"},
+		{name: "invalid defaults enabled", data: map[string]string{"tool-output-redaction-enabled": "invalid"}, want: "true"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cache := &configuration.Cache{}
+			if err := cache.OnConfigMapChange(context.Background(), &corev1.ConfigMap{Data: tt.data}); err != nil {
+				t.Fatalf("OnConfigMapChange: %v", err)
+			}
+
+			b := &PodSpecBuilder{}
+			agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}
+			llm := testLLMProvider(agenticv1alpha1.LLMProviderAnthropic)
+			ps, err := b.Build(testBasePodSpec(), agent, llm, nil, cache.Get(), "analysis", "uid", "sa", "uid-test-run", "", 600, 200)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			env := envToMap(ps.Containers[0].Env)
+			if env["LIGHTSPEED_TOOL_OUTPUT_REDACTION_ENABLED"] != tt.want {
+				t.Errorf("LIGHTSPEED_TOOL_OUTPUT_REDACTION_ENABLED = %q, want %q", env["LIGHTSPEED_TOOL_OUTPUT_REDACTION_ENABLED"], tt.want)
+			}
+		})
+	}
+}
+
 func TestBuild_TLSHandoff(t *testing.T) {
 	b := &PodSpecBuilder{}
 	agent := &agenticv1alpha1.Agent{Spec: agenticv1alpha1.AgentSpec{Model: "m"}}

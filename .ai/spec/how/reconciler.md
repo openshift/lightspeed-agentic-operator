@@ -113,7 +113,7 @@ Unified sandbox lifecycle manager. Fully encapsulates SA, RBAC, ConfigMap, and p
 
 ### `PodSpecBuilder` (internal to `SandboxManager`)
 
-- **Build:** Takes base `*corev1.PodSpec` (from config cache) and overlays agent-specific configuration: LLM env vars, credential mounts, skills volumes, MCP config, required secrets, input ConfigMap volume mount [OLS-3066], SA. [OLS-3066] HTTP readiness/liveness probes are no longer set. [PLANNED: OLS-3743] It always injects operator-resolved `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` and `LIGHTSPEED_AGENT_MAX_TURNS` for the selected step Agent. [PLANNED: OLS-3928] It also injects `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` from the configuration cache.
+- **Build:** Takes base `*corev1.PodSpec` (from config cache) and overlays agent-specific configuration: LLM env vars, credential mounts, skills volumes, MCP config, required secrets, input ConfigMap volume mount [OLS-3066], SA. [OLS-3066] HTTP readiness/liveness probes are no longer set. [PLANNED: OLS-3743] It always injects operator-resolved `LIGHTSPEED_AGENT_TIMEOUT_SECONDS` and `LIGHTSPEED_AGENT_MAX_TURNS` for the selected step Agent. [PLANNED: OLS-3928] It also injects `LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED` from the configuration cache. [DONE: OLS-4881] It injects `LIGHTSPEED_TOOL_OUTPUT_REDACTION_ENABLED` from the configuration cache.
 - Also defines label constants (`LabelManaged`, `LabelRun`, etc.) and shared helpers (`credentialsSecretName`, `providerURL`, `providerTypeString`).
 
 **No log streaming in controller:** logs are cluster-side (`kubectl` / CLI); [OLS-3066] manager watches for Result CR creation, not endpoint readiness.
