@@ -111,6 +111,7 @@ metadata:
 data:
   sandbox-mode: "bare-pod"
   tool-output-inspection-enabled: "true"
+  tool-output-redaction-enabled: "true"
   sandbox-pod-spec: '${POD_SPEC}'
   tls-profile: "IntermediateType"
   tls-min-version: "VersionTLS12"

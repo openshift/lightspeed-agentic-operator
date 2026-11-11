@@ -57,6 +57,7 @@ type Config struct {
 	MCP                         MCPConfig
 	RHOKP                       RHOKPConfig
 	ToolOutputInspectionEnabled bool
+	ToolOutputRedactionEnabled  bool
 	TerminalTTLDays             int32
 }
 
@@ -139,6 +140,21 @@ func parseToolOutputInspectionEnabled(data map[string]string) bool {
 	return enabled
 }
 
+func parseToolOutputRedactionEnabled(data map[string]string) bool {
+	raw, ok := data[KeyToolOutputRedactionEnabled]
+	if !ok {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return true
+	}
+}
+
 func parseTerminalTTLDays(data map[string]string) int32 {
 	raw, ok := data[KeyTerminalTTLDays]
 	if !ok {
@@ -180,6 +196,7 @@ func parseConfigMap(cm *corev1.ConfigMap) (*Config, error) {
 			CASecretName: cm.Data[KeyRHOKPCASecret],
 		},
 		ToolOutputInspectionEnabled: parseToolOutputInspectionEnabled(cm.Data),
+		ToolOutputRedactionEnabled:  parseToolOutputRedactionEnabled(cm.Data),
 	}
 
 	if podSpecJSON, ok := cm.Data[KeySandboxPodSpec]; ok && podSpecJSON != "" {

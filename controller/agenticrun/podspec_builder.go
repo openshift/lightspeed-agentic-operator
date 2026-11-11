@@ -102,8 +102,10 @@ func (b *PodSpecBuilder) Build(
 	var volumes []corev1.Volume
 
 	toolOutputInspectionEnabled := true
+	toolOutputRedactionEnabled := true
 	if cfg != nil {
 		toolOutputInspectionEnabled = cfg.ToolOutputInspectionEnabled
+		toolOutputRedactionEnabled = cfg.ToolOutputRedactionEnabled
 	}
 	container.Env = append(container.Env,
 		corev1.EnvVar{Name: "LIGHTSPEED_PROVIDER", Value: providerTypeString(llm.Spec.Type)},
@@ -111,6 +113,7 @@ func (b *PodSpecBuilder) Build(
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENT_TIMEOUT_SECONDS", Value: strconv.Itoa(timeoutSeconds)},
 		corev1.EnvVar{Name: "LIGHTSPEED_AGENT_MAX_TURNS", Value: strconv.Itoa(maxTurns)},
 		corev1.EnvVar{Name: "LIGHTSPEED_TOOL_OUTPUT_INSPECTION_ENABLED", Value: strconv.FormatBool(toolOutputInspectionEnabled)},
+		corev1.EnvVar{Name: "LIGHTSPEED_TOOL_OUTPUT_REDACTION_ENABLED", Value: strconv.FormatBool(toolOutputRedactionEnabled)},
 	)
 	if cfg != nil {
 		container.Env = append(container.Env,
