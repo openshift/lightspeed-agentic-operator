@@ -1756,6 +1756,71 @@ func TestCancellationDeadlineFailureStaysFinalAfterCleanupRecovery(t *testing.T)
 	}
 }
 
+func TestCancellationRestartAfterDeadlineRecordsFailureBeforeCleanup(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_650_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("cancellation-restart-deadline")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "AnalysisComplete",
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionExecuted,
+			Status:             metav1.ConditionUnknown,
+			Reason:             reasonInProgress,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonCancelledByUser,
+			LastTransitionTime: metav1.NewTime(start),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Namespace: "default",
+		Now:       func() time.Time { return start.Add(SuspensionStopWindow) },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("reconcile after restart past the deadline: %v", err)
+	}
+	got := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), got); err != nil {
+		t.Fatal(err)
+	}
+	failure := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionExecuted)
+	if failure == nil || failure.Status != metav1.ConditionFalse || failure.Reason != reasonCancellationFailed {
+		t.Fatalf("restart past the deadline recorded %+v, want CancellationFailed", failure)
+	}
+	if strings.Contains(failure.Message, context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline outcome used a cleanup timeout as its diagnostic: %q", failure.Message)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete {
+		t.Fatalf("confirmed cleanup after the deadline recorded %+v, want TeardownComplete", stopping)
+	}
+	if agenticv1alpha1.DerivePhase(got.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed {
+		t.Fatalf("phase = %s, want Failed", agenticv1alpha1.DerivePhase(got.Status.Conditions))
+	}
+}
+
 type deadlineAdvancingReader struct {
 	client.Reader
 	now      *time.Time

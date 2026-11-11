@@ -459,24 +459,30 @@ func (r *AgenticRunReconciler) handleRunStop(
 	}
 	if !historicalTerminal && !finalOutcome && !stopStart.IsZero() && remaining <= 0 {
 		if source == stopSourceCancellation {
-			report, cleanupErr := r.runStopCleanupPass(ctx, current, cleanupTimeout)
-			if cleanupErr != nil {
-				log.Error(cleanupErr, "cleanup pass failed after run-stop deadline", "source", source, LogKeyName, current.Name)
-				if report.Confirmed() {
-					report.Unverified = append(report.Unverified, "cleanup pass: "+cleanupErr.Error())
-				}
-			}
-			appendRunSandboxDiagnostics(&report, current)
-			confirmed := cleanupErr == nil && report.Confirmed()
-			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, confirmed, report)
+			deadlineReport := SuspensionCleanup{Unverified: []string{"stop deadline reached"}}
+			appendRunSandboxDiagnostics(&deadlineReport, current)
+			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, false, deadlineReport)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 			if updated == nil {
 				return ctrl.Result{}, nil
 			}
-			*run = *updated
-			if confirmed {
+			current = updated
+			*run = *current
+
+			report, cleanupErr := r.runStopCleanupPass(ctx, current, cleanupTimeout)
+			if cleanupErr != nil {
+				log.Error(cleanupErr, "cleanup pass failed after run-stop deadline", "source", source, LogKeyName, current.Name)
+			}
+			if cleanupErr == nil && report.Confirmed() {
+				cleaned, err := r.writeStopOutcome(ctx, key, run.UID, source, true, report)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+				if cleaned != nil {
+					*run = *cleaned
+				}
 				return ctrl.Result{}, nil
 			}
 			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
