@@ -385,6 +385,97 @@ func TestEnsureExecutionRBAC_ResourceNames(t *testing.T) {
 	}
 }
 
+type rbacWriteAheadClient struct {
+	client.Client
+	calls []string
+}
+
+func (c *rbacWriteAheadClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if _, ok := obj.(*agenticv1alpha1.AgenticRun); ok {
+		c.calls = append(c.calls, "patch-run")
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+func (c *rbacWriteAheadClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	switch obj.(type) {
+	case *rbacv1.Role:
+		c.calls = append(c.calls, "create-role")
+	case *rbacv1.RoleBinding:
+		c.calls = append(c.calls, "create-rolebinding")
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+type rbacPatchFailClient struct {
+	client.Client
+}
+
+func (c *rbacPatchFailClient) Patch(context.Context, client.Object, client.Patch, ...client.PatchOption) error {
+	return fmt.Errorf("annotation conflict")
+}
+
+func TestPersistExecutionRBACNamespacesBeforeCreate(t *testing.T) {
+	ctx := context.Background()
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "write-ahead", Namespace: "default", UID: "uid-write-ahead"},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).Build()
+	c := &rbacWriteAheadClient{Client: fc}
+	rbacResult := &agenticv1alpha1.RBACResult{
+		NamespaceScoped: []agenticv1alpha1.RBACRule{{
+			Namespace: "production",
+			APIGroups: []string{"apps"},
+			Resources: []string{"deployments"},
+			Verbs:     []string{"get", "patch"},
+		}},
+	}
+
+	if err := persistExecutionRBACNamespaces(ctx, c, run, rbacResult); err != nil {
+		t.Fatalf("persistExecutionRBACNamespaces: %v", err)
+	}
+	if err := ensureExecutionRBAC(ctx, c, run, rbacResult, "default", nil); err != nil {
+		t.Fatalf("ensureExecutionRBAC: %v", err)
+	}
+	if got := strings.Join(c.calls, ","); got != "patch-run,create-role,create-rolebinding" {
+		t.Fatalf("RBAC create order = %q, want patch before role creation", got)
+	}
+
+	var persisted agenticv1alpha1.AgenticRun
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if got := persisted.Annotations[rbacNamespacesAnnotation]; got != "production" {
+		t.Fatalf("persisted rbac-namespaces = %q, want production", got)
+	}
+}
+
+func TestPersistExecutionRBACNamespacesFailureCreatesNoRBAC(t *testing.T) {
+	ctx := context.Background()
+	run := &agenticv1alpha1.AgenticRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "write-ahead-fail", Namespace: "default", UID: "uid-write-ahead-fail"},
+	}
+	fc := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).Build()
+	rbacResult := &agenticv1alpha1.RBACResult{
+		NamespaceScoped: []agenticv1alpha1.RBACRule{{
+			Namespace: "production",
+			APIGroups: []string{"apps"},
+			Resources: []string{"deployments"},
+			Verbs:     []string{"get", "patch"},
+		}},
+	}
+	if err := persistExecutionRBACNamespaces(ctx, &rbacPatchFailClient{Client: fc}, run, rbacResult); err == nil {
+		t.Fatal("failed annotation persistence returned nil")
+	}
+
+	var role rbacv1.Role
+	if err := fc.Get(ctx, types.NamespacedName{
+		Name: executionRoleName(string(run.UID)), Namespace: "production",
+	}, &role); !apierrors.IsNotFound(err) {
+		t.Fatalf("Role after failed inventory write = %v, want NotFound", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // cleanupExecutionRBAC
 // ---------------------------------------------------------------------------

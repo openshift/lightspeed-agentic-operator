@@ -2803,6 +2803,88 @@ func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.
 	}
 }
 
+func TestDeletedCancellationDegradesOnlyAfterSuspensionEnds(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(2_390_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("suspended-degraded-deletion")
+	run.Namespace = "test-ns"
+	run.Spec.TargetCluster = "gone-spoke"
+	run.DeletionTimestamp = &metav1.Time{Time: start}
+	run.Finalizers = []string{rbacCleanupFinalizer}
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	message := "Cancellation cleanup unconfirmed: spoke access for target \"gone-spoke\" is unavailable"
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonCancellationFailed,
+			Message:            message,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonTeardownFailed,
+			Message:            message,
+			ObservedGeneration: run.Generation,
+		},
+	}
+	config := suspendedConfigAt(start, 1)
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run, config).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	recorder := record.NewFakeRecorder(4)
+	r := &AgenticRunReconciler{
+		Client:        fc,
+		APIReader:     fc,
+		Sandbox:       NewSandboxManager(fc, fc, cache, "test-ns", nil),
+		Namespace:     "test-ns",
+		EventRecorder: recorder,
+		Now:           func() time.Time { return start.Add(rbacCleanupFinalizerRetryWindow) },
+	}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("deletion cleanup while suspended: %v", err)
+	}
+	retained := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), retained); err != nil {
+		t.Fatalf("suspended deletion removed the run: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(retained, rbacCleanupFinalizer) {
+		t.Fatalf("suspended deletion removed the cleanup finalizer: %v", retained.Finalizers)
+	}
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("suspended deletion emitted a degraded release event: %q", event)
+	default:
+	}
+
+	config.Spec.Suspended = false
+	if err := fc.Update(ctx, config); err != nil {
+		t.Fatalf("clear test suspension: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("deletion cleanup after suspension: %v", err)
+	}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &agenticv1alpha1.AgenticRun{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("deletion after suspension = %v, want NotFound", err)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Warning "+eventReasonSpokeCleanupDegraded) {
+			t.Fatalf("degraded cleanup event = %q, want Warning %s", event, eventReasonSpokeCleanupDegraded)
+		}
+	default:
+		t.Fatal("degradable spoke failure after suspension released the finalizer without a Warning Event")
+	}
+}
+
 type failOnceTempLogCleaner struct {
 	callCount int
 }

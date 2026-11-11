@@ -450,6 +450,16 @@ func (r *AgenticRunReconciler) releaseDegradedStopFinalizer(
 	run *agenticv1alpha1.AgenticRun,
 	source stopSource,
 ) (bool, error) {
+	// The deleting run is the durable cleanup obligation while suspension is
+	// active: it holds the namespace inventory and blocks SafeToResume. Do not
+	// degrade the finalizer until the system is no longer suspended.
+	suspended, _, _, err := r.readSuspensionActivation(ctx)
+	if err != nil {
+		return false, err
+	}
+	if suspended {
+		return false, nil
+	}
 	cause, degradable := r.degradableSpokeStopFailure(ctx, run, source)
 	if !degradable || r.EventRecorder == nil {
 		return false, nil
