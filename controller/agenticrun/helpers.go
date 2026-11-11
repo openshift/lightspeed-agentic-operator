@@ -76,6 +76,13 @@ func readBuiltinTemplate(name string) (string, error) {
 	return string(content), nil
 }
 
+type stopSource string
+
+const (
+	stopSourceSuspension   stopSource = "suspension"
+	stopSourceCancellation stopSource = "cancellation"
+)
+
 const (
 	preserveSandboxAnnotation = "agentic.openshift.io/preserve-sandbox"
 	cleanupTimeout            = 30 * time.Second
@@ -105,6 +112,8 @@ const (
 	reasonRevising            = "Revising"
 	reasonRevisionComplete    = "RevisionComplete"
 	reasonSystemSuspended     = "SystemSuspended"
+	reasonCancelledByUser     = "CancelledByUser"
+	reasonCancellationFailed  = "CancellationFailed"
 	reasonTeardownComplete    = "TeardownComplete"
 	reasonTeardownFailed      = "TeardownFailed"
 	reasonEmergencyStopFailed = "EmergencyStopFailed"
@@ -172,13 +181,147 @@ func retryOnTransient(ctx context.Context, fn func() error) error {
 	return lastErr
 }
 
+// cancellationRequested reports whether a user has requested this run stop.
+func cancellationRequested(run *agenticv1alpha1.AgenticRun) bool {
+	return run != nil && run.Spec.Cancelled != nil && *run.Spec.Cancelled
+}
+
+// acceptedStopSource returns the durable stop source and its original start time.
+func acceptedStopSource(run *agenticv1alpha1.AgenticRun) (stopSource, metav1.Time, bool) {
+	if run == nil {
+		return "", metav1.Time{}, false
+	}
+
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping != nil && stopping.Status == metav1.ConditionTrue {
+		switch stopping.Reason {
+		case reasonSystemSuspended:
+			return stopSourceSuspension, stopping.LastTransitionTime, true
+		case reasonCancelledByUser:
+			return stopSourceCancellation, stopping.LastTransitionTime, true
+		}
+	}
+
+	for i := range run.Status.Conditions {
+		condition := &run.Status.Conditions[i]
+		if condition.Status != metav1.ConditionFalse {
+			continue
+		}
+		switch condition.Reason {
+		case reasonCancelledByUser, reasonCancellationFailed:
+			return stopSourceCancellation, metav1.Time{}, true
+		case reasonEmergencyStopFailed:
+			return stopSourceSuspension, metav1.Time{}, true
+		}
+	}
+
+	emergency := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if emergency != nil && emergency.Status == metav1.ConditionTrue {
+		return stopSourceSuspension, metav1.Time{}, true
+	}
+	if stopping != nil && stopping.Status == metav1.ConditionFalse &&
+		(stopping.Reason == reasonTeardownComplete || stopping.Reason == reasonTeardownFailed) {
+		// A terminal run may carry an auxiliary Stopping marker without a
+		// phase-relevant suspension condition.
+		return stopSourceSuspension, stopping.LastTransitionTime, true
+	}
+	return "", metav1.Time{}, false
+}
+
 // HasAcceptedStop reports whether stop acceptance or a final stop outcome is durable.
 func HasAcceptedStop(run *agenticv1alpha1.AgenticRun) bool {
-	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
-	if stopping != nil && stopping.Status == metav1.ConditionTrue && stopping.Reason == reasonSystemSuspended {
+	_, _, accepted := acceptedStopSource(run)
+	return accepted
+}
+
+// HasAcceptedSuspension reports whether a durable stop outcome belongs to global suspension.
+func HasAcceptedSuspension(run *agenticv1alpha1.AgenticRun) bool {
+	source, _, accepted := acceptedStopSource(run)
+	return accepted && source == stopSourceSuspension
+}
+
+func isDegradableSpokeError(err error) bool {
+	if err == nil || errors.IsForbidden(err) || errors.IsUnauthorized(err) {
+		return false
+	}
+	if stderrors.Is(err, context.DeadlineExceeded) ||
+		errors.IsServiceUnavailable(err) ||
+		errors.IsTimeout(err) ||
+		errors.IsServerTimeout(err) {
 		return true
 	}
-	return HasFinalStopOutcome(run)
+	var dnsErr *net.DNSError
+	if stderrors.As(err, &dnsErr) {
+		return true
+	}
+	var opErr *net.OpError
+	if stderrors.As(err, &opErr) {
+		return true
+	}
+	var netErr net.Error
+	return stderrors.As(err, &netErr) && netErr.Timeout()
+}
+
+func hasNonDegradableSpokeDiagnostic(diagnostic string) bool {
+	if len([]rune(diagnostic)) >= 1024 {
+		return true
+	}
+	message := strings.ToLower(diagnostic)
+	for _, marker := range []string{
+		"forbidden",
+		"unauthorized",
+		"label mismatch",
+		"name mismatch",
+		"uid is missing",
+		"missing \"kubeconfig\" key",
+		"parse spoke kubeconfig",
+		"insecure tls",
+		"external credential providers",
+		"bad request",
+		"method not allowed",
+		"permission denied",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func degradableSpokeDiagnostic(diagnostic string) bool {
+	if hasNonDegradableSpokeDiagnostic(diagnostic) {
+		return false
+	}
+	message := strings.ToLower(diagnostic)
+	for _, marker := range []string{
+		"connection refused",
+		"connection reset",
+		"network is unreachable",
+		"no such host",
+		"dial tcp",
+		"i/o timeout",
+		"tls handshake timeout",
+		"context deadline exceeded",
+		"service unavailable",
+		"server timeout",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// StopCleanupConfirmed reports whether the run's recorded state satisfies stop-cleanup resolution.
+func StopCleanupConfirmed(run *agenticv1alpha1.AgenticRun) bool {
+	if run == nil || hasRunSandboxInfo(run) {
+		return false
+	}
+	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping == nil {
+		return true
+	}
+	return stopping.Status == metav1.ConditionFalse && stopping.Reason == reasonTeardownComplete
 }
 
 func readRunnableRun(ctx context.Context, reader client.Reader, key types.NamespacedName, uid types.UID) (*agenticv1alpha1.AgenticRun, error) {
@@ -189,7 +332,7 @@ func readRunnableRun(ctx context.Context, reader client.Reader, key types.Namesp
 	if err := reader.Get(ctx, key, &current); err != nil {
 		return nil, err
 	}
-	if current.UID != uid || HasAcceptedStop(&current) {
+	if current.UID != uid || cancellationRequested(&current) || HasAcceptedStop(&current) {
 		return nil, errStopAccepted
 	}
 
@@ -284,6 +427,9 @@ func hasSandboxClaims(run *agenticv1alpha1.AgenticRun) bool {
 
 func terminalReason(run *agenticv1alpha1.AgenticRun) string {
 	for _, c := range run.Status.Conditions {
+		if c.Status == metav1.ConditionFalse && (c.Reason == reasonCancelledByUser || c.Reason == reasonCancellationFailed) {
+			return c.Reason
+		}
 		if c.Status == metav1.ConditionFalse && c.Reason == reasonFailed {
 			return c.Message
 		}
@@ -292,6 +438,22 @@ func terminalReason(run *agenticv1alpha1.AgenticRun) string {
 		}
 	}
 	return ""
+}
+
+func stopCleanupMessage(report SuspensionCleanup) string {
+	items := make([]string, 0, len(report.Pending)+len(report.Failures)+len(report.Unverified))
+	items = append(items, report.Pending...)
+	items = append(items, report.Failures...)
+	items = append(items, report.Unverified...)
+	if len(items) == 0 {
+		return "Cancellation cleanup remained unconfirmed"
+	}
+	message := "Cancellation cleanup unconfirmed: " + strings.Join(items, "; ")
+	runes := []rune(message)
+	if len(runes) > 1024 {
+		return string(runes[:1021]) + "..."
+	}
+	return message
 }
 
 func isTerminal(phase agenticv1alpha1.AgenticRunPhase) bool {

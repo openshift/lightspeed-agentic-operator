@@ -8,9 +8,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	toolscache "k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,16 +28,18 @@ import (
 )
 
 const (
-	ErrRemoveFinalizer             = "remove finalizer"
-	ErrAddFinalizer                = "add finalizer"
-	ErrPatchTemplogCleanupAttempts = "patch templog cleanup attempts"
-	ErrPatchRBACCleanupAttempts    = "patch rbac cleanup attempts"
-	ErrStampTerminalTTL            = "stamp terminal TTL"
-	ErrConfigNotReady              = "operator configuration not yet available"
-	ErrDeleteExpiredRun            = "delete expired run"
-	ErrLabelTerminalRun            = "label terminal run"
-	terminalTTLLabel               = "agentic.openshift.io/ttl-managed"
-	suspensionRequeueAfter         = 5 * time.Second
+	ErrRemoveFinalizer              = "remove finalizer"
+	ErrAddFinalizer                 = "add finalizer"
+	ErrPatchTemplogCleanupAttempts  = "patch templog cleanup attempts"
+	ErrPatchRBACCleanupAttempts     = "patch rbac cleanup attempts"
+	ErrStampTerminalTTL             = "stamp terminal TTL"
+	ErrConfigNotReady               = "operator configuration not yet available"
+	ErrDeleteExpiredRun             = "delete expired run"
+	ErrLabelTerminalRun             = "label terminal run"
+	terminalTTLLabel                = "agentic.openshift.io/ttl-managed"
+	suspensionRequeueAfter          = 5 * time.Second
+	rbacCleanupFinalizerRetryWindow = time.Minute
+	eventReasonSpokeCleanupDegraded = "SpokeCleanupDegraded"
 )
 
 // TempLogCleaner is the interface for deleting templog records on CR deletion.
@@ -48,14 +52,15 @@ type TempLogCleaner interface {
 // Agent, APIReader, and Sandbox must be set before calling SetupWithManager.
 type AgenticRunReconciler struct {
 	client.Client
-	APIReader client.Reader
-	Agent     AgentCaller
-	Sandbox   *SandboxManager
-	Config    *configuration.Cache
-	Namespace string
-	Audit     AuditLogger
-	TempLog   TempLogCleaner
-	Now       func() time.Time
+	APIReader     client.Reader
+	Agent         AgentCaller
+	Sandbox       *SandboxManager
+	Config        *configuration.Cache
+	Namespace     string
+	Audit         AuditLogger
+	EventRecorder record.EventRecorder
+	TempLog       TempLogCleaner
+	Now           func() time.Time
 }
 
 func (r *AgenticRunReconciler) now() time.Time {
@@ -103,27 +108,53 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if r.Audit != nil {
 			r.Audit.Cleanup(&run)
 		}
-		accepted := HasAcceptedStop(&run)
+		acceptedSource, acceptedAt, hasAccepted := acceptedStopSource(&run)
 		suspended := false
 		var start metav1.Time
 		currentActivation := false
-		if !accepted {
+		if !hasAccepted || (acceptedSource == stopSourceCancellation && !HasFinalStopOutcome(&run)) {
 			var err error
 			suspended, start, currentActivation, err = r.readSuspensionActivation(ctx)
 			if err != nil {
 				return ctrl.Result{}, err
 			}
 		}
-		if accepted || suspended {
-			if suspended && !currentActivation && !accepted {
+		stopSourceToHandle := stopSource("")
+		stopStart := metav1.Time{}
+		if hasAccepted && (acceptedSource == stopSourceSuspension || HasFinalStopOutcome(&run)) {
+			stopSourceToHandle = acceptedSource
+			stopStart = acceptedAt
+		} else if suspended {
+			if !currentActivation {
 				return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
 			}
-			result, err := r.handleSuspensionAt(ctx, &run, start)
+			stopSourceToHandle = stopSourceSuspension
+			stopStart = start
+		} else if hasAccepted {
+			stopSourceToHandle = acceptedSource
+			stopStart = acceptedAt
+		}
+		if stopSourceToHandle != "" {
+			result, err := r.handleRunStop(ctx, &run, stopSourceToHandle, stopStart)
 			if err != nil {
 				return result, err
 			}
 			if result.Requeue || result.RequeueAfter > 0 {
-				return result, nil
+				released := !controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer)
+				if !released {
+					var releaseErr error
+					released, releaseErr = r.releaseDegradedStopFinalizer(ctx, &run, stopSourceToHandle)
+					if releaseErr != nil {
+						return ctrl.Result{}, releaseErr
+					}
+				}
+				if !released {
+					return result, nil
+				}
+				if controllerutil.ContainsFinalizer(&run, templogCleanupFinalizer) {
+					return r.handleTemplogCleanup(ctx, &run)
+				}
+				return ctrl.Result{}, nil
 			}
 			if controllerutil.ContainsFinalizer(&run, rbacCleanupFinalizer) {
 				base := run.DeepCopy()
@@ -167,22 +198,27 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	accepted := HasAcceptedStop(&run)
-	suspended := false
-	var start metav1.Time
-	currentActivation := false
-	if !accepted {
-		var err error
-		suspended, start, currentActivation, err = r.readSuspensionActivation(ctx)
+	acceptedSource, acceptedAt, hasAccepted := acceptedStopSource(&run)
+	stopSourceToHandle := stopSource("")
+	var stopStart metav1.Time
+	if hasAccepted && (acceptedSource == stopSourceSuspension || HasFinalStopOutcome(&run)) {
+		stopSourceToHandle = acceptedSource
+		stopStart = acceptedAt
+	} else {
+		suspended, start, currentActivation, err := r.readSuspensionActivation(ctx)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-	}
-	if accepted || suspended {
-		if suspended && !currentActivation && !accepted {
-			return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+		if suspended {
+			if !currentActivation {
+				return ctrl.Result{RequeueAfter: suspensionRequeueAfter}, nil
+			}
+			stopSourceToHandle = stopSourceSuspension
+			stopStart = start
 		}
-		result, err := r.handleSuspensionAt(ctx, &run, start)
+	}
+	if stopSourceToHandle != "" {
+		result, err := r.handleRunStop(ctx, &run, stopSourceToHandle, stopStart)
 		if err != nil {
 			return result, err
 		}
@@ -198,7 +234,7 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				}
 				return result, nil
 			}
-			terminalResult, err := r.handleSuspendedTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
+			terminalResult, err := r.handleStoppedTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 			if err != nil {
 				return terminalResult, err
 			}
@@ -207,6 +243,12 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 		}
 		return result, nil
+	}
+	if hasAccepted {
+		return r.handleRunStop(ctx, &run, acceptedSource, acceptedAt)
+	}
+	if cancellationRequested(&run) && !isTerminal(agenticv1alpha1.DerivePhase(run.Status.Conditions)) {
+		return r.handleRunStop(ctx, &run, stopSourceCancellation, metav1.Time{})
 	}
 
 	// --- Configuration guard (wait for lightspeed-agentic-configuration ConfigMap) ---
@@ -219,18 +261,21 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	phase := agenticv1alpha1.DerivePhase(run.Status.Conditions)
+	terminalCancellationRequest := cancellationRequested(&run) &&
+		isTerminal(phase) && !HasAcceptedStop(&run)
 	skipTerminalCleanup := (run.Labels[terminalTTLLabel] == "true" && run.Status.DeleteAfter != nil) || (phase == agenticv1alpha1.AgenticRunPhaseFailed && preserveFailedSandbox(&run))
 
 	// --- Terminal phases ---
 	switch phase {
 	case agenticv1alpha1.AgenticRunPhaseCompleted:
 		revisable := isNoActionRequired(&run) || run.Spec.Execution.IsZero()
-		if !(revisable && needsRevision(&run)) {
-			if skipTerminalCleanup {
-				return ctrl.Result{}, nil
-			}
-			return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
+		if revisable && needsRevision(&run) && !terminalCancellationRequest {
+			break
 		}
+		if skipTerminalCleanup {
+			return ctrl.Result{}, nil
+		}
+		return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 
 	case agenticv1alpha1.AgenticRunPhaseDenied,
 		agenticv1alpha1.AgenticRunPhaseEscalated,
@@ -241,15 +286,16 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 
 	case agenticv1alpha1.AgenticRunPhaseFailed:
-		if !(run.Spec.Execution.IsZero() && needsRevision(&run)) {
-			if skipTerminalCleanup {
-				return ctrl.Result{}, nil
-			}
-			if result, err := r.handleFailed(ctx, &run); err != nil {
-				return result, err
-			}
-			return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
+		if run.Spec.Execution.IsZero() && needsRevision(&run) && !terminalCancellationRequest {
+			break
 		}
+		if skipTerminalCleanup {
+			return ctrl.Result{}, nil
+		}
+		if result, err := r.handleFailed(ctx, &run); err != nil {
+			return result, err
+		}
+		return r.handleTerminalCleanup(ctx, &run, phase, cfg.TerminalTTLDays)
 	}
 
 	// --- Ensure AgenticRunApproval exists ---
@@ -330,6 +376,110 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
+// degradableSpokeStopFailure releases a cancellation finalizer only after the
+// deletion retry window, when hub cleanup is confirmed and spoke access is gone
+// or the spoke API is unreachable.
+func (r *AgenticRunReconciler) degradableSpokeStopFailure(
+	ctx context.Context,
+	run *agenticv1alpha1.AgenticRun,
+	source stopSource,
+) (string, bool) {
+	if source != stopSourceCancellation ||
+		run == nil ||
+		run.DeletionTimestamp.IsZero() ||
+		r.now().Before(run.DeletionTimestamp.Add(rbacCleanupFinalizerRetryWindow)) ||
+		run.Spec.TargetCluster == "" ||
+		r.Client == nil ||
+		r.Sandbox == nil ||
+		!controllerutil.ContainsFinalizer(run, rbacCleanupFinalizer) {
+		return "", false
+	}
+	acceptedSource, _, accepted := acceptedStopSource(run)
+	if !accepted ||
+		acceptedSource != stopSourceCancellation ||
+		!HasFinalStopOutcome(run) ||
+		!hasCancellationFailure(run) {
+		return "", false
+	}
+
+	failureMessage := ""
+	for i := range run.Status.Conditions {
+		condition := &run.Status.Conditions[i]
+		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonCancellationFailed {
+			failureMessage = condition.Message
+			break
+		}
+	}
+
+	hubCtx, cancelHub := context.WithTimeout(ctx, cleanupTimeout)
+	hubReport, hubErr := r.Sandbox.CleanupSuspension(hubCtx, run.UID, nil)
+	cancelHub()
+	if hubErr != nil || !hubReport.Confirmed() {
+		return "", false
+	}
+
+	spoke, accessErr := spokeAccessForRun(ctx, r.Client, run, r.Namespace)
+	if accessErr != nil {
+		if apierrors.IsNotFound(accessErr) && !hasNonDegradableSpokeDiagnostic(failureMessage) {
+			return accessErr.Error(), true
+		}
+		return "", false
+	}
+	if spoke == nil || spoke.Client == nil {
+		return "", false
+	}
+
+	probeCtx, cancelProbe := context.WithTimeout(ctx, spokeDialTimeout)
+	defer cancelProbe()
+	var serviceAccount corev1.ServiceAccount
+	probeErr := spoke.Client.Get(probeCtx, client.ObjectKey{
+		Namespace: spoke.Namespace,
+		Name:      sandboxSAName(run, "analysis"),
+	}, &serviceAccount)
+	if probeErr == nil || apierrors.IsNotFound(probeErr) {
+		return "", false
+	}
+	if !isDegradableSpokeError(probeErr) || !degradableSpokeDiagnostic(failureMessage) {
+		return "", false
+	}
+	return probeErr.Error(), true
+}
+
+func (r *AgenticRunReconciler) releaseDegradedStopFinalizer(
+	ctx context.Context,
+	run *agenticv1alpha1.AgenticRun,
+	source stopSource,
+) (bool, error) {
+	// The deleting run is the durable cleanup obligation while suspension is
+	// active: it holds the namespace inventory and blocks SafeToResume. Do not
+	// degrade the finalizer until the system is no longer suspended.
+	suspended, _, _, err := r.readSuspensionActivation(ctx)
+	if err != nil {
+		return false, err
+	}
+	if suspended {
+		return false, nil
+	}
+	cause, degradable := r.degradableSpokeStopFailure(ctx, run, source)
+	if !degradable || r.EventRecorder == nil {
+		return false, nil
+	}
+
+	base := run.DeepCopy()
+	controllerutil.RemoveFinalizer(run, rbacCleanupFinalizer)
+	if err := r.Patch(ctx, run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); client.IgnoreNotFound(err) != nil {
+		return false, fmt.Errorf("%s: %w", ErrRemoveFinalizer, err)
+	}
+	r.EventRecorder.Event(
+		run,
+		corev1.EventTypeWarning,
+		eventReasonSpokeCleanupDegraded,
+		fmt.Sprintf("Released execution RBAC cleanup finalizer after %s for spoke %q with unconfirmed cleanup: %s",
+			rbacCleanupFinalizerRetryWindow, run.Spec.TargetCluster, cause),
+	)
+	return true, nil
+}
+
 func (r *AgenticRunReconciler) readSuspensionActivation(ctx context.Context) (bool, metav1.Time, bool, error) {
 	if r.APIReader == nil {
 		return false, metav1.Time{}, false, fmt.Errorf("uncached API reader is required by the run controller")
@@ -378,6 +528,9 @@ func readerBindingEventHandlers(namespace string) toolscache.ResourceEventHandle
 }
 
 func (r *AgenticRunReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.EventRecorder == nil {
+		r.EventRecorder = mgr.GetEventRecorderFor("agenticrun-controller")
+	}
 	maxConcurrent := int(agenticv1alpha1.DefaultMaxConcurrentRuns)
 	var ap agenticv1alpha1.ApprovalPolicy
 	if err := mgr.GetAPIReader().Get(context.Background(), client.ObjectKey{Name: "cluster"}, &ap); err == nil {
@@ -449,7 +602,7 @@ func (r *AgenticRunReconciler) handleTerminalCleanup(ctx context.Context, run *a
 	return r.handleTerminalRecord(ctx, run, phase, ceilingDays)
 }
 
-func (r *AgenticRunReconciler) handleSuspendedTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
+func (r *AgenticRunReconciler) handleStoppedTerminalCleanup(ctx context.Context, run *agenticv1alpha1.AgenticRun, phase agenticv1alpha1.AgenticRunPhase, ceilingDays int32) (ctrl.Result, error) {
 	if run.Labels[terminalTTLLabel] == "true" && run.Status.DeleteAfter != nil {
 		return ctrl.Result{}, nil
 	}

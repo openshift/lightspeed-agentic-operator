@@ -430,6 +430,11 @@ func (in *AgenticRunSpec) DeepCopyInto(out *AgenticRunSpec) {
 	out.Analysis = in.Analysis
 	out.Execution = in.Execution
 	out.Verification = in.Verification
+	if in.Cancelled != nil {
+		in, out := &in.Cancelled, &out.Cancelled
+		*out = new(bool)
+		**out = **in
+	}
 	if in.TerminalTTL != nil {
 		in, out := &in.TerminalTTL, &out.TerminalTTL
 		*out = new(int32)

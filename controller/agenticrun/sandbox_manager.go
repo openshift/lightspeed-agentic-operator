@@ -171,6 +171,13 @@ func (m *SandboxManager) Create(
 	if step == "execution" && agentCtx != nil && agentCtx.ApprovedOption != nil {
 		rbac := &agentCtx.ApprovedOption.RBAC
 		if len(rbac.NamespaceScoped) > 0 || len(rbac.ClusterScoped) > 0 {
+			// Persist the namespace inventory on the hub before creating any
+			// namespace-scoped RBAC. A failed or conflicting write aborts the
+			// create so a partial RBAC create cannot escape cleanup discovery.
+			if err := persistExecutionRBACNamespaces(ctx, m.client, run, rbac); err != nil {
+				createErr = err
+				return "", err
+			}
 			// Execution RBAC targets spoke when targetCluster is set.
 			rbacClient := m.client
 			rbacNS := m.namespace
@@ -180,15 +187,9 @@ func (m *SandboxManager) Create(
 				rbacNS = spoke.Namespace
 				extraLabels = spokeExtraLabels(run.Name, run.Spec.TargetCluster)
 			}
-			base := run.DeepCopy()
 			if err := ensureExecutionRBAC(ctx, rbacClient, run, rbac, rbacNS, extraLabels); err != nil {
 				createErr = err
 				return "", err
-			}
-			// Annotation is persisted on hub (run lives on hub).
-			if err := m.client.Patch(ctx, run, client.MergeFrom(base)); err != nil {
-				createErr = fmt.Errorf("persist RBAC annotation: %w", err)
-				return "", createErr
 			}
 		}
 	}

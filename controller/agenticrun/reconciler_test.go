@@ -12,10 +12,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,18 +63,40 @@ func TestReadRunnableRunRejectsReplacementUID(t *testing.T) {
 
 func TestReadRunnableRunPreservesAcceptedStopAfterResumptionOrConfigDeletion(t *testing.T) {
 	tests := []struct {
-		name          string
-		conditionType string
-		status        metav1.ConditionStatus
-		reason        string
-		configExists  bool
-		wantStopped   bool
+		name                  string
+		conditionType         string
+		status                metav1.ConditionStatus
+		reason                string
+		configExists          bool
+		cancellationRequested bool
+		wantStopped           bool
 	}{
 		{
 			name:          "ongoing stop after config deletion",
 			conditionType: agenticv1alpha1.AgenticRunConditionStopping,
 			status:        metav1.ConditionTrue,
 			reason:        reasonSystemSuspended,
+			wantStopped:   true,
+		},
+		{
+			name:          "ongoing cancellation after config deletion",
+			conditionType: agenticv1alpha1.AgenticRunConditionStopping,
+			status:        metav1.ConditionTrue,
+			reason:        reasonCancelledByUser,
+			wantStopped:   true,
+		},
+		{
+			name:          "completed cancellation after config deletion",
+			conditionType: agenticv1alpha1.AgenticRunConditionAnalyzed,
+			status:        metav1.ConditionFalse,
+			reason:        reasonCancelledByUser,
+			wantStopped:   true,
+		},
+		{
+			name:          "failed cancellation after config deletion",
+			conditionType: agenticv1alpha1.AgenticRunConditionAnalyzed,
+			status:        metav1.ConditionFalse,
+			reason:        reasonCancellationFailed,
 			wantStopped:   true,
 		},
 		{
@@ -116,6 +142,11 @@ func TestReadRunnableRunPreservesAcceptedStopAfterResumptionOrConfigDeletion(t *
 			status:        metav1.ConditionFalse,
 			reason:        reasonFailed,
 		},
+		{
+			name:                  "cancellation request before acceptance",
+			cancellationRequested: true,
+			wantStopped:           true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -123,12 +154,18 @@ func TestReadRunnableRunPreservesAcceptedStopAfterResumptionOrConfigDeletion(t *
 			run := testAgenticRun()
 			run.UID = types.UID("run-uid")
 			run.Generation = 5
-			run.Status.Conditions = []metav1.Condition{{
-				Type:               tt.conditionType,
-				Status:             tt.status,
-				Reason:             tt.reason,
-				ObservedGeneration: 4,
-			}}
+			if tt.cancellationRequested {
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+			}
+			if tt.conditionType != "" {
+				run.Status.Conditions = []metav1.Condition{{
+					Type:               tt.conditionType,
+					Status:             tt.status,
+					Reason:             tt.reason,
+					ObservedGeneration: 4,
+				}}
+			}
 			objects := []client.Object{run}
 			if tt.configExists {
 				objects = append(objects, &agenticv1alpha1.AgenticOLSConfig{
@@ -151,6 +188,17 @@ func TestReadRunnableRunPreservesAcceptedStopAfterResumptionOrConfigDeletion(t *
 				t.Fatalf("readRunnableRun() = (%v, %v), want ordinary failed run to remain readable", got, err)
 			}
 		})
+	}
+}
+
+func TestReadRunnableRunBlocksCancellationRequest(t *testing.T) {
+	run := testAgenticRun()
+	run.UID = types.UID("cancelled-run-uid")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	reader := fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(run).Build()
+	if _, err := readRunnableRun(context.Background(), reader, client.ObjectKeyFromObject(run), run.UID); err != errStopAccepted {
+		t.Fatalf("readRunnableRun() error = %v, want %v", err, errStopAccepted)
 	}
 }
 
@@ -780,11 +828,13 @@ func suspendedConfigAt(start time.Time, generation int64) *agenticv1alpha1.Agent
 
 type terminalAuditCounter struct {
 	NoOpAuditLogger
-	terminalSpans int
+	terminalSpans   int
+	terminalReasons []string
 }
 
-func (a *terminalAuditCounter) EmitTerminalSpan(context.Context, *agenticv1alpha1.AgenticRun, string, string) {
+func (a *terminalAuditCounter) EmitTerminalSpan(_ context.Context, _ *agenticv1alpha1.AgenticRun, _, reason string) {
 	a.terminalSpans++
+	a.terminalReasons = append(a.terminalReasons, reason)
 }
 
 func TestStopAcceptedAgentErrorRequeuesWithoutFailure(t *testing.T) {
@@ -868,6 +918,319 @@ func TestFailStepDoesNotCreateResultForAcceptedStop(t *testing.T) {
 	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
 	if analyzed == nil || analyzed.Status != metav1.ConditionUnknown {
 		t.Fatalf("accepted stop changed workflow failure condition: %+v", analyzed)
+	}
+}
+
+func TestSuspensionStopDispatchPreservesOutcome(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_000_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("suspension-stop-dispatch")
+	config := suspendedConfigAt(start, 4)
+	objects := append(defaultObjects(), run, config)
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(objects...).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Agent:     newTestAgentCaller().withClient(t, fc, "default"),
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+		Now:       func() time.Time { return start.Add(time.Second) },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatal(err)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	emergency := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		emergency == nil || emergency.Status != metav1.ConditionTrue || emergency.Reason != reasonSystemSuspended {
+		t.Fatalf("suspension outcome changed during stop-path extraction: %+v", got.Status.Conditions)
+	}
+}
+
+func TestReconcileCancellationAcceptsAndConfirmsInOnePass(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1_100_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("cancel-confirmed")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+		ClaimName: "stale-analysis-reference",
+		Namespace: "default",
+	}
+	statusWrites := make([]*agenticv1alpha1.AgenticRun, 0, 2)
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(ctx context.Context, c client.Client, subResourceName string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+				if subResourceName == "status" {
+					if current, ok := obj.(*agenticv1alpha1.AgenticRun); ok {
+						statusWrites = append(statusWrites, current.DeepCopy())
+					}
+				}
+				return c.SubResource(subResourceName).Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	agent := newTestAgentCaller().withClient(t, fc, "default")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Agent:     agent,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Namespace: "default",
+		Now:       func() time.Time { return now },
+	}
+
+	result, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+	if err != nil {
+		t.Fatalf("Reconcile cancellation: %v", err)
+	}
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Fatalf("confirmed cancellation result = %+v, want no requeue", result)
+	}
+	if len(statusWrites) != 2 {
+		t.Fatalf("run status writes = %d, want acceptance and one final outcome write", len(statusWrites))
+	}
+	accepted := meta.FindStatusCondition(statusWrites[0].Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if accepted == nil || accepted.Status != metav1.ConditionTrue || accepted.Reason != reasonCancelledByUser ||
+		!accepted.LastTransitionTime.Time.Equal(now) {
+		t.Fatalf("same-reconcile cancellation acceptance = %+v, want CancelledByUser at %s", accepted, now)
+	}
+	final := statusWrites[1]
+	analyzed := meta.FindStatusCondition(final.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	stopping := meta.FindStatusCondition(final.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if analyzed == nil || analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonCancelledByUser ||
+		analyzed.Message != "Run stopped by user" ||
+		stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		hasRunSandboxInfo(final) {
+		t.Fatalf("confirmed cancellation final status = %+v", final.Status)
+	}
+	if emergency := meta.FindStatusCondition(final.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped); emergency != nil {
+		t.Fatalf("cancellation set EmergencyStopped: %+v", emergency)
+	}
+	if agent.escalateCalls != 0 || meta.FindStatusCondition(final.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed).Status == metav1.ConditionTrue {
+		t.Fatalf("cancellation advanced the workflow: conditions=%+v", final.Status.Conditions)
+	}
+	if reason := terminalReason(final); reason != reasonCancelledByUser {
+		t.Fatalf("terminalReason() = %q, want %q", reason, reasonCancelledByUser)
+	}
+}
+
+func TestCancellationPreemptsPendingApprovalAndRevision(t *testing.T) {
+	ctx := context.Background()
+	run := testAgenticRun()
+	run.UID = types.UID("cancel-before-revision")
+	run.Generation = 5
+	run.Spec.RevisionFeedback = "late revision feedback"
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{{
+		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+		Status:             metav1.ConditionTrue,
+		Reason:             reasonComplete,
+		ObservedGeneration: run.Generation - 1,
+	}}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(append(defaultObjects(), run)...).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("Reconcile pending revision cancellation: %v", err)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	if analyzed == nil || analyzed.Status != metav1.ConditionTrue ||
+		analyzed.ObservedGeneration != run.Generation-1 {
+		t.Fatalf("cancellation advanced the pending revision: %+v", got.Status.Conditions)
+	}
+	var approvals agenticv1alpha1.AgenticRunApprovalList
+	if err := fc.List(ctx, &approvals); err != nil {
+		t.Fatal(err)
+	}
+	if len(approvals.Items) != 0 {
+		t.Fatalf("cancellation created an approval before stopping: %+v", approvals.Items)
+	}
+}
+
+func TestSuspensionTakesOverPendingCancellation(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_200_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("suspension-takes-over-cancellation")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionUnknown,
+			Reason:             reasonInProgress,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonCancelledByUser,
+			LastTransitionTime: metav1.NewTime(start.Add(-time.Minute)),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	config := suspendedConfigAt(start, 7)
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(append(defaultObjects(), run, config)...).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Agent:     newTestAgentCaller().withClient(t, fc, "default"),
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+		Now:       func() time.Time { return start.Add(time.Second) },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("Reconcile suspension takeover: %v", err)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	emergency := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		emergency == nil || emergency.Status != metav1.ConditionTrue || emergency.Reason != reasonSystemSuspended {
+		t.Fatalf("suspension did not take over pending cancellation: %+v", got.Status.Conditions)
+	}
+	for _, condition := range got.Status.Conditions {
+		if condition.Reason == reasonCancelledByUser || condition.Reason == reasonCancellationFailed {
+			t.Fatalf("suspension takeover retained a cancellation outcome: %+v", condition)
+		}
+	}
+}
+
+func TestAcceptedSuspensionSurvivesCancellationRequestAfterConfigDeletion(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_300_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("accepted-suspension-stays-suspension")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionUnknown,
+			Reason:             reasonInProgress,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonSystemSuspended,
+			LastTransitionTime: metav1.NewTime(start),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Namespace: "default",
+		Now:       func() time.Time { return start.Add(time.Second) },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("Reconcile accepted suspension after config deletion: %v", err)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	emergency := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped)
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		emergency == nil || emergency.Status != metav1.ConditionTrue || emergency.Reason != reasonSystemSuspended {
+		t.Fatalf("accepted suspension changed after cancellation request: %+v", got.Status.Conditions)
+	}
+	for _, condition := range got.Status.Conditions {
+		if condition.Reason == reasonCancelledByUser || condition.Reason == reasonCancellationFailed {
+			t.Fatalf("accepted suspension converted to cancellation: %+v", condition)
+		}
+	}
+}
+
+func TestCancellationFailureConditionMapping(t *testing.T) {
+	tests := []struct {
+		phase agenticv1alpha1.AgenticRunPhase
+		want  string
+	}{
+		{phase: agenticv1alpha1.AgenticRunPhasePending, want: agenticv1alpha1.AgenticRunConditionAnalyzed},
+		{phase: agenticv1alpha1.AgenticRunPhaseAnalyzing, want: agenticv1alpha1.AgenticRunConditionAnalyzed},
+		{phase: agenticv1alpha1.AgenticRunPhaseProposed, want: agenticv1alpha1.AgenticRunConditionExecuted},
+		{phase: agenticv1alpha1.AgenticRunPhaseExecuting, want: agenticv1alpha1.AgenticRunConditionExecuted},
+		{phase: agenticv1alpha1.AgenticRunPhaseVerifying, want: agenticv1alpha1.AgenticRunConditionVerified},
+		{phase: agenticv1alpha1.AgenticRunPhaseEscalating, want: agenticv1alpha1.AgenticRunConditionEscalated},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.phase), func(t *testing.T) {
+			if got := suspensionFailureCondition(tt.phase); got != tt.want {
+				t.Fatalf("suspensionFailureCondition(%s) = %q, want %q", tt.phase, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStopCleanupMessageUsesBoundedDiagnostics(t *testing.T) {
+	report := SuspensionCleanup{
+		Pending:    []string{"Pod default/blocked"},
+		Failures:   []string{"Role default/denied: forbidden"},
+		Unverified: []string{"ClusterRoleBinding reader: timeout"},
+	}
+	message := stopCleanupMessage(report)
+	want := "Cancellation cleanup unconfirmed: Pod default/blocked; Role default/denied: forbidden; ClusterRoleBinding reader: timeout"
+	if message != want {
+		t.Fatalf("stopCleanupMessage() = %q, want %q", message, want)
+	}
+	bounded := stopCleanupMessage(SuspensionCleanup{Pending: []string{strings.Repeat("x", 1100)}})
+	if runes := []rune(bounded); len(runes) != 1024 || string(runes[len(runes)-3:]) != "..." {
+		t.Fatalf("bounded cancellation message has %d runes or no ellipsis", len(runes))
 	}
 }
 
@@ -1109,8 +1472,8 @@ func TestAcceptedStopBlocksRevisionAfterConfigDeletion(t *testing.T) {
 	}
 	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
-	if stopping == nil || stopping.Reason != reasonTeardownFailed || analyzed == nil ||
-		analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonEmergencyStopFailed {
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		analyzed == nil || analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonEmergencyStopFailed {
 		t.Fatalf("revision changed accepted stop outcome: %+v", got.Status.Conditions)
 	}
 	if meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed).Status == metav1.ConditionUnknown {
@@ -1244,8 +1607,12 @@ func TestSuspensionDeadlineSurvivesRestartAndFailureStaysFinal(t *testing.T) {
 	}
 	stopping = meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	analyzed = meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
-	if stopping == nil || stopping.Reason != reasonTeardownFailed || analyzed == nil || analyzed.Reason != reasonEmergencyStopFailed {
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		analyzed == nil || analyzed.Reason != reasonEmergencyStopFailed {
 		t.Fatalf("recovery changed final stop failure: %+v", got.Status.Conditions)
+	}
+	if !StopCleanupConfirmed(got) {
+		t.Fatalf("confirmed recovery left cleanup unresolved: %+v", got.Status.Conditions)
 	}
 	if hasRunSandboxInfo(got) {
 		t.Fatalf("confirmed recovery retained sandbox references: %+v", got.Status.Steps)
@@ -1256,6 +1623,201 @@ func TestSuspensionDeadlineSurvivesRestartAndFailureStaysFinal(t *testing.T) {
 	}
 	if audit.terminalSpans != 1 {
 		t.Fatalf("cleanup recovery duplicated terminal audit: spans=%d", audit.terminalSpans)
+	}
+}
+
+func TestCancellationDeadlineFailureStaysFinalAfterCleanupRecovery(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_600_000, 0).UTC()
+	now := start
+	run := testAgenticRun()
+	run.UID = types.UID("cancellation-deadline-run")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{{
+		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+		Status:             metav1.ConditionUnknown,
+		Reason:             reasonInProgress,
+		ObservedGeneration: run.Generation,
+	}}
+	run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+		ClaimName: "analysis-cancel-deadline",
+		Namespace: "default",
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "held-cancellation-pod",
+			Namespace:  "default",
+			UID:        types.UID("cancellation-pod-uid"),
+			Labels:     map[string]string{LabelRun: string(run.UID), LabelStep: "analysis"},
+			Finalizers: []string{"test/hold"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run, pod).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Namespace: "default",
+		Now:       func() time.Time { return now },
+	}
+	reconcile := func() (ctrl.Result, error) {
+		return r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)})
+	}
+	getRun := func() (*agenticv1alpha1.AgenticRun, error) {
+		current := &agenticv1alpha1.AgenticRun{}
+		if err := fc.Get(ctx, client.ObjectKeyFromObject(run), current); err != nil {
+			return nil, err
+		}
+		return current, nil
+	}
+
+	first, err := reconcile()
+	if err != nil {
+		t.Fatalf("accept cancellation: %v", err)
+	}
+	if first.RequeueAfter == 0 {
+		t.Fatalf("pending cleanup result = %+v, want deadline requeue", first)
+	}
+	accepted, err := getRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedCondition := meta.FindStatusCondition(accepted.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if acceptedCondition == nil || acceptedCondition.Status != metav1.ConditionTrue ||
+		acceptedCondition.Reason != reasonCancelledByUser || !acceptedCondition.LastTransitionTime.Time.Equal(start) {
+		t.Fatalf("cancellation acceptance = %+v, want CancelledByUser at %s", acceptedCondition, start)
+	}
+
+	now = start.Add(SuspensionStopWindow)
+	deadlineResult, err := reconcile()
+	if err != nil {
+		t.Fatalf("reconcile cancellation deadline: %v", err)
+	}
+	if deadlineResult.RequeueAfter != suspensionRequeueAfter {
+		t.Fatalf("deadline requeue = %+v, want background cleanup after %s", deadlineResult, suspensionRequeueAfter)
+	}
+	failed, err := getRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := meta.FindStatusCondition(failed.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	stopping := meta.FindStatusCondition(failed.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if failure == nil || failure.Status != metav1.ConditionFalse || failure.Reason != reasonCancellationFailed ||
+		!strings.Contains(failure.Message, "analysis-cancel-deadline") ||
+		len([]rune(failure.Message)) > 1024 ||
+		stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownFailed ||
+		!hasRunSandboxInfo(failed) ||
+		agenticv1alpha1.DerivePhase(failed.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed {
+		t.Fatalf("deadline cancellation failure = %+v", failed.Status)
+	}
+	if emergency := meta.FindStatusCondition(failed.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped); emergency != nil {
+		t.Fatalf("cancellation failure wrote EmergencyStopped: %+v", emergency)
+	}
+	failureMessage := failure.Message
+	if reason := terminalReason(failed); reason != reasonCancellationFailed {
+		t.Fatalf("terminalReason() = %q, want %q", reason, reasonCancellationFailed)
+	}
+
+	var remainingPod corev1.Pod
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(pod), &remainingPod); err != nil {
+		t.Fatalf("read finalizer-held Pod: %v", err)
+	}
+	remainingPod.Finalizers = nil
+	if err := fc.Update(ctx, &remainingPod); err != nil {
+		t.Fatalf("remove test Pod finalizer: %v", err)
+	}
+	if err := fc.Delete(ctx, &remainingPod); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("remove recovered Pod: %v", err)
+	}
+
+	now = start.Add(2 * SuspensionStopWindow)
+	if _, err := reconcile(); err != nil {
+		t.Fatalf("reconcile after cancellation cleanup recovery: %v", err)
+	}
+	recovered, err := getRun()
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure = meta.FindStatusCondition(recovered.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	stopping = meta.FindStatusCondition(recovered.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if failure == nil || failure.Status != metav1.ConditionFalse || failure.Reason != reasonCancellationFailed ||
+		failure.Message != failureMessage ||
+		stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		hasRunSandboxInfo(recovered) ||
+		agenticv1alpha1.DerivePhase(recovered.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed {
+		t.Fatalf("late cleanup changed final cancellation outcome: %+v", recovered.Status)
+	}
+}
+
+func TestCancellationRestartAfterDeadlineRecordsFailureBeforeCleanup(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(1_650_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("cancellation-restart-deadline")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionTrue,
+			Reason:             "AnalysisComplete",
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionExecuted,
+			Status:             metav1.ConditionUnknown,
+			Reason:             reasonInProgress,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonCancelledByUser,
+			LastTransitionTime: metav1.NewTime(start),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Namespace: "default",
+		Now:       func() time.Time { return start.Add(SuspensionStopWindow) },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("reconcile after restart past the deadline: %v", err)
+	}
+	got := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), got); err != nil {
+		t.Fatal(err)
+	}
+	failure := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionExecuted)
+	if failure == nil || failure.Status != metav1.ConditionFalse || failure.Reason != reasonCancellationFailed {
+		t.Fatalf("restart past the deadline recorded %+v, want CancellationFailed", failure)
+	}
+	if strings.Contains(failure.Message, context.DeadlineExceeded.Error()) {
+		t.Fatalf("deadline outcome used a cleanup timeout as its diagnostic: %q", failure.Message)
+	}
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete {
+		t.Fatalf("confirmed cleanup after the deadline recorded %+v, want TeardownComplete", stopping)
+	}
+	if agenticv1alpha1.DerivePhase(got.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed {
+		t.Fatalf("phase = %s, want Failed", agenticv1alpha1.DerivePhase(got.Status.Conditions))
 	}
 }
 
@@ -1273,7 +1835,7 @@ func (r *deadlineAdvancingReader) List(ctx context.Context, _ client.ObjectList,
 	return ctx.Err()
 }
 
-func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
+func TestRemoteStopRequiresSpokeAccess(t *testing.T) {
 	start := time.Unix(3_500_000, 0).UTC()
 	now := start.Add(time.Second)
 	run := testAgenticRun()
@@ -1311,8 +1873,8 @@ func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first remote cleanup request: %v", err)
 	}
-	if first.RequeueAfter == 0 || agent.releaseAllCount != 1 {
-		t.Fatalf("remote cleanup was not requested/requeued: result=%+v releases=%d", first, agent.releaseAllCount)
+	if first.RequeueAfter == 0 || agent.releaseAllCount != 0 {
+		t.Fatalf("remote stop did not remain pending without spoke access: result=%+v releases=%d", first, agent.releaseAllCount)
 	}
 	got, err := getAgenticRun(r, run.Name)
 	if err != nil {
@@ -1329,8 +1891,8 @@ func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
 	if _, err := reconcileOnce(r, run.Name); err != nil {
 		t.Fatalf("deadline remote outcome: %v", err)
 	}
-	if agent.releaseAllCount != 2 {
-		t.Fatalf("deadline background remote release calls = %d, want 2", agent.releaseAllCount)
+	if agent.releaseAllCount != 0 {
+		t.Fatalf("deadline cleanup invoked best-effort sandbox release without spoke access: %d calls", agent.releaseAllCount)
 	}
 	got, err = getAgenticRun(r, run.Name)
 	if err != nil {
@@ -1350,8 +1912,8 @@ func TestKnownRemoteEvidenceCannotConfirmHubOnlyCleanup(t *testing.T) {
 	if _, err := reconcileOnce(r, run.Name); err != nil {
 		t.Fatalf("background remote cleanup request: %v", err)
 	}
-	if agent.releaseAllCount != 3 {
-		t.Fatalf("background remote release calls = %d, want 3", agent.releaseAllCount)
+	if agent.releaseAllCount != 0 {
+		t.Fatalf("background cleanup invoked best-effort sandbox release without spoke access: %d calls", agent.releaseAllCount)
 	}
 }
 
@@ -1560,6 +2122,869 @@ func TestAuxiliaryTerminalStopMarkerPreservesWorkflowOutcome(t *testing.T) {
 	}
 }
 
+func TestTerminalCancellationRequestDoesNotReviseHistoricalRun(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(2_200_000, 0).UTC()
+	run := testAgenticRun()
+	run.Generation = 4
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Spec.RevisionFeedback = "late revision feedback"
+	run.Spec.Execution = agenticv1alpha1.AgenticRunStep{}
+	run.Status.Conditions = []metav1.Condition{{
+		Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+		Status:             metav1.ConditionFalse,
+		Reason:             reasonFailed,
+		Message:            "Historical workflow failure",
+		ObservedGeneration: run.Generation - 1,
+	}}
+	terminalTime := metav1.NewTime(now.Add(-time.Hour))
+	deleteAfter := metav1.NewTime(now.Add(24 * time.Hour))
+	run.Status.TerminalTime = &terminalTime
+	run.Status.DeleteAfter = &deleteAfter
+	run.Labels = map[string]string{terminalTTLLabel: "true"}
+	originalCondition := run.Status.Conditions[0]
+	fc := fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithObjects(append(defaultObjects(), run)...).
+		WithStatusSubresource(run).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Agent:     newTestAgentCaller().withClient(t, fc, "default"),
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+		Now:       func() time.Time { return now },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("Reconcile historical cancellation request: %v", err)
+	}
+	got, err := getAgenticRun(r, run.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	if len(got.Status.Conditions) != 1 || analyzed == nil ||
+		analyzed.Status != originalCondition.Status ||
+		analyzed.Reason != originalCondition.Reason ||
+		analyzed.Message != originalCondition.Message ||
+		analyzed.ObservedGeneration != originalCondition.ObservedGeneration {
+		t.Fatalf("historical terminal condition changed for cancellation-only generation: %+v", got.Status.Conditions)
+	}
+	if got.Status.TerminalTime == nil || !got.Status.TerminalTime.Time.Equal(terminalTime.Time) ||
+		got.Status.DeleteAfter == nil || !got.Status.DeleteAfter.Time.Equal(deleteAfter.Time) {
+		t.Fatalf("historical TTL moved for cancellation-only generation: terminalTime=%v deleteAfter=%v",
+			got.Status.TerminalTime, got.Status.DeleteAfter)
+	}
+}
+
+func TestTerminalCancellationRequestDoesNotReviseHistoricalCompletion(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(2_250_000, 0).UTC()
+	run := testAgenticRun()
+	run.Generation = 4
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Spec.RevisionFeedback = "late revision feedback"
+	run.Spec.Execution = agenticv1alpha1.AgenticRunStep{}
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonComplete,
+			Message:            "Analysis complete",
+			ObservedGeneration: run.Generation - 1,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionVerified,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonPassed,
+			Message:            "Verification passed",
+			ObservedGeneration: run.Generation,
+		},
+	}
+	terminalTime := metav1.NewTime(now.Add(-time.Hour))
+	deleteAfter := metav1.NewTime(now.Add(24 * time.Hour))
+	run.Status.TerminalTime = &terminalTime
+	run.Status.DeleteAfter = &deleteAfter
+	run.Labels = map[string]string{terminalTTLLabel: "true"}
+	fc := fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithObjects(append(defaultObjects(), run)...).
+		WithStatusSubresource(run).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Agent:     newTestAgentCaller().withClient(t, fc, "default"),
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+		Now:       func() time.Time { return now },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("Reconcile historical completion cancellation request: %v", err)
+	}
+	got, err := getAgenticRun(r, run.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agenticv1alpha1.DerivePhase(got.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseCompleted ||
+		len(got.Status.Conditions) != 2 {
+		t.Fatalf("historical completion changed for cancellation-only generation: %+v", got.Status.Conditions)
+	}
+	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	if analyzed == nil || analyzed.Status != metav1.ConditionTrue ||
+		analyzed.ObservedGeneration != run.Generation-1 {
+		t.Fatalf("historical analysis condition advanced for cancellation-only generation: %+v", analyzed)
+	}
+	if got.Status.TerminalTime == nil || !got.Status.TerminalTime.Time.Equal(terminalTime.Time) ||
+		got.Status.DeleteAfter == nil || !got.Status.DeleteAfter.Time.Equal(deleteAfter.Time) {
+		t.Fatalf("historical completion TTL moved: terminalTime=%v deleteAfter=%v",
+			got.Status.TerminalTime, got.Status.DeleteAfter)
+	}
+}
+
+func TestStoppedTerminalCleanupRecordsCancellationReasonOnceAndKeepsTTL(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(2_300_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("terminal-cancellation-audit")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	terminalTime := metav1.NewTime(start)
+	deleteAfter := metav1.NewTime(start.Add(14 * 24 * time.Hour))
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonCancelledByUser,
+			Message:            "Run stopped by user",
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonTeardownComplete,
+			LastTransitionTime: metav1.NewTime(start),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	run.Status.TerminalTime = &terminalTime
+	run.Status.DeleteAfter = &deleteAfter
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	audit := &terminalAuditCounter{}
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Config:    cache,
+		Namespace: "default",
+		Audit:     audit,
+		Now:       func() time.Time { return start.Add(time.Second) },
+	}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+	for range 2 {
+		if _, err := r.Reconcile(ctx, request); err != nil {
+			t.Fatalf("Reconcile stopped terminal run: %v", err)
+		}
+	}
+	got, err := getAgenticRun(r, run.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if audit.terminalSpans != 1 ||
+		len(audit.terminalReasons) != 1 ||
+		audit.terminalReasons[0] != reasonCancelledByUser {
+		t.Fatalf("terminal audit = count %d, reasons %v; want one %s span",
+			audit.terminalSpans, audit.terminalReasons, reasonCancelledByUser)
+	}
+	if got.Status.TerminalTime == nil || !got.Status.TerminalTime.Time.Equal(terminalTime.Time) ||
+		got.Status.DeleteAfter == nil || !got.Status.DeleteAfter.Time.Equal(deleteAfter.Time) {
+		t.Fatalf("stopped terminal cleanup moved fixed TTL: terminalTime=%v deleteAfter=%v",
+			got.Status.TerminalTime, got.Status.DeleteAfter)
+	}
+	if got.Labels[terminalTTLLabel] != "true" {
+		t.Fatalf("terminal TTL label = %q, want true", got.Labels[terminalTTLLabel])
+	}
+}
+
+func TestTerminalCancellationWithRevisionFeedbackStillRecordsOutcome(t *testing.T) {
+	tests := []struct {
+		name           string
+		reason         string
+		terminalReason string
+		acceptedStop   bool
+	}{
+		{
+			name:           "accepted CancelledByUser outcome",
+			reason:         reasonCancelledByUser,
+			terminalReason: reasonCancelledByUser,
+			acceptedStop:   true,
+		},
+		{
+			name:           "unaccepted cancellation request",
+			reason:         reasonFailed,
+			terminalReason: "Historical terminal outcome",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			now := time.Unix(2_325_000, 0).UTC()
+			run := testAgenticRun()
+			run.UID = types.UID("terminal-revision-" + strings.ReplaceAll(tc.name, " ", "-"))
+			run.Generation = 5
+			cancelled := true
+			run.Spec.Cancelled = &cancelled
+			run.Spec.RevisionFeedback = "continue from the previous result"
+			run.Spec.Execution = agenticv1alpha1.AgenticRunStep{}
+			run.Status.Conditions = []metav1.Condition{{
+				Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+				Status:             metav1.ConditionFalse,
+				Reason:             tc.reason,
+				Message:            "Historical terminal outcome",
+				ObservedGeneration: run.Generation - 1,
+			}}
+			if tc.acceptedStop {
+				run.Status.Conditions = append(run.Status.Conditions, metav1.Condition{
+					Type:               agenticv1alpha1.AgenticRunConditionStopping,
+					Status:             metav1.ConditionFalse,
+					Reason:             reasonTeardownComplete,
+					LastTransitionTime: metav1.NewTime(now),
+					ObservedGeneration: run.Generation,
+				})
+			}
+			fc := fake.NewClientBuilder().
+				WithScheme(suspensionTestScheme()).
+				WithObjects(append(defaultObjects(), run)...).
+				WithStatusSubresource(run).
+				Build()
+			cache := testCache(t, "bare-pod")
+			audit := &terminalAuditCounter{}
+			r := &AgenticRunReconciler{
+				Client:    fc,
+				APIReader: fc,
+				Agent:     newTestAgentCaller().withClient(t, fc, "default"),
+				Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+				Config:    cache,
+				Namespace: "default",
+				Audit:     audit,
+				Now:       func() time.Time { return now },
+			}
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+
+			if _, err := r.Reconcile(ctx, request); err != nil {
+				t.Fatalf("Reconcile terminal run with cancellation and revision feedback: %v", err)
+			}
+			got, err := getAgenticRun(r, run.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+			if agenticv1alpha1.DerivePhase(got.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed ||
+				analyzed == nil || analyzed.Reason != tc.reason ||
+				analyzed.ObservedGeneration != run.Generation-1 ||
+				got.Status.TerminalTime == nil || got.Status.DeleteAfter == nil ||
+				!got.Status.DeleteAfter.After(got.Status.TerminalTime.Time) ||
+				got.Labels[terminalTTLLabel] != "true" {
+				t.Fatalf("terminal outcome or TTL was not preserved/recorded: %+v", got.Status)
+			}
+			if audit.terminalSpans != 1 ||
+				len(audit.terminalReasons) != 1 ||
+				audit.terminalReasons[0] != tc.terminalReason {
+				t.Fatalf("terminal audit = count %d, reasons %v; want one %s span",
+					audit.terminalSpans, audit.terminalReasons, tc.terminalReason)
+			}
+			var approvals agenticv1alpha1.AgenticRunApprovalList
+			if err := fc.List(ctx, &approvals); err != nil {
+				t.Fatal(err)
+			}
+			if len(approvals.Items) != 0 {
+				t.Fatalf("terminal cancellation request created approvals: %+v", approvals.Items)
+			}
+		})
+	}
+}
+
+func cancellationTestKubeconfig(server string) []byte {
+	return []byte(fmt.Sprintf(`
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: %s
+  name: spoke
+contexts:
+- context:
+    cluster: spoke
+    user: spoke-user
+  name: spoke
+current-context: spoke
+users:
+- name: spoke-user
+  user:
+    token: test-token
+`, server))
+}
+
+func TestDeletedAcceptedCancellationRetainsFinalizerUntilHubAndSpokeConfirmed(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(2_350_000, 0).UTC()
+	now := start.Add(time.Second)
+	run := testAgenticRun()
+	run.UID = types.UID("deleted-cancellation-confirmation")
+	run.Namespace = "test-ns"
+	run.Spec.TargetCluster = "deletion-spoke"
+	run.DeletionTimestamp = &metav1.Time{Time: start}
+	run.Finalizers = []string{rbacCleanupFinalizer, "test/hold"}
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionUnknown,
+			Reason:             reasonInProgress,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonCancelledByUser,
+			LastTransitionTime: metav1.NewTime(start),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+		ClaimName: "held-cancellation-pod",
+		Namespace: "test-ns",
+	}
+	pod := suspensionManagedPod("held-cancellation-pod", "held-cancellation-pod-uid",
+		run.UID, "analysis", corev1.PodRunning)
+	pod.Finalizers = []string{"test/hold"}
+	kubeconfig := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      spokeKubeconfigPrefix + run.Spec.TargetCluster,
+			Namespace: "test-ns",
+		},
+		Data: map[string][]byte{kubeconfigKey: cancellationTestKubeconfig("https://api.spoke.example.com:6443")},
+	}
+	spokeSA := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      sandboxSAName(run, "analysis"),
+			Namespace: spokeManagedNamespace,
+			UID:       types.UID("deleted-cancellation-spoke-sa"),
+			Labels:    map[string]string{LabelRun: string(run.UID)},
+		},
+	}
+	spokeBacking := fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithObjects(spokeSA).
+		Build()
+	forbidden := apierrors.NewForbidden(
+		corev1.Resource("serviceaccounts"),
+		spokeSA.Name,
+		fmt.Errorf("permission denied"),
+	)
+	spokeClient := &spokeCleanupFaultClient{Client: spokeBacking, getErr: forbidden}
+	originalNewClient := NewClientFromConfig
+	NewClientFromConfig = func(*rest.Config) (client.Client, error) {
+		return spokeClient, nil
+	}
+	t.Cleanup(func() { NewClientFromConfig = originalNewClient })
+
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run, pod, kubeconfig).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "test-ns", nil),
+		Namespace: "test-ns",
+		Now:       func() time.Time { return now },
+	}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+
+	result, err := r.Reconcile(ctx, request)
+	if err != nil {
+		t.Fatalf("Reconcile deleted cancelled run: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Fatalf("unconfirmed hub and spoke cleanup result = %+v, want retry", result)
+	}
+	pending := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), pending); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(pending, rbacCleanupFinalizer) {
+		t.Fatalf("unconfirmed cancellation cleanup removed RBAC finalizer: %v", pending.Finalizers)
+	}
+	if stopping := meta.FindStatusCondition(pending.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping); stopping == nil ||
+		stopping.Status != metav1.ConditionTrue || stopping.Reason != reasonCancelledByUser {
+		t.Fatalf("deleted run did not keep its cancellation stop source: %+v", pending.Status.Conditions)
+	}
+
+	var remainingPod corev1.Pod
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(pod), &remainingPod); err != nil {
+		t.Fatalf("read finalizer-held Pod: %v", err)
+	}
+	remainingPod.Finalizers = nil
+	if err := fc.Update(ctx, &remainingPod); err != nil {
+		t.Fatalf("remove test Pod finalizer: %v", err)
+	}
+	if err := fc.Delete(ctx, &remainingPod); err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("remove recovered Pod: %v", err)
+	}
+
+	now = start.Add(2 * time.Second)
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile with spoke access still unconfirmed: %v", err)
+	}
+	pending = &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), pending); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(pending, rbacCleanupFinalizer) {
+		t.Fatalf("unconfirmed spoke cleanup removed RBAC finalizer: %v", pending.Finalizers)
+	}
+
+	spokeClient.getErr = nil
+	now = start.Add(3 * time.Second)
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("Reconcile after hub and spoke cleanup confirmed: %v", err)
+	}
+	got := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), got); err != nil {
+		t.Fatal(err)
+	}
+	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if analyzed == nil || analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonCancelledByUser ||
+		analyzed.Message != "Run stopped by user" ||
+		stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete ||
+		hasRunSandboxInfo(got) {
+		t.Fatalf("confirmed deletion did not finish cancellation cleanup: %+v", got.Status)
+	}
+	if controllerutil.ContainsFinalizer(got, rbacCleanupFinalizer) ||
+		!controllerutil.ContainsFinalizer(got, "test/hold") {
+		t.Fatalf("finalizers after confirmed deletion cleanup = %v, want unrelated hold only", got.Finalizers)
+	}
+	var deletedSA corev1.ServiceAccount
+	if err := spokeBacking.Get(ctx, client.ObjectKeyFromObject(spokeSA), &deletedSA); !apierrors.IsNotFound(err) {
+		t.Fatalf("confirmed spoke SA cleanup returned %v, want NotFound", err)
+	}
+}
+
+func TestDeletedAcceptedCancellationKeepsCancellationSource(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(2_400_000, 0).UTC()
+	deletedAt := metav1.NewTime(start.Add(time.Second))
+	run := testAgenticRun()
+	run.UID = types.UID("deleted-cancellation-run")
+	run.DeletionTimestamp = &deletedAt
+	run.Finalizers = []string{rbacCleanupFinalizer, "test/hold"}
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionUnknown,
+			Reason:             reasonInProgress,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionTrue,
+			Reason:             reasonCancelledByUser,
+			LastTransitionTime: metav1.NewTime(start),
+			ObservedGeneration: run.Generation,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	r := &AgenticRunReconciler{
+		Client:    fc,
+		APIReader: fc,
+		Sandbox:   NewSandboxManager(fc, fc, cache, "default", nil),
+		Namespace: "default",
+		Now:       func() time.Time { return deletedAt.Time },
+	}
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}); err != nil {
+		t.Fatalf("Reconcile deleted cancelled run: %v", err)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	analyzed := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	stopping := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if analyzed == nil || analyzed.Status != metav1.ConditionFalse || analyzed.Reason != reasonCancelledByUser ||
+		analyzed.Message != "Run stopped by user" ||
+		stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete {
+		t.Fatalf("deleted run did not retain cancellation outcome: %+v", got.Status.Conditions)
+	}
+	if emergency := meta.FindStatusCondition(got.Status.Conditions, agenticv1alpha1.AgenticRunConditionEmergencyStopped); emergency != nil {
+		t.Fatalf("deleted cancellation was misrouted into suspension: %+v", emergency)
+	}
+	if controllerutil.ContainsFinalizer(&got, rbacCleanupFinalizer) ||
+		!controllerutil.ContainsFinalizer(&got, "test/hold") {
+		t.Fatalf("finalizers after confirmed cancellation = %v, want unrelated hold only", got.Finalizers)
+	}
+}
+
+func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.T) {
+	tests := []struct {
+		name           string
+		secretData     []byte
+		failureMessage string
+		forbidden      bool
+		wantRelease    bool
+	}{
+		{
+			name:           "gone spoke kubeconfig",
+			failureMessage: "Cancellation cleanup unconfirmed: spoke access for target \"gone-spoke\" is unavailable",
+			wantRelease:    true,
+		},
+		{
+			name:           "unreachable spoke",
+			secretData:     cancellationTestKubeconfig("https://127.0.0.1:1"),
+			failureMessage: "Cancellation cleanup unconfirmed: ServiceAccount openshift-lightspeed-managed/reader: GET: dial tcp 127.0.0.1:1: connect: connection refused",
+			wantRelease:    true,
+		},
+		{
+			name:           "forbidden spoke access",
+			secretData:     cancellationTestKubeconfig("https://api.spoke.example.com:6443"),
+			failureMessage: "Cancellation cleanup unconfirmed: ClusterRoleBinding reader: GET: forbidden",
+			forbidden:      true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			start := time.Unix(2_375_000, 0).UTC()
+			now := start.Add(time.Second)
+			run := testAgenticRun()
+			run.UID = types.UID("degraded-deletion-" + strings.ReplaceAll(tc.name, " ", "-"))
+			run.Namespace = "test-ns"
+			run.Spec.TargetCluster = "degraded-spoke"
+			run.DeletionTimestamp = &metav1.Time{Time: start}
+			run.Finalizers = []string{rbacCleanupFinalizer}
+			cancelled := true
+			run.Spec.Cancelled = &cancelled
+			run.Status.Conditions = []metav1.Condition{
+				{
+					Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+					Status:             metav1.ConditionFalse,
+					Reason:             reasonCancellationFailed,
+					Message:            tc.failureMessage,
+					ObservedGeneration: run.Generation,
+				},
+				{
+					Type:               agenticv1alpha1.AgenticRunConditionStopping,
+					Status:             metav1.ConditionFalse,
+					Reason:             reasonTeardownFailed,
+					Message:            tc.failureMessage,
+					ObservedGeneration: run.Generation,
+				},
+			}
+			objects := []client.Object{run}
+			if tc.secretData != nil {
+				objects = append(objects, &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      spokeKubeconfigPrefix + run.Spec.TargetCluster,
+						Namespace: "test-ns",
+					},
+					Data: map[string][]byte{kubeconfigKey: tc.secretData},
+				})
+			}
+			fc := fake.NewClientBuilder().
+				WithScheme(suspensionTestScheme()).
+				WithObjects(objects...).
+				WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+				Build()
+			if tc.forbidden {
+				originalNewClient := NewClientFromConfig
+				forbidden := apierrors.NewForbidden(
+					corev1.Resource("serviceaccounts"),
+					sandboxSAName(run, "analysis"),
+					fmt.Errorf("permission denied"),
+				)
+				NewClientFromConfig = func(*rest.Config) (client.Client, error) {
+					return &spokeCleanupFaultClient{getErr: forbidden}, nil
+				}
+				t.Cleanup(func() { NewClientFromConfig = originalNewClient })
+			}
+			cache := testCache(t, "bare-pod")
+			recorder := record.NewFakeRecorder(2)
+			r := &AgenticRunReconciler{
+				Client:        fc,
+				APIReader:     fc,
+				Sandbox:       NewSandboxManager(fc, fc, cache, "test-ns", nil),
+				Namespace:     "test-ns",
+				EventRecorder: recorder,
+				Now:           func() time.Time { return now },
+			}
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+
+			result, err := r.Reconcile(ctx, request)
+			if err != nil {
+				t.Fatalf("first deletion cleanup pass: %v", err)
+			}
+			if result.RequeueAfter <= 0 {
+				t.Fatalf("first cleanup result = %+v, want retry within the finalizer window", result)
+			}
+			beforeWindow := &agenticv1alpha1.AgenticRun{}
+			if err := fc.Get(ctx, client.ObjectKeyFromObject(run), beforeWindow); err != nil {
+				t.Fatal(err)
+			}
+			if !controllerutil.ContainsFinalizer(beforeWindow, rbacCleanupFinalizer) {
+				t.Fatalf("finalizer removed before the 60s retry window: %v", beforeWindow.Finalizers)
+			}
+			select {
+			case event := <-recorder.Events:
+				t.Fatalf("event before retry window elapsed = %q, want none", event)
+			default:
+			}
+
+			now = start.Add(rbacCleanupFinalizerRetryWindow)
+			if _, err := r.Reconcile(ctx, request); err != nil {
+				t.Fatalf("deletion cleanup pass at retry-window deadline: %v", err)
+			}
+			afterWindow := &agenticv1alpha1.AgenticRun{}
+			getErr := fc.Get(ctx, client.ObjectKeyFromObject(run), afterWindow)
+			if tc.wantRelease {
+				if !apierrors.IsNotFound(getErr) {
+					t.Fatalf("degraded finalizer release left run with error %v, want NotFound", getErr)
+				}
+			} else {
+				if getErr != nil {
+					t.Fatal(getErr)
+				}
+				if !controllerutil.ContainsFinalizer(afterWindow, rbacCleanupFinalizer) {
+					t.Fatalf("non-degradeable spoke error removed finalizer: %v", afterWindow.Finalizers)
+				}
+				failure := meta.FindStatusCondition(afterWindow.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+				stopping := meta.FindStatusCondition(afterWindow.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+				if failure == nil || failure.Reason != reasonCancellationFailed ||
+					stopping == nil || stopping.Reason != reasonTeardownFailed {
+					t.Fatalf("degraded finalizer handling changed cancellation outcome: %+v", afterWindow.Status.Conditions)
+				}
+			}
+			select {
+			case event := <-recorder.Events:
+				if !tc.wantRelease || !strings.Contains(event, "Warning "+eventReasonSpokeCleanupDegraded) {
+					t.Fatalf("degraded cleanup event = %q, want warning only when release is allowed", event)
+				}
+			default:
+				if tc.wantRelease {
+					t.Fatal("degradable spoke failure released finalizer without a Warning Event")
+				}
+			}
+		})
+	}
+}
+
+func TestDeletedCancellationDegradesOnlyAfterSuspensionEnds(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(2_390_000, 0).UTC()
+	run := testAgenticRun()
+	run.UID = types.UID("suspended-degraded-deletion")
+	run.Namespace = "test-ns"
+	run.Spec.TargetCluster = "gone-spoke"
+	run.DeletionTimestamp = &metav1.Time{Time: start}
+	run.Finalizers = []string{rbacCleanupFinalizer}
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	message := "Cancellation cleanup unconfirmed: spoke access for target \"gone-spoke\" is unavailable"
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonCancellationFailed,
+			Message:            message,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonTeardownFailed,
+			Message:            message,
+			ObservedGeneration: run.Generation,
+		},
+	}
+	config := suspendedConfigAt(start, 1)
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run, config).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	recorder := record.NewFakeRecorder(4)
+	r := &AgenticRunReconciler{
+		Client:        fc,
+		APIReader:     fc,
+		Sandbox:       NewSandboxManager(fc, fc, cache, "test-ns", nil),
+		Namespace:     "test-ns",
+		EventRecorder: recorder,
+		Now:           func() time.Time { return start.Add(rbacCleanupFinalizerRetryWindow) },
+	}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("deletion cleanup while suspended: %v", err)
+	}
+	retained := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), retained); err != nil {
+		t.Fatalf("suspended deletion removed the run: %v", err)
+	}
+	if !controllerutil.ContainsFinalizer(retained, rbacCleanupFinalizer) {
+		t.Fatalf("suspended deletion removed the cleanup finalizer: %v", retained.Finalizers)
+	}
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("suspended deletion emitted a degraded release event: %q", event)
+	default:
+	}
+
+	config.Spec.Suspended = false
+	if err := fc.Update(ctx, config); err != nil {
+		t.Fatalf("clear test suspension: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("deletion cleanup after suspension: %v", err)
+	}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &agenticv1alpha1.AgenticRun{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("deletion after suspension = %v, want NotFound", err)
+	}
+	select {
+	case event := <-recorder.Events:
+		if !strings.Contains(event, "Warning "+eventReasonSpokeCleanupDegraded) {
+			t.Fatalf("degraded cleanup event = %q, want Warning %s", event, eventReasonSpokeCleanupDegraded)
+		}
+	default:
+		t.Fatal("degradable spoke failure after suspension released the finalizer without a Warning Event")
+	}
+}
+
+type failOnceTempLogCleaner struct {
+	callCount int
+}
+
+func (m *failOnceTempLogCleaner) DeleteLogs(context.Context, string) error {
+	m.callCount++
+	if m.callCount == 1 {
+		return fmt.Errorf("collector unavailable")
+	}
+	return nil
+}
+
+func TestDeletedCancellationRetriesTemplogAfterDegradedRBACRelease(t *testing.T) {
+	ctx := context.Background()
+	start := time.Unix(2_380_000, 0).UTC()
+	now := start.Add(rbacCleanupFinalizerRetryWindow)
+	run := testAgenticRun()
+	run.UID = types.UID("deleted-cancellation-templog-retry")
+	run.Namespace = "test-ns"
+	run.Spec.TargetCluster = "gone-spoke"
+	run.DeletionTimestamp = &metav1.Time{Time: start}
+	run.Finalizers = []string{rbacCleanupFinalizer, templogCleanupFinalizer}
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	message := "Cancellation cleanup unconfirmed: spoke access for target \"gone-spoke\" is unavailable"
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonCancellationFailed,
+			Message:            message,
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonTeardownFailed,
+			Message:            message,
+			ObservedGeneration: run.Generation,
+		},
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(suspensionTestScheme()).
+		WithObjects(run).
+		WithStatusSubresource(&agenticv1alpha1.AgenticRun{}).
+		Build()
+	cache := testCache(t, "bare-pod")
+	cleaner := &failOnceTempLogCleaner{}
+	recorder := record.NewFakeRecorder(2)
+	r := &AgenticRunReconciler{
+		Client:        fc,
+		APIReader:     fc,
+		Sandbox:       NewSandboxManager(fc, fc, cache, "test-ns", nil),
+		Namespace:     "test-ns",
+		EventRecorder: recorder,
+		TempLog:       cleaner,
+		Now:           func() time.Time { return now },
+	}
+	request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(run)}
+
+	result, err := r.Reconcile(ctx, request)
+	if err != nil {
+		t.Fatalf("degraded RBAC cleanup and first templog attempt: %v", err)
+	}
+	if result.RequeueAfter != templogCleanupRequeueAfter {
+		t.Fatalf("first templog retry result = %+v, want retry after %s", result, templogCleanupRequeueAfter)
+	}
+	pending := &agenticv1alpha1.AgenticRun{}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), pending); err != nil {
+		t.Fatal(err)
+	}
+	if controllerutil.ContainsFinalizer(pending, rbacCleanupFinalizer) ||
+		!controllerutil.ContainsFinalizer(pending, templogCleanupFinalizer) {
+		t.Fatalf("finalizers after degraded RBAC release = %v, want templog only", pending.Finalizers)
+	}
+	event := <-recorder.Events
+	if !strings.Contains(event, "Warning "+eventReasonSpokeCleanupDegraded) {
+		t.Fatalf("degraded cleanup event = %q, want Warning %s", event, eventReasonSpokeCleanupDegraded)
+	}
+
+	now = start.Add(rbacCleanupFinalizerRetryWindow + time.Second)
+	if result, err = r.Reconcile(ctx, request); err != nil {
+		t.Fatalf("retry templog cleanup after RBAC finalizer release: %v", err)
+	}
+	if result.Requeue || result.RequeueAfter != 0 {
+		t.Fatalf("successful templog cleanup result = %+v, want no requeue", result)
+	}
+	if err := fc.Get(ctx, client.ObjectKeyFromObject(run), &agenticv1alpha1.AgenticRun{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("run after finalizer retries = %v, want NotFound", err)
+	}
+	if cleaner.callCount != 2 {
+		t.Fatalf("DeleteLogs calls = %d, want one failure followed by success", cleaner.callCount)
+	}
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("unexpected event on templog retry = %q", event)
+	default:
+	}
+}
+
 func TestStoppedDeletionRetainsCleanupFinalizerUntilConfirmed(t *testing.T) {
 	ctx := context.Background()
 	now := metav1.NewTime(time.Unix(2_500_000, 0).UTC())
@@ -1669,8 +3094,11 @@ func TestStoppedDeletionRetainsCleanupFinalizerUntilConfirmed(t *testing.T) {
 	if hasRunSandboxInfo(cleaned) {
 		t.Fatalf("confirmed deletion retained sandbox references: %+v", cleaned.Status.Steps)
 	}
-	if stopping := meta.FindStatusCondition(cleaned.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping); stopping == nil || stopping.Reason != reasonTeardownFailed {
-		t.Fatalf("cleanup recovery rewrote the final stop outcome: %+v", stopping)
+	if stopping := meta.FindStatusCondition(cleaned.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping); stopping == nil || stopping.Status != metav1.ConditionFalse || stopping.Reason != reasonTeardownComplete {
+		t.Fatalf("cleanup recovery did not record confirmed teardown: %+v", stopping)
+	}
+	if analyzed := meta.FindStatusCondition(cleaned.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed); analyzed == nil || analyzed.Reason != reasonEmergencyStopFailed {
+		t.Fatalf("cleanup recovery rewrote the final stop outcome: %+v", analyzed)
 	}
 }
 

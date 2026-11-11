@@ -569,8 +569,182 @@ func completeAcceptedStop(t *testing.T, c client.Client, name string) {
 		Message:            "Terminated by global suspension",
 		ObservedGeneration: run.Generation,
 	})
+	run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{}
+	run.Status.Steps.Execution.Sandbox = agenticv1alpha1.SandboxInfo{}
+	run.Status.Steps.Verification.Sandbox = agenticv1alpha1.SandboxInfo{}
+	run.Status.Steps.Escalation.Sandbox = agenticv1alpha1.SandboxInfo{}
 	if err := c.Status().Patch(context.Background(), run, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		t.Fatalf("persist terminal run outcome: %v", err)
+	}
+}
+
+func TestStopCleanupConfirmed(t *testing.T) {
+	runWithState := func(status metav1.ConditionStatus, reason string, retainRefs bool) *agenticv1alpha1.AgenticRun {
+		run := &agenticv1alpha1.AgenticRun{}
+		if reason != "" {
+			run.Status.Conditions = []metav1.Condition{{
+				Type:   agenticv1alpha1.AgenticRunConditionStopping,
+				Status: status,
+				Reason: reason,
+			}}
+		}
+		if retainRefs {
+			run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+				ClaimName: "claim", Namespace: "default",
+			}
+		}
+		return run
+	}
+	for _, tc := range []struct {
+		name string
+		run  *agenticv1alpha1.AgenticRun
+		want bool
+	}{
+		{name: "nil run"},
+		{name: "no stopping and clear refs", run: runWithState(metav1.ConditionFalse, "", false), want: true},
+		{name: "stopping true", run: runWithState(metav1.ConditionTrue, "SystemSuspended", false)},
+		{name: "teardown failed with clear refs", run: runWithState(metav1.ConditionFalse, "TeardownFailed", false)},
+		{name: "teardown complete with clear refs", run: runWithState(metav1.ConditionFalse, "TeardownComplete", false), want: true},
+		{name: "no stopping with retained refs", run: runWithState(metav1.ConditionFalse, "", true)},
+		{name: "stopping true with retained refs", run: runWithState(metav1.ConditionTrue, "SystemSuspended", true)},
+		{name: "teardown failed with retained refs", run: runWithState(metav1.ConditionFalse, "TeardownFailed", true)},
+		{name: "teardown complete with retained refs", run: runWithState(metav1.ConditionFalse, "TeardownComplete", true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agenticrun.StopCleanupConfirmed(tc.run); got != tc.want {
+				t.Fatalf("StopCleanupConfirmed() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPersistRunStopPrecedence(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	config := suspendedConfigAt(8, start, reasonStopping, metav1.ConditionFalse)
+	activation := agenticrun.SuspensionActivation{
+		UID: config.UID, Generation: config.Generation, Start: metav1.NewTime(start),
+	}
+	tests := []struct {
+		name       string
+		run        *agenticv1alpha1.AgenticRun
+		wantReason string
+		wantAt     time.Time
+		unchanged  bool
+	}{
+		{
+			name: "suspension takes over pending cancellation",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("pending-cancellation-takeover")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{{
+					Type:               agenticv1alpha1.AgenticRunConditionStopping,
+					Status:             metav1.ConditionTrue,
+					Reason:             "CancelledByUser",
+					ObservedGeneration: run.Generation,
+					LastTransitionTime: metav1.NewTime(start.Add(-time.Minute)),
+				}}
+				return run
+			}(),
+			wantReason: "SystemSuspended",
+			wantAt:     start,
+		},
+		{
+			name: "final cancellation outcome is preserved",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("final-cancellation-outcome")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+						Status:             metav1.ConditionFalse,
+						Reason:             "CancelledByUser",
+						Message:            "Run stopped by user",
+						ObservedGeneration: run.Generation,
+					},
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionStopping,
+						Status:             metav1.ConditionFalse,
+						Reason:             "TeardownComplete",
+						ObservedGeneration: run.Generation,
+					},
+				}
+				return run
+			}(),
+			wantReason: "TeardownComplete",
+			unchanged:  true,
+		},
+		{
+			name: "final cancellation failure is preserved",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("final-cancellation-failure")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+						Status:             metav1.ConditionFalse,
+						Reason:             "CancellationFailed",
+						Message:            "Cancellation cleanup remained unconfirmed",
+						ObservedGeneration: run.Generation,
+					},
+					{
+						Type:               agenticv1alpha1.AgenticRunConditionStopping,
+						Status:             metav1.ConditionFalse,
+						Reason:             "TeardownFailed",
+						Message:            "Cancellation cleanup remained unconfirmed",
+						ObservedGeneration: run.Generation,
+					},
+				}
+				return run
+			}(),
+			wantReason: "TeardownFailed",
+			unchanged:  true,
+		},
+		{
+			name: "accepted suspension remains suspension",
+			run: func() *agenticv1alpha1.AgenticRun {
+				run := pendingAgenticRun("accepted-suspension")
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+				run.Status.Conditions = []metav1.Condition{{
+					Type:               agenticv1alpha1.AgenticRunConditionStopping,
+					Status:             metav1.ConditionTrue,
+					Reason:             "SystemSuspended",
+					ObservedGeneration: run.Generation,
+					LastTransitionTime: metav1.NewTime(start),
+				}}
+				return run
+			}(),
+			wantReason: "SystemSuspended",
+			wantAt:     start,
+			unchanged:  true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := tc.run.DeepCopy()
+			r, _, _, _, _ := newTestReconciler(t, nil, config.DeepCopy(), tc.run)
+			got, markerSaved, disappeared, err := r.persistRunStop(ctx, tc.run, activation)
+			if err != nil {
+				t.Fatalf("persistRunStop() error = %v", err)
+			}
+			if !markerSaved || disappeared || got == nil {
+				t.Fatalf("persistRunStop() = run %v, markerSaved %v, disappeared %v; want persisted/current run",
+					got != nil, markerSaved, disappeared)
+			}
+			stopping := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+			if stopping.Reason != tc.wantReason ||
+				(!tc.wantAt.IsZero() && !stopping.LastTransitionTime.Time.Equal(tc.wantAt)) {
+				t.Fatalf("Stopping = %+v, want reason %q at %v", stopping, tc.wantReason, tc.wantAt)
+			}
+			if tc.unchanged && !runStatusHistoryEqual(before.Status, got.Status) {
+				t.Fatalf("persistRunStop changed final/accepted stop history: before=%+v after=%+v",
+					before.Status, got.Status)
+			}
+		})
 	}
 }
 
@@ -689,8 +863,8 @@ func TestReconcile_ActivationPendingAgenticRuns(t *testing.T) {
 		t.Fatalf("Suspended observed generation = %d, want %d", suspended.ObservedGeneration, gotConfig.Generation)
 	}
 	safe := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
-	if safe.Status != metav1.ConditionTrue || safe.ObservedGeneration != gotConfig.Generation {
-		t.Fatalf("SafeToResume = %s generation %d, want True generation %d after cleanup and marker acceptance",
+	if safe.Status != metav1.ConditionFalse || safe.ObservedGeneration != gotConfig.Generation {
+		t.Fatalf("SafeToResume = %s generation %d, want False generation %d while the run stop outcome is unresolved",
 			safe.Status, safe.ObservedGeneration, gotConfig.Generation)
 	}
 
@@ -804,9 +978,9 @@ func TestReconcile_AmbiguousTerminalRunGetsAuxiliaryStopMarker(t *testing.T) {
 		agenticv1alpha1.DerivePhase(gotRun.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseCompleted ||
 		gotRun.Status.TerminalTime != nil ||
 		gotRun.Status.DeleteAfter == nil || !gotRun.Status.DeleteAfter.Equal(&originalDeleteAfter) ||
-		suspended.Reason != reasonAdminActivated ||
-		safe.Status != metav1.ConditionTrue {
-		t.Fatalf("auxiliary stop marker changed terminal history or blocked confirmed safety: %+v / %+v / %+v",
+		suspended.Reason != reasonStopping ||
+		safe.Status != metav1.ConditionFalse {
+		t.Fatalf("terminal history changed or unresolved stop safety opened: %+v / %+v / %+v",
 			gotRun.Status, suspended, safe)
 	}
 }
@@ -816,6 +990,10 @@ func TestReconcile_RecoveryPreservesTerminalErrorAndUpdatesSafety(t *testing.T) 
 	now := start.Add(agenticrun.SuspensionStopWindow)
 	config := suspendedConfigAt(5, start, reasonAdminActivatedWithErrors, metav1.ConditionFalse)
 	run := pendingAgenticRun("recover-me")
+	run.Spec.TargetCluster = "spoke-a"
+	run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+		ClaimName: "recover-claim", Namespace: "spoke-ns",
+	}
 	pod := heldManagedPod(run.UID)
 	r, fc, _, statusClient, _ := newTestReconciler(t, &now, config, run, pod)
 	statusClient.holdFinalizedPods = true
@@ -830,13 +1008,22 @@ func TestReconcile_RecoveryPreservesTerminalErrorAndUpdatesSafety(t *testing.T) 
 	if firstSuspended.Reason != reasonAdminActivatedWithErrors || firstSafe.Status != metav1.ConditionFalse {
 		t.Fatalf("unresolved cleanup did not retain unsafe terminal error: %+v / %+v", firstSuspended, firstSafe)
 	}
+	unresolvedRun := getRun(t, fc, run.Name)
+	unresolvedStopping := requireCondition(t, unresolvedRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if unresolvedStopping.Status != metav1.ConditionTrue ||
+		unresolvedRun.Status.Steps.Analysis.Sandbox.ClaimName != "recover-claim" {
+		t.Fatalf("unconfirmed run cleanup did not retain its stop marker and sandbox reference: %+v", unresolvedRun.Status)
+	}
 
 	statusClient.holdFinalizedPods = false
 	removePodFinalizer(t, fc, pod.Name)
 	completeAcceptedStop(t, fc, run.Name)
 	gotRun := getRun(t, fc, run.Name)
-	if !isTerminal(agenticv1alpha1.DerivePhase(gotRun.Status.Conditions)) {
-		t.Fatal("fixture run did not reach its terminal stop outcome")
+	stopping := requireCondition(t, gotRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if !isTerminal(agenticv1alpha1.DerivePhase(gotRun.Status.Conditions)) ||
+		stopping.Status != metav1.ConditionFalse || stopping.Reason != "TeardownComplete" ||
+		!agenticrun.StopCleanupConfirmed(gotRun) {
+		t.Fatalf("background cleanup did not record a confirmed, reference-free run outcome: %+v", gotRun.Status)
 	}
 
 	_, err = reconcileOnce(r)
@@ -852,6 +1039,84 @@ func TestReconcile_RecoveryPreservesTerminalErrorAndUpdatesSafety(t *testing.T) 
 	if recoveredSafe.Status != metav1.ConditionTrue || recoveredSafe.ObservedGeneration != recovered.Generation ||
 		!recoveredSafe.LastTransitionTime.Time.Equal(now) {
 		t.Fatalf("recovery did not open safety at the injected time after cleanup confirmation: %+v", recoveredSafe)
+	}
+}
+
+func TestReconcile_CancellationFailureStaysFinalWhenSafetyRecovers(t *testing.T) {
+	start := time.Date(2026, 10, 26, 12, 4, 30, 0, time.UTC)
+	now := start.Add(agenticrun.SuspensionStopWindow)
+	config := suspendedConfigAt(6, start, reasonAdminActivatedWithErrors, metav1.ConditionFalse)
+	run := pendingAgenticRun("cancellation-failed")
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	run.Spec.TargetCluster = "spoke-a"
+	run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+		ClaimName: "cancellation-claim", Namespace: "spoke-ns",
+	}
+	run.Status.Conditions = []metav1.Condition{
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             "CancellationFailed",
+			Message:            "Sandbox cleanup could not be confirmed",
+			ObservedGeneration: run.Generation,
+		},
+		{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             "TeardownFailed",
+			Message:            "Sandbox workload and access cleanup could not be confirmed",
+			ObservedGeneration: run.Generation,
+		},
+	}
+	r, fc, _, _, _ := newTestReconciler(t, &now, config, run)
+
+	if _, err := reconcileOnce(r); err != nil {
+		t.Fatalf("unresolved cancellation failure Reconcile() error = %v", err)
+	}
+	first := getConfig(t, fc)
+	firstSuspended := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+	firstSafe := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+	failedRun := getRun(t, fc, run.Name)
+	failedCondition := requireCondition(t, failedRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	if firstSuspended.Reason != reasonAdminActivatedWithErrors || firstSafe.Status != metav1.ConditionFalse ||
+		agenticv1alpha1.DerivePhase(failedRun.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed ||
+		failedCondition.Reason != "CancellationFailed" ||
+		failedRun.Status.Steps.Analysis.Sandbox.ClaimName != "cancellation-claim" {
+		t.Fatalf("cancellation failure with retained references did not remain unresolved: %+v / %+v / %+v",
+			firstSuspended, firstSafe, failedRun.Status)
+	}
+
+	base := failedRun.DeepCopy()
+	meta.SetStatusCondition(&failedRun.Status.Conditions, metav1.Condition{
+		Type:               agenticv1alpha1.AgenticRunConditionStopping,
+		Status:             metav1.ConditionFalse,
+		Reason:             "TeardownComplete",
+		Message:            "Sandbox workload and access cleanup confirmed",
+		ObservedGeneration: failedRun.Generation,
+	})
+	failedRun.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{}
+	if err := fc.Status().Patch(context.Background(), failedRun, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		t.Fatalf("record late cancellation cleanup confirmation: %v", err)
+	}
+
+	if _, err := reconcileOnce(r); err != nil {
+		t.Fatalf("late cancellation cleanup Reconcile() error = %v", err)
+	}
+	recovered := getConfig(t, fc)
+	recoveredSuspended := requireCondition(t, recovered.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+	recoveredSafe := requireCondition(t, recovered.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+	recoveredRun := getRun(t, fc, run.Name)
+	recoveredFailure := requireCondition(t, recoveredRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
+	recoveredStopping := requireCondition(t, recoveredRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
+	if recoveredSuspended.Reason != reasonAdminActivatedWithErrors ||
+		recoveredSafe.Status != metav1.ConditionTrue ||
+		!agenticrun.StopCleanupConfirmed(recoveredRun) ||
+		agenticv1alpha1.DerivePhase(recoveredRun.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed ||
+		!reflect.DeepEqual(recoveredFailure, failedCondition) ||
+		recoveredStopping.Status != metav1.ConditionFalse || recoveredStopping.Reason != "TeardownComplete" {
+		t.Fatalf("late cleanup changed the cancellation failure outcome or failed to open safety: %+v / %+v / %+v",
+			recoveredSuspended, recoveredSafe, recoveredRun.Status)
 	}
 }
 
@@ -948,8 +1213,8 @@ func TestReconcile_RunMarkerConflictPreservesNaturalCompletionAndRetriesTerminal
 	recoveredSuspended := requireCondition(t, recoveredConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
 	recoveredSafe := requireCondition(t, recoveredConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
 	if recoveredSuspended.Reason != reasonAdminActivatedWithErrors ||
-		recoveredSafe.Status != metav1.ConditionTrue {
-		t.Fatalf("terminal retry changed error outcome or failed to open safety after durable acceptance: %+v / %+v",
+		recoveredSafe.Status != metav1.ConditionFalse {
+		t.Fatalf("terminal acceptance opened safety before cleanup confirmation: %+v / %+v",
 			recoveredSuspended, recoveredSafe)
 	}
 	recoveredRun := getRun(t, fc, run.Name)
@@ -1507,10 +1772,11 @@ func TestReconcile_ActivationReadFailuresRemainFailClosed(t *testing.T) {
 		})
 	}
 }
-func TestReconcile_PreservesTerminalHistoryAndDistinguishesRemoteEvidence(t *testing.T) {
+
+func TestReconcile_PreservesTerminalHistoryAndUsesRecordedStopState(t *testing.T) {
 	base := time.Date(2026, 10, 26, 12, 8, 0, 0, time.UTC)
 
-	t.Run("spoke target alone is not evidence", func(t *testing.T) {
+	t.Run("remote target without unresolved stop state permits safety", func(t *testing.T) {
 		now := base
 		config := testConfig(true)
 		run := emergencyStoppedAgenticRun("target-only")
@@ -1526,14 +1792,14 @@ func TestReconcile_PreservesTerminalHistoryAndDistinguishesRemoteEvidence(t *tes
 		suspended := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
 		safe := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
 		if suspended.Reason != reasonAdminActivated || safe.Status != metav1.ConditionTrue {
-			t.Fatalf("spoke target alone blocked confirmed hub cleanup: %+v / %+v", suspended, safe)
+			t.Fatalf("remote target alone blocked confirmed hub cleanup: %+v / %+v", suspended, safe)
 		}
 		if got := getRun(t, fc, run.Name); !runStatusHistoryEqual(got.Status, original.Status) {
 			t.Fatalf("global cleanup changed terminal run history: got %+v, want %+v", got.Status, original.Status)
 		}
 	})
 
-	t.Run("Stopping Unknown alone is not remote evidence", func(t *testing.T) {
+	t.Run("unknown Stopping status keeps affected run unresolved", func(t *testing.T) {
 		now := base
 		config := testConfig(true)
 		run := emergencyStoppedAgenticRun("stopping-only")
@@ -1550,11 +1816,12 @@ func TestReconcile_PreservesTerminalHistoryAndDistinguishesRemoteEvidence(t *tes
 		gotConfig := getConfig(t, fc)
 		suspended := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
 		safe := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
-		if suspended.Reason != reasonAdminActivated || safe.Status != metav1.ConditionTrue {
-			t.Fatalf("Stopping condition alone blocked confirmed hub cleanup: %+v / %+v", suspended, safe)
+		if suspended.Reason != reasonStopping || safe.Status != metav1.ConditionFalse {
+			t.Fatalf("unknown Stopping state did not keep an affected run unresolved: %+v / %+v", suspended, safe)
 		}
 	})
-	t.Run("annotation-only and condition-only evidence block safety", func(t *testing.T) {
+
+	t.Run("annotation and active workflow condition do not replace recorded stop state", func(t *testing.T) {
 		cases := []struct {
 			name      string
 			configure func(*agenticv1alpha1.AgenticRun)
@@ -1590,47 +1857,89 @@ func TestReconcile_PreservesTerminalHistoryAndDistinguishesRemoteEvidence(t *tes
 				gotConfig := getConfig(t, fc)
 				suspended := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
 				safe := requireCondition(t, gotConfig.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
-				if suspended.Reason != reasonStopping || safe.Status != metav1.ConditionFalse {
-					t.Fatalf("%s evidence did not block safety: %+v / %+v", tc.name, suspended, safe)
+				if suspended.Reason != reasonAdminActivated || safe.Status != metav1.ConditionTrue {
+					t.Fatalf("%s without retained refs or unresolved Stopping state blocked safety: %+v / %+v", tc.name, suspended, safe)
 				}
 			})
 		}
 	})
 
-	t.Run("recorded remote sandbox remains unverified", func(t *testing.T) {
+	t.Run("affected spoke run with retained references stays unresolved", func(t *testing.T) {
 		now := base
 		config := testConfig(true)
-		run := completedAgenticRun("known-remote", "spoke-b")
-		run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{ClaimName: "known-claim", Namespace: "default"}
-		original := run.DeepCopy()
+		run := pendingAgenticRun("known-remote")
+		run.Spec.TargetCluster = "spoke-b"
+		run.Annotations = map[string]string{"agentic.openshift.io/rbac-namespaces": "remote-ns"}
+		run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+			ClaimName: "known-claim", Namespace: "spoke-ns",
+		}
 		r, fc, _, _, _ := newTestReconciler(t, &now, config, run)
 
-		_, err := reconcileOnce(r)
-		if err != nil {
-			t.Fatalf("first Reconcile() error = %v", err)
+		if _, err := reconcileOnce(r); err != nil {
+			t.Fatalf("initial Reconcile() error = %v", err)
 		}
 		first := getConfig(t, fc)
 		firstSuspended := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
 		firstSafe := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
 		if firstSuspended.Reason != reasonStopping || firstSafe.Status != metav1.ConditionFalse {
-			t.Fatalf("known remote sandbox was treated as confirmed: %+v / %+v", firstSuspended, firstSafe)
+			t.Fatalf("affected spoke run with retained references was treated as resolved: %+v / %+v",
+				firstSuspended, firstSafe)
 		}
 
 		now = base.Add(agenticrun.SuspensionStopWindow)
-		_, err = reconcileOnce(r)
-		if err != nil {
+		if _, err := reconcileOnce(r); err != nil {
 			t.Fatalf("deadline Reconcile() error = %v", err)
 		}
 		got := getConfig(t, fc)
 		suspended := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
 		safe := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+		gotRun := getRun(t, fc, run.Name)
+		stopping := requireCondition(t, gotRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 		if suspended.Reason != reasonAdminActivatedWithErrors ||
-			!strings.Contains(suspended.Message, "known-claim") ||
-			safe.Status != metav1.ConditionFalse {
-			t.Fatalf("deadline failed to report unverified remote evidence: %+v / %+v", suspended, safe)
+			!strings.Contains(suspended.Message, "run stop unresolved") ||
+			!strings.Contains(suspended.Message, run.Name) ||
+			safe.Status != metav1.ConditionFalse ||
+			stopping.Status != metav1.ConditionTrue ||
+			gotRun.Status.Steps.Analysis.Sandbox.ClaimName != "known-claim" {
+			t.Fatalf("deadline did not remain blocked by the recorded unresolved run state: %+v / %+v / %+v",
+				suspended, safe, gotRun.Status)
 		}
-		if gotRun := getRun(t, fc, run.Name); !runStatusHistoryEqual(gotRun.Status, original.Status) {
-			t.Fatalf("global cleanup changed terminal run history: got %+v, want %+v", gotRun.Status, original.Status)
+	})
+
+	t.Run("run controller confirms spoke cleanup before the deadline", func(t *testing.T) {
+		now := base
+		config := testConfig(true)
+		run := pendingAgenticRun("confirmed-spoke")
+		run.Spec.TargetCluster = "spoke-c"
+		run.Annotations = map[string]string{"agentic.openshift.io/rbac-namespaces": "remote-ns"}
+		run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+			ClaimName: "confirmed-claim", Namespace: "spoke-ns",
+		}
+		r, fc, _, _, _ := newTestReconciler(t, &now, config, run)
+
+		if _, err := reconcileOnce(r); err != nil {
+			t.Fatalf("initial Reconcile() error = %v", err)
+		}
+		first := getConfig(t, fc)
+		firstSuspended := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+		firstSafe := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+		if firstSuspended.Reason != reasonStopping || firstSafe.Status != metav1.ConditionFalse {
+			t.Fatalf("unconfirmed spoke cleanup did not keep safety closed: %+v / %+v", firstSuspended, firstSafe)
+		}
+
+		completeAcceptedStop(t, fc, run.Name)
+		now = base.Add(time.Second)
+		if !agenticrun.StopCleanupConfirmed(getRun(t, fc, run.Name)) {
+			t.Fatal("run controller did not record confirmed spoke cleanup before the deadline")
+		}
+		if _, err := reconcileOnce(r); err != nil {
+			t.Fatalf("confirmed spoke cleanup Reconcile() error = %v", err)
+		}
+		got := getConfig(t, fc)
+		suspended := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+		safe := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+		if suspended.Reason != reasonAdminActivated || safe.Status != metav1.ConditionTrue {
+			t.Fatalf("recorded spoke cleanup did not open safety before the deadline: %+v / %+v", suspended, safe)
 		}
 	})
 }

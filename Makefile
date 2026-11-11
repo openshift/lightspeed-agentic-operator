@@ -135,6 +135,10 @@ build: fmt vet ## Build manager binary to bin/manager.
 manifests: controller-gen ## Regenerate CRD YAML and RBAC ClusterRole (do not edit role.yaml by hand).
 	$(CONTROLLER_GEN) rbac:roleName=agentic-operator-manager-role crd paths=./api/v1alpha1/... paths=./controller/... output:crd:artifacts:config=config/crd/bases output:rbac:artifacts:config=config/rbac
 
+.PHONY: generate
+generate: controller-gen ## Generate DeepCopy implementations.
+	$(CONTROLLER_GEN) object paths=./api/v1alpha1/...
+
 ##@ Deployment
 # Same pattern as lightspeed-operator: `kustomize build config/crd | kubectl apply`
 # (see lightspeed-operator Makefile install / uninstall).

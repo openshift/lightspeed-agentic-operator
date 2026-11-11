@@ -102,6 +102,23 @@ func TestPatchSandboxInfoRejectsAcceptedStopAfterResumption(t *testing.T) {
 	}
 }
 
+func TestPatchSandboxInfoRejectsCancellationRequest(t *testing.T) {
+	run := testSandboxAgenticRun()
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	caller := newTestSandboxAgentCallerWithAgenticRun(&mockSandboxProvider{}, run)
+	if err := caller.patchSandboxInfo(context.Background(), run, "analysis", "late-sandbox"); err != errStopAccepted {
+		t.Fatalf("patchSandboxInfo error = %v, want %v", err, errStopAccepted)
+	}
+	var got agenticv1alpha1.AgenticRun
+	if err := caller.K8sClient.Get(context.Background(), client.ObjectKeyFromObject(run), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Steps.Analysis.Sandbox != (agenticv1alpha1.SandboxInfo{}) {
+		t.Fatalf("cancellation request received sandbox info: %+v", got.Status.Steps.Analysis.Sandbox)
+	}
+}
+
 func TestPatchSandboxInfoRetriesStatusConflict(t *testing.T) {
 	run := testSandboxAgenticRun()
 	attempts := 0

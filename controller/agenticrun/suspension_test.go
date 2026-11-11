@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -912,5 +913,71 @@ func TestCleanupSuspensionRejectsUnverifiedReader(t *testing.T) {
 	got, err := manager.CleanupSuspension(context.Background(), "uid-without-reader", nil)
 	if err == nil || got.Confirmed() || len(got.Unverified) == 0 {
 		t.Fatalf("missing uncached reader was treated as success: result=%+v err=%v", got, err)
+	}
+}
+
+func TestRunStopCleanupPassConfirmsNameBasedSpokeAccess(t *testing.T) {
+	run := testAgenticRun()
+	run.UID = types.UID("uid-stop-spoke-pass")
+	run.Spec.TargetCluster = "cleanup-spoke"
+	kubeconfig := []byte(`
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://api.spoke.example.com:6443
+  name: spoke
+contexts:
+- context:
+    cluster: spoke
+    user: spoke-user
+  name: spoke
+current-context: spoke
+users:
+- name: spoke-user
+  user:
+    token: test-token
+`)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      spokeKubeconfigPrefix + run.Spec.TargetCluster,
+			Namespace: "default",
+		},
+		Data: map[string][]byte{kubeconfigKey: kubeconfig},
+	}
+	hubClient := fake.NewClientBuilder().WithScheme(suspensionTestScheme()).WithObjects(secret).Build()
+	spokeClient := &listCountingClient{
+		Client: fake.NewClientBuilder().WithScheme(testScheme()).WithObjects(&corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      sandboxSAName(run, "analysis"),
+				Namespace: spokeManagedNamespace,
+				UID:       types.UID("analysis-sa-uid"),
+				Labels:    spokeLabels(string(run.UID), run.Name, run.Spec.TargetCluster, "sandbox-sa"),
+			},
+		}).Build(),
+	}
+
+	originalNewClient := NewClientFromConfig
+	NewClientFromConfig = func(_ *rest.Config) (client.Client, error) {
+		return spokeClient, nil
+	}
+	t.Cleanup(func() { NewClientFromConfig = originalNewClient })
+
+	reconciler := &AgenticRunReconciler{
+		Client:    hubClient,
+		Sandbox:   NewSandboxManager(hubClient, hubClient, testCache(t, "bare-pod"), "default", nil),
+		Namespace: "default",
+	}
+	report, err := reconciler.runStopCleanupPass(context.Background(), run, cleanupTimeout)
+	if err != nil || !report.Confirmed() {
+		t.Fatalf("run-stop cleanup report = %+v, err = %v", report, err)
+	}
+	if spokeClient.listCalls != 0 {
+		t.Fatalf("spoke List calls = %d, want 0", spokeClient.listCalls)
+	}
+	var remaining corev1.ServiceAccount
+	key := types.NamespacedName{Name: sandboxSAName(run, "analysis"), Namespace: spokeManagedNamespace}
+	if err := spokeClient.Get(context.Background(), key, &remaining); !apierrors.IsNotFound(err) {
+		t.Fatalf("spoke ServiceAccount remains after run-stop cleanup: %v", err)
 	}
 }

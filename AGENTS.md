@@ -49,6 +49,7 @@ make build         # Build the operator binary (bin/manager)
 make test          # Unit tests (always use make, not go test directly)
 make test-e2e      # E2E tests (requires cluster + running operator)
 make manifests     # Regenerate CRD YAML and RBAC ClusterRole
+make generate      # Regenerate DeepCopy implementations
 make api-lint      # Kube API linter on api/ types (golangci-lint)
 make fmt            # go fmt
 make vet            # go vet
