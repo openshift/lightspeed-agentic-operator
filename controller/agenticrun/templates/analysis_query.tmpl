@@ -53,6 +53,10 @@ When more than one solution exists, propose multiple remediation options. For ea
    **Cross-check** before finalizing:
    - Every RBAC rule must match a planned action. Its justification must identify the exact MCP tool call (name and arguments) or the `kubectl`/`oc` command.
    - Every command must have additional RBAC for its modifications and subresource access. Ordinary reads rely on existing access. Check each command against the mapping above.
+   - Never emit a rule with empty `resources` or `verbs` arrays. If you are not certain a permission is needed, omit the rule entirely — it will be dropped, not defaulted.
+
+   - Good: `{"apiGroups": ["apps"], "resources": ["deployments"], "verbs": ["patch"], "resourceNames": ["foo"], "justification": "kubectl patch deployment/foo -n production"}`
+   - Bad: `{"apiGroups": ["route.openshift.io"], "resources": [], "verbs": [], "justification": "May need to list cluster-wide route info"}` — a speculative placeholder that fails validation.
 {{- end}}
 {{- if .HasVerification}}
 
