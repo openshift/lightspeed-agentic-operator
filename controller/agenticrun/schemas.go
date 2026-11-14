@@ -127,10 +127,10 @@ var AnalysisOutputSchema = json.RawMessage(schemaReplacer.Replace(`{
                   "type": "object",
                   "properties": {
                     "namespace": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63, "description": "Target namespace for this rule. Must be a valid Kubernetes namespace name (lowercase alphanumeric and hyphens, no wildcards)." },
-                    "apiGroups": { "type": "array", "items": { "type": "string" }, "description": "API groups (e.g., '', 'apps', 'batch'). Use empty string '' for the core API group (pods, services, configmaps, etc.)" },
-                    "resources": { "type": "array", "items": { "type": "string" }, "description": "Resource types (e.g., 'pods', 'deployments', 'configmaps')" },
+                    "apiGroups": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "API groups (e.g., '', 'apps', 'batch'). Use empty string '' for the core API group (pods, services, configmaps, etc.). Non-empty — if you cannot name the API group, omit the entire rule" },
+                    "resources": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Resource types (e.g., 'pods', 'deployments', 'configmaps'). Non-empty — if you cannot name specific resources, omit the entire rule" },
                     "resourceNames": { "type": "array", "items": { "type": "string" }, "description": "Restrict to specific named resources. Omit to allow all resources of the given type" },
-                    "verbs": { "type": "array", "items": { "type": "string" }, "description": "Allowed operations (e.g., 'get', 'list', 'patch', 'delete')" },
+                    "verbs": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Allowed operations (e.g., 'get', 'list', 'patch', 'delete'). Non-empty — if you cannot name specific verbs, omit the entire rule" },
                     "justification": { "type": "string", "maxLength": {{maxLenRBACJustification}}, "description": "Why this permission is needed (e.g., 'Need to patch deployment to increase memory limit')" }
                   },
                   "required": ["namespace", "apiGroups", "resources", "verbs", "justification"]
@@ -142,10 +142,10 @@ var AnalysisOutputSchema = json.RawMessage(schemaReplacer.Replace(`{
                 "items": {
                   "type": "object",
                   "properties": {
-                    "apiGroups": { "type": "array", "items": { "type": "string" }, "description": "API groups (e.g., '', 'apps', 'batch'). Use empty string '' for the core API group (pods, services, configmaps, etc.)" },
-                    "resources": { "type": "array", "items": { "type": "string" }, "description": "Resource types (e.g., 'nodes', 'clusterroles')" },
+                    "apiGroups": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "API groups (e.g., '', 'apps', 'batch'). Use empty string '' for the core API group (pods, services, configmaps, etc.). Non-empty — if you cannot name the API group, omit the entire rule" },
+                    "resources": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Resource types (e.g., 'nodes', 'clusterroles'). Non-empty — if you cannot name specific resources, omit the entire rule" },
                     "resourceNames": { "type": "array", "items": { "type": "string" }, "description": "Restrict to specific named resources. Omit to allow all resources of the given type" },
-                    "verbs": { "type": "array", "items": { "type": "string" }, "description": "Allowed operations (e.g., 'get', 'list', 'patch', 'delete')" },
+                    "verbs": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Allowed operations (e.g., 'get', 'list', 'patch', 'delete'). Non-empty — if you cannot name specific verbs, omit the entire rule" },
                     "justification": { "type": "string", "maxLength": {{maxLenRBACJustification}}, "description": "Why this permission is needed" }
                   },
                   "required": ["apiGroups", "resources", "verbs", "justification"]

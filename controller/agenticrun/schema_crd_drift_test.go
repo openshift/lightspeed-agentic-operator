@@ -462,3 +462,74 @@ func requiredSet(v any) map[string]bool {
 	}
 	return out
 }
+
+// TestSchemasCoverCRDRBACMinItems guards OLS-3465: the CRD requires
+// RBACRule apiGroups/resources/verbs to be non-empty (MinItems=1), and the
+// LLM analysis output schema must declare the same minItems so structured
+// output and shaping validation reject hedged empty-array rules at the
+// source instead of losing the entire AnalysisResult at publish.
+func TestSchemasCoverCRDRBACMinItems(t *testing.T) {
+	crdPath := filepath.Join(crdBasesDir(t), "agentic.openshift.io_analysisresults.yaml")
+	raw, err := os.ReadFile(crdPath)
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(raw, &crd); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+
+	var llm map[string]any
+	if err := json.Unmarshal(AnalysisOutputSchema, &llm); err != nil {
+		t.Fatalf("unmarshal LLM schema: %v", err)
+	}
+
+	for _, v := range crd.Spec.Versions {
+		if v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+		status, ok := v.Schema.OpenAPIV3Schema.Properties["status"]
+		if !ok {
+			continue
+		}
+		options, ok := status.Properties["options"]
+		if !ok || options.Items == nil || options.Items.Schema == nil {
+			continue
+		}
+		rbac, ok := options.Items.Schema.Properties["rbac"]
+		if !ok {
+			continue
+		}
+		for _, scope := range []string{"namespaceScoped", "clusterScoped"} {
+			scopeProps, ok := rbac.Properties[scope]
+			if !ok || scopeProps.Items == nil || scopeProps.Items.Schema == nil {
+				continue
+			}
+			crdRule := scopeProps.Items.Schema
+			llmRuleProps, ok := digObject(llm, "properties", "options", "items", "properties", "rbac", "properties", scope, "items", "properties")
+			if !ok {
+				t.Errorf("LLM schema is missing options[].rbac.%s items properties", scope)
+				continue
+			}
+			for _, field := range []string{"apiGroups", "resources", "verbs"} {
+				crdField, ok := crdRule.Properties[field]
+				if !ok {
+					t.Errorf("CRD options[].rbac.%s[] is missing %s", scope, field)
+					continue
+				}
+				if crdField.MinItems == nil || *crdField.MinItems != 1 {
+					t.Errorf("CRD options[].rbac.%s[].%s must set MinItems=1", scope, field)
+				}
+				llmField, ok := llmRuleProps[field].(map[string]any)
+				if !ok {
+					t.Errorf("LLM schema options[].rbac.%s[] is missing %s", scope, field)
+					continue
+				}
+				if minItems, ok := llmField["minItems"].(float64); !ok || minItems != 1 {
+					t.Errorf("LLM schema options[].rbac.%s[].%s must declare minItems: 1 to match the CRD", scope, field)
+				}
+			}
+		}
+	}
+}
