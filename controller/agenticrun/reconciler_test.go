@@ -2651,10 +2651,11 @@ func TestDeletedAcceptedCancellationKeepsCancellationSource(t *testing.T) {
 	}
 }
 
-func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.T) {
+func TestDeletedStopDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.T) {
 	tests := []struct {
 		name           string
 		secretData     []byte
+		failureReason  string
 		failureMessage string
 		forbidden      bool
 		wantRelease    bool
@@ -2671,6 +2672,21 @@ func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.
 			wantRelease:    true,
 		},
 		{
+			// The cancellation deadline records a diagnostic without the spoke
+			// transport error; the live probe must still qualify the release.
+			name:           "unreachable spoke after cancellation deadline",
+			secretData:     cancellationTestKubeconfig("https://127.0.0.1:1"),
+			failureMessage: "Cancellation cleanup unconfirmed: analysis sandbox spoke-ns/claim; stop deadline reached",
+			wantRelease:    true,
+		},
+		{
+			name:           "unreachable spoke after suspension failure",
+			secretData:     cancellationTestKubeconfig("https://127.0.0.1:1"),
+			failureReason:  reasonEmergencyStopFailed,
+			failureMessage: "Sandbox cleanup remains unconfirmed after the suspension window",
+			wantRelease:    true,
+		},
+		{
 			name:           "forbidden spoke access",
 			secretData:     cancellationTestKubeconfig("https://api.spoke.example.com:6443"),
 			failureMessage: "Cancellation cleanup unconfirmed: ClusterRoleBinding reader: GET: forbidden",
@@ -2679,6 +2695,10 @@ func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			failureReason := tc.failureReason
+			if failureReason == "" {
+				failureReason = reasonCancellationFailed
+			}
 			ctx := context.Background()
 			start := time.Unix(2_375_000, 0).UTC()
 			now := start.Add(time.Second)
@@ -2688,13 +2708,15 @@ func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.
 			run.Spec.TargetCluster = "degraded-spoke"
 			run.DeletionTimestamp = &metav1.Time{Time: start}
 			run.Finalizers = []string{rbacCleanupFinalizer}
-			cancelled := true
-			run.Spec.Cancelled = &cancelled
+			if failureReason == reasonCancellationFailed {
+				cancelled := true
+				run.Spec.Cancelled = &cancelled
+			}
 			run.Status.Conditions = []metav1.Condition{
 				{
 					Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
 					Status:             metav1.ConditionFalse,
-					Reason:             reasonCancellationFailed,
+					Reason:             failureReason,
 					Message:            tc.failureMessage,
 					ObservedGeneration: run.Generation,
 				},
@@ -2784,9 +2806,9 @@ func TestDeletedCancellationDegradesOnlyAfterBoundedSpokeRetryWindow(t *testing.
 				}
 				failure := meta.FindStatusCondition(afterWindow.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
 				stopping := meta.FindStatusCondition(afterWindow.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
-				if failure == nil || failure.Reason != reasonCancellationFailed ||
+				if failure == nil || failure.Reason != failureReason ||
 					stopping == nil || stopping.Reason != reasonTeardownFailed {
-					t.Fatalf("degraded finalizer handling changed cancellation outcome: %+v", afterWindow.Status.Conditions)
+					t.Fatalf("degraded finalizer handling changed the stop outcome: %+v", afterWindow.Status.Conditions)
 				}
 			}
 			select {

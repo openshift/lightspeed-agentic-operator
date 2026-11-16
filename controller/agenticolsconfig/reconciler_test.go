@@ -1079,11 +1079,13 @@ func TestReconcile_CancellationFailureStaysFinalWhenSafetyRecovers(t *testing.T)
 	firstSafe := requireCondition(t, first.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
 	failedRun := getRun(t, fc, run.Name)
 	failedCondition := requireCondition(t, failedRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
-	if firstSuspended.Reason != reasonAdminActivatedWithErrors || firstSafe.Status != metav1.ConditionFalse ||
+	if firstSuspended.Reason != reasonAdminActivatedWithErrors ||
+		!strings.Contains(firstSuspended.Message, "run stop unverified: default/cancellation-failed") ||
+		firstSafe.Status != metav1.ConditionTrue || firstSafe.Reason != reasonRunCleanupUnverified ||
 		agenticv1alpha1.DerivePhase(failedRun.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed ||
 		failedCondition.Reason != "CancellationFailed" ||
 		failedRun.Status.Steps.Analysis.Sandbox.ClaimName != "cancellation-claim" {
-		t.Fatalf("cancellation failure with retained references did not remain unresolved: %+v / %+v / %+v",
+		t.Fatalf("recorded cancellation failure was not reported as unverified without blocking resumption: %+v / %+v / %+v",
 			firstSuspended, firstSafe, failedRun.Status)
 	}
 
@@ -1110,7 +1112,7 @@ func TestReconcile_CancellationFailureStaysFinalWhenSafetyRecovers(t *testing.T)
 	recoveredFailure := requireCondition(t, recoveredRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionAnalyzed)
 	recoveredStopping := requireCondition(t, recoveredRun.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	if recoveredSuspended.Reason != reasonAdminActivatedWithErrors ||
-		recoveredSafe.Status != metav1.ConditionTrue ||
+		recoveredSafe.Status != metav1.ConditionTrue || recoveredSafe.Reason != reasonCleanupConfirmed ||
 		!agenticrun.StopCleanupConfirmed(recoveredRun) ||
 		agenticv1alpha1.DerivePhase(recoveredRun.Status.Conditions) != agenticv1alpha1.AgenticRunPhaseFailed ||
 		!reflect.DeepEqual(recoveredFailure, failedCondition) ||
@@ -1902,6 +1904,60 @@ func TestReconcile_PreservesTerminalHistoryAndUsesRecordedStopState(t *testing.T
 			stopping.Status != metav1.ConditionTrue ||
 			gotRun.Status.Steps.Analysis.Sandbox.ClaimName != "known-claim" {
 			t.Fatalf("deadline did not remain blocked by the recorded unresolved run state: %+v / %+v / %+v",
+				suspended, safe, gotRun.Status)
+		}
+	})
+
+	t.Run("recorded suspension teardown failure reports errors without blocking resumption", func(t *testing.T) {
+		now := base
+		config := testConfig(true)
+		run := pendingAgenticRun("lost-spoke")
+		run.Spec.TargetCluster = "spoke-lost"
+		run.Annotations = map[string]string{"agentic.openshift.io/rbac-namespaces": "remote-ns"}
+		run.Status.Steps.Analysis.Sandbox = agenticv1alpha1.SandboxInfo{
+			ClaimName: "lost-claim", Namespace: "spoke-ns",
+		}
+		r, fc, _, _, _ := newTestReconciler(t, &now, config, run)
+
+		if _, err := reconcileOnce(r); err != nil {
+			t.Fatalf("initial Reconcile() error = %v", err)
+		}
+
+		// The run controller records the deadline failure for a spoke it cannot reach.
+		failed := getRun(t, fc, run.Name)
+		failedBase := failed.DeepCopy()
+		meta.SetStatusCondition(&failed.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionStopping,
+			Status:             metav1.ConditionFalse,
+			Reason:             "TeardownFailed",
+			Message:            "Sandbox cleanup remains unconfirmed after the suspension window",
+			ObservedGeneration: failed.Generation,
+		})
+		meta.SetStatusCondition(&failed.Status.Conditions, metav1.Condition{
+			Type:               agenticv1alpha1.AgenticRunConditionAnalyzed,
+			Status:             metav1.ConditionFalse,
+			Reason:             "EmergencyStopFailed",
+			Message:            "Sandbox cleanup could not be confirmed; see suspension diagnostics",
+			ObservedGeneration: failed.Generation,
+		})
+		if err := fc.Status().Patch(context.Background(), failed, client.MergeFromWithOptions(failedBase, client.MergeFromWithOptimisticLock{})); err != nil {
+			t.Fatalf("record run stop failure: %v", err)
+		}
+
+		now = base.Add(agenticrun.SuspensionStopWindow)
+		if _, err := reconcileOnce(r); err != nil {
+			t.Fatalf("deadline Reconcile() error = %v", err)
+		}
+		got := getConfig(t, fc)
+		suspended := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
+		safe := requireCondition(t, got.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSafeToResume)
+		gotRun := getRun(t, fc, run.Name)
+		if suspended.Reason != reasonAdminActivatedWithErrors ||
+			!strings.Contains(suspended.Message, "run stop unverified: default/lost-spoke") ||
+			safe.Status != metav1.ConditionTrue || safe.Reason != reasonRunCleanupUnverified ||
+			!strings.Contains(safe.Message, "lost-spoke") ||
+			gotRun.Status.Steps.Analysis.Sandbox.ClaimName != "lost-claim" {
+			t.Fatalf("recorded teardown failure blocked resumption or hid the unverified run: %+v / %+v / %+v",
 				suspended, safe, gotRun.Status)
 		}
 	})

@@ -557,7 +557,7 @@ func (r *AgenticRunReconciler) handleRunStop(
 			if updated != nil {
 				*run = *updated
 			}
-		} else if hasStopTeardownFailure(current) {
+		} else if HasStopTeardownFailure(current) {
 			updated, err := r.writeStopOutcome(ctx, key, run.UID, source, true, report)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -737,7 +737,7 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 		currentSource, _, hasAccepted := acceptedStopSource(current)
 		finalOutcome := HasFinalStopOutcome(current)
 		if finalOutcome {
-			if !confirmed || !hasStopTeardownFailure(current) {
+			if !confirmed || !HasStopTeardownFailure(current) {
 				return current, nil
 			}
 			if stopping != nil && stopping.Status == metav1.ConditionFalse &&
@@ -846,22 +846,9 @@ func (r *AgenticRunReconciler) writeStopOutcome(
 	return nil, fmt.Errorf("persist run stop outcome: status conflict retry limit reached")
 }
 
-func hasCancellationFailure(run *agenticv1alpha1.AgenticRun) bool {
-	if run == nil {
-		return false
-	}
-	for i := range run.Status.Conditions {
-		condition := &run.Status.Conditions[i]
-		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonCancellationFailed {
-			return true
-		}
-	}
-	return false
-}
-
-// hasStopTeardownFailure reports whether a recorded stop outcome ended with
+// HasStopTeardownFailure reports whether a recorded stop outcome ended with
 // unconfirmed cleanup for either stop source.
-func hasStopTeardownFailure(run *agenticv1alpha1.AgenticRun) bool {
+func HasStopTeardownFailure(run *agenticv1alpha1.AgenticRun) bool {
 	stopping := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping)
 	return stopping != nil && stopping.Status == metav1.ConditionFalse && stopping.Reason == reasonTeardownFailed
 }
