@@ -9,7 +9,7 @@
 # Optional env:
 #   OPERATOR_NAMESPACE    (default: openshift-lightspeed)
 #   SANDBOX_MODE          (default: bare-pod)
-#   SANDBOX_IMAGE         (default: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1)
+#   SANDBOX_IMAGE         (default: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2)
 #   OTEL_COLLECTOR_IMAGE  (default: quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-otel-collector:main)
 
 set -euo pipefail
@@ -19,7 +19,7 @@ set -euo pipefail
 
 OPERATOR_NAMESPACE="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
 SANDBOX_MODE="${SANDBOX_MODE:-bare-pod}"
-SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2}"
 OTEL_COLLECTOR_IMAGE="${OTEL_COLLECTOR_IMAGE:-quay.io/redhat-user-workloads/crt-nshift-lightspeed-tenant/lightspeed-otel-collector:main}"
 
 echo "=== Agentic operator install ==="
