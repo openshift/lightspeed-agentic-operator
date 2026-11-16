@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	toolscache "k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,9 @@ type AgenticRunReconciler struct {
 	Audit     AuditLogger
 	TempLog   TempLogCleaner
 	Now       func() time.Time
+	// Recorder emits user-visible events (e.g. incomplete token usage reporting).
+	// Optional: when nil, events are skipped and only status and metrics are set.
+	EventRecorder record.EventRecorder
 }
 
 func (r *AgenticRunReconciler) now() time.Time {
@@ -65,6 +69,7 @@ func (r *AgenticRunReconciler) now() time.Time {
 	return time.Now()
 }
 
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agentic.openshift.io,resources=agenticruns/status,verbs=get;update;patch

@@ -256,6 +256,26 @@ const (
 	// AgenticRunConditionStopping records accepted stop intent and stop progress.
 	// It does not participate in phase derivation.
 	AgenticRunConditionStopping string = "Stopping"
+	// AgenticRunConditionTokenUsageReported records whether successful Result CRs
+	// reported every required aggregate token-usage field. It checks field presence,
+	// not whether every underlying model call contributed usage. Status=True when
+	// inputTokens, outputTokens and peakInputTokens were reported; Status=False when
+	// a required field is missing (Reason=Incomplete) or nothing was reported at all
+	// (Reason=NotReported). It is advisory only: it never fails the run and does not
+	// participate in phase derivation.
+	AgenticRunConditionTokenUsageReported string = "TokenUsageReported"
+)
+
+// Reasons for the TokenUsageReported condition.
+const (
+	// ReasonTokenUsageReportedComplete means every required TokenUsage field was reported.
+	ReasonTokenUsageReportedComplete = "Complete"
+	// ReasonTokenUsageReportedIncomplete means a required field was not reported.
+	// Optional fields are never the cause: providers that cannot surface reasoning
+	// details omit reasoningTokens by design.
+	ReasonTokenUsageReportedIncomplete = "Incomplete"
+	// ReasonTokenUsageReportedNone means no Result CR reported any token usage.
+	ReasonTokenUsageReportedNone = "NotReported"
 )
 
 // AgenticRunStep defines per-step configuration on an AgenticRun. The agent

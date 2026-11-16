@@ -4,7 +4,7 @@
 # Push:  make -C test/agent docker-push
 #
 # Builder image tracks go.mod; bump if toolchain rejects the tag.
-FROM golang:1.25.7-bookworm AS builder
+FROM golang:1.26.0-bookworm AS builder
 
 WORKDIR /workspace
 COPY go.mod go.sum ./

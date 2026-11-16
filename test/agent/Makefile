@@ -10,7 +10,7 @@ CONTAINER_TOOL ?= $(shell which podman >/dev/null 2>&1 && echo podman || echo do
 # Tag must match the image the e2e SandboxTemplate / pipeline pull
 # (test/agent/sandboxtemplate/sandboxtemplate.yaml and
 # .tekton/integration-tests). The batch model uses the "1"-suffixed tag.
-IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1
+IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2
 
 .PHONY: docker-build docker-push
 
