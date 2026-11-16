@@ -94,7 +94,7 @@ spec:
               - name: NAMESPACE
                 value: "$(params.namespace)"
               - name: SANDBOX_IMAGE
-                value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1"
+                value: "quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2"
               - name: SANDBOX_MODE
                 value: "$(params.sandbox-mode)"
             image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.22

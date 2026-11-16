@@ -13,7 +13,7 @@
 // can observe in-flight RBAC.
 //
 // Build:  make -C test/agent docker-build
-// Image:  quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1
+// Image:  quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2
 package main
 
 import (
@@ -60,7 +60,53 @@ const (
 	// (OptionJSON), which is how the verification step sees it. See
 	// setStatus/AnalysisResult below.
 	MockVerifyFail = "MOCK_VERIFY_FAIL"
+	// MockOmitPeak makes every step report its usage WITHOUT peakInputTokens.
+	// Drives the operator's incomplete-reporting advisory path: the Result CR
+	// must be accepted with the field absent, a Warning is attached to it, and
+	// the AgenticRun records tokenUsageReported=False/Incomplete while still
+	// completing normally.
+	MockOmitPeak = "MOCK_OMIT_PEAK"
+	// MockOmitOptional makes every step report its usage WITHOUT reasoningTokens
+	// and toolTokens. Optional fields are silent when absent: no Warning, no
+	// change to the TokenUsageReported condition (only the counter moves).
+	MockOmitOptional = "MOCK_OMIT_OPTIONAL"
 )
+
+// mockFlags carries the behavior switches extracted from the request text.
+type mockFlags struct {
+	verifyFail   bool
+	omitPeak     bool
+	omitOptional bool
+}
+
+// parseMockFlags reads every behavior keyword out of the request text. The
+// request reaches the analysis step only; downstream steps see whatever the
+// analysis Result CR propagates into the option summary.
+func parseMockFlags(query string) mockFlags {
+	return mockFlags{
+		verifyFail:   strings.Contains(query, MockVerifyFail),
+		omitPeak:     strings.Contains(query, MockOmitPeak),
+		omitOptional: strings.Contains(query, MockOmitOptional),
+	}
+}
+
+// optionMarkers returns the behavior keywords the verification step must see.
+// The request text only reaches the analysis query, so the markers ride inside
+// the RemediationOption summary, which the operator serializes into the
+// verification query. See buildVerificationQuery.
+func (f mockFlags) optionMarkers() []string {
+	var markers []string
+	if f.verifyFail {
+		markers = append(markers, MockVerifyFail)
+	}
+	if f.omitPeak {
+		markers = append(markers, MockOmitPeak)
+	}
+	if f.omitOptional {
+		markers = append(markers, MockOmitOptional)
+	}
+	return markers
+}
 
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -74,10 +120,11 @@ func main() {
 	step := stepFromSchema(schemaRaw)
 	targetNS := pickNamespace(ctxRaw)
 	queryStr := string(query)
-	verifyFail := strings.Contains(queryStr, MockVerifyFail)
+	flags := parseMockFlags(queryStr)
 	// Build stamp: if this line is absent from a sandbox pod's logs, the cluster
 	// is running a STALE mock image and the fix under test never ran. See OLS-3817.
-	log.Printf("mock-agent build=OLS-3817-verifyfail-via-option step=%s target_ns=%s query_len=%d verify_fail=%v", step, targetNS, len(query), verifyFail)
+	log.Printf("mock-agent build=OLS-3817-verifyfail-via-option step=%s target_ns=%s query_len=%d verify_fail=%v omit_peak=%v",
+		step, targetNS, len(query), flags.verifyFail, flags.omitPeak)
 
 	// Failure modes triggered by keywords in the query text.
 	switch {
@@ -109,7 +156,7 @@ func main() {
 		return
 	}
 
-	setStatus(cr, targetNS, verifyFail)
+	setStatus(cr, targetNS, flags)
 	if err := c.Status().Update(ctx, cr); err != nil {
 		log.Fatalf("update status: %v", err)
 	}
@@ -221,23 +268,48 @@ func newResultCR(step string, tmplRaw []byte) client.Object {
 
 // mockTokenUsage returns deterministic values for the operator E2E tests.
 // These values model non-zero usage from a sandbox without depending on an LLM.
-func mockTokenUsage(step string) agenticv1alpha1.TokenUsage {
-	var input, output int64
+// The optional fields exercise the complete-or-unset sum (reasoning, tool)
+// and the maximum (peakInput) aggregation on the AgenticRun. peakInput is
+// reported on every step because the operator treats its absence as a defect.
+func mockTokenUsage(step string, flags mockFlags) agenticv1alpha1.TokenUsage {
+	var input, output, reasoning, tool, peak int64
+	model := "mock-model"
 	switch step {
 	case "analysis":
 		input, output = 100, 200
+		reasoning, tool, peak = 20, 30, 100
 	case "execution":
 		input, output = 110, 210
+		reasoning, tool, peak = 21, 31, 110
 	case "verification":
 		input, output = 120, 220
+		reasoning, tool, peak = 22, 32, 120
 	case "escalation":
 		input, output = 130, 230
+		reasoning, tool, peak = 23, 33, 130
 	}
-	return agenticv1alpha1.TokenUsage{InputTokens: &input, OutputTokens: &output}
+	usage := agenticv1alpha1.TokenUsage{
+		InputTokens:     &input,
+		OutputTokens:    &output,
+		ReasoningTokens: &reasoning,
+		ToolTokens:      &tool,
+		PeakInputTokens: &peak,
+		Model:           model,
+	}
+	// Omit (never zero) the fields, so the operator sees "not reported" rather
+	// than "reported as nothing".
+	if flags.omitPeak {
+		usage.PeakInputTokens = nil
+	}
+	if flags.omitOptional {
+		usage.ReasoningTokens = nil
+		usage.ToolTokens = nil
+	}
+	return usage
 }
 
 // setStatus fills a Result CR with the canned outcome for its workflow step.
-func setStatus(obj client.Object, targetNS string, verifyFail bool) {
+func setStatus(obj client.Object, targetNS string, flags mockFlags) {
 	now := metav1.Now()
 	completed := []metav1.Condition{{
 		Type:               "Completed",
@@ -248,19 +320,19 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 
 	switch cr := obj.(type) {
 	case *agenticv1alpha1.AnalysisResult:
-		cr.Status.TokenUsage = mockTokenUsage("analysis")
+		cr.Status.TokenUsage = mockTokenUsage("analysis", flags)
 		cr.Status.Conditions = completed
 		cr.Status.ActionRequired = agenticv1alpha1.ActionRequiredTrue
 		cr.Status.Diagnosis = agenticv1alpha1.DiagnosisResult{
 			Summary:   "mock diagnosis",
 			RootCause: "mock root cause",
 		}
-		// When the request asked for a verification failure, stamp the marker
-		// into the option summary so it survives into the verification query
-		// (OptionJSON) — the request text itself never reaches that step.
+		// Stamp the behavior markers into the option summary so they survive
+		// into the verification query (OptionJSON) — the request text itself
+		// never reaches that step.
 		optionSummary := "mock option summary"
-		if verifyFail {
-			optionSummary = "mock option summary " + MockVerifyFail
+		if markers := flags.optionMarkers(); len(markers) > 0 {
+			optionSummary += " " + strings.Join(markers, " ")
 		}
 		cr.Status.Options = []agenticv1alpha1.RemediationOption{{
 			Title:   "mock-remediation",
@@ -296,7 +368,7 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 		}}
 
 	case *agenticv1alpha1.ExecutionResult:
-		cr.Status.TokenUsage = mockTokenUsage("execution")
+		cr.Status.TokenUsage = mockTokenUsage("execution", flags)
 		cr.Status.Conditions = completed
 		cr.Status.ActionsTaken = []agenticv1alpha1.ExecutionAction{{
 			Type:        "mock",
@@ -305,8 +377,8 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 		}}
 
 	case *agenticv1alpha1.VerificationResult:
-		cr.Status.TokenUsage = mockTokenUsage("verification")
-		if verifyFail {
+		cr.Status.TokenUsage = mockTokenUsage("verification", flags)
+		if flags.verifyFail {
 			// Objective verification failure (OLS-3817): the agent ran and
 			// reports the remediation did not work. Signal it via the
 			// Completed condition reason=Failed so the operator escalates.
@@ -335,7 +407,7 @@ func setStatus(obj client.Object, targetNS string, verifyFail bool) {
 		cr.Status.Summary = "mock verification summary"
 
 	case *agenticv1alpha1.EscalationResult:
-		cr.Status.TokenUsage = mockTokenUsage("escalation")
+		cr.Status.TokenUsage = mockTokenUsage("escalation", flags)
 		cr.Status.Conditions = completed
 		cr.Status.Summary = "mock escalation summary"
 		cr.Status.Content = "mock escalation content"

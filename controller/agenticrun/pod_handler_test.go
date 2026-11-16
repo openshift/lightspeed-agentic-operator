@@ -2,22 +2,54 @@ package agenticrun
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 )
 
 // makeTokenUsage is a helper to build a TokenUsage value concisely.
 func makeTokenUsage(in, out int64) agenticv1alpha1.TokenUsage {
 	return agenticv1alpha1.TokenUsage{InputTokens: ptr.To(in), OutputTokens: ptr.To(out)}
+}
+
+// assertOptionalTokens compares one optional token count, treating nil as
+// "not reported" rather than zero.
+func assertOptionalTokens(t *testing.T, name string, got, want *int64) {
+	t.Helper()
+	switch {
+	case want == nil && got != nil:
+		t.Errorf("%s = %d, want absent", name, *got)
+	case want != nil && got == nil:
+		t.Errorf("%s absent, want %d", name, *want)
+	case want != nil && got != nil && *got != *want:
+		t.Errorf("%s = %d, want %d", name, *got, *want)
+	}
+}
+
+// analysisResultWithTokenUsage wraps a TokenUsage in an AnalysisResult so the
+// table-driven aggregation tests can hand it to aggregateTokenUsage.
+func analysisResultWithTokenUsage(tu agenticv1alpha1.TokenUsage) client.Object {
+	return &agenticv1alpha1.AnalysisResult{
+		Status: agenticv1alpha1.AnalysisResultStatus{TokenUsage: tu},
+	}
 }
 
 // assertTokenUsage is a test helper that checks a TokenUsage value is present
@@ -418,7 +450,7 @@ func TestAggregateTokenUsage(t *testing.T) {
 		wantZero   bool
 	}{
 		{
-			name: "init from zero — analysis",
+			name: "first contribution",
 			resultCR: &agenticv1alpha1.AnalysisResult{
 				Status: agenticv1alpha1.AnalysisResultStatus{TokenUsage: makeTokenUsage(100, 50)},
 			},
@@ -426,7 +458,7 @@ func TestAggregateTokenUsage(t *testing.T) {
 			wantOutput: 50,
 		},
 		{
-			name: "sum — execution",
+			name: "adds to the total carried so far",
 			resultCR: &agenticv1alpha1.ExecutionResult{
 				Status: agenticv1alpha1.ExecutionResultStatus{TokenUsage: makeTokenUsage(200, 80)},
 			},
@@ -435,14 +467,14 @@ func TestAggregateTokenUsage(t *testing.T) {
 			wantOutput: 130,
 		},
 		{
-			name: "skip when absent — verification",
+			name: "a step reporting nothing leaves the total alone",
 			resultCR: &agenticv1alpha1.VerificationResult{
 				Status: agenticv1alpha1.VerificationResultStatus{},
 			},
 			wantZero: true,
 		},
 		{
-			name: "skip when absent preserves existing — escalation",
+			name: "a step reporting nothing preserves the existing total",
 			resultCR: &agenticv1alpha1.EscalationResult{
 				Status: agenticv1alpha1.EscalationResultStatus{},
 			},
@@ -451,7 +483,7 @@ func TestAggregateTokenUsage(t *testing.T) {
 			wantOutput: 50,
 		},
 		{
-			name: "zero values treated as present",
+			name: "explicit zeros are values",
 			resultCR: &agenticv1alpha1.AnalysisResult{
 				Status: agenticv1alpha1.AnalysisResultStatus{TokenUsage: makeTokenUsage(0, 0)},
 			},
@@ -468,7 +500,7 @@ func TestAggregateTokenUsage(t *testing.T) {
 				},
 			}
 
-			aggregateTokenUsage(run, tt.resultCR)
+			aggregateTokenUsage(run, extractTokenUsage(tt.resultCR))
 
 			if tt.wantZero {
 				if !run.Status.TokenUsage.IsZero() && tt.initial.IsZero() {
@@ -477,6 +509,159 @@ func TestAggregateTokenUsage(t *testing.T) {
 				return
 			}
 			assertTokenUsage(t, run.Status.TokenUsage, tt.wantInput, tt.wantOutput)
+		})
+	}
+}
+
+// TestAggregateTokenUsage_OptionalFields pins the rules for reasoningTokens and
+// toolTokens (sum), peakInputTokens (maximum), model (never aggregated), and that
+// an unreported count adds nothing instead of clearing the total.
+func TestAggregateTokenUsage_OptionalFields(t *testing.T) {
+	i := func(v int64) *int64 { return ptr.To(v) }
+
+	tests := []struct {
+		name          string
+		initial       agenticv1alpha1.TokenUsage
+		result        agenticv1alpha1.TokenUsage
+		wantReasoning *int64
+		wantTool      *int64
+		wantPeak      *int64
+		wantInput     *int64
+		wantOutput    *int64
+	}{
+		{
+			name:          "first contribution carries every reported field",
+			result:        agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50), ReasoningTokens: i(20), ToolTokens: i(30), PeakInputTokens: i(100), Model: "claude-x"},
+			wantReasoning: i(20),
+			wantTool:      i(30),
+			wantPeak:      i(100),
+			wantInput:     i(100),
+			wantOutput:    i(50),
+		},
+		{
+			name:       "unreported optional fields stay absent",
+			result:     agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50)},
+			wantInput:  i(100),
+			wantOutput: i(50),
+		},
+		{
+			name:          "later contribution sums reported values",
+			initial:       agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50), ReasoningTokens: i(20), ToolTokens: i(30), PeakInputTokens: i(100)},
+			result:        agenticv1alpha1.TokenUsage{InputTokens: i(200), OutputTokens: i(80), ReasoningTokens: i(5), ToolTokens: i(7), PeakInputTokens: i(125)},
+			wantReasoning: i(25),
+			wantTool:      i(37),
+			wantPeak:      i(125),
+			wantInput:     i(300),
+			wantOutput:    i(130),
+		},
+		{
+			name:          "an unreported optional field does not clear the run value",
+			initial:       agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50), ReasoningTokens: i(20), ToolTokens: i(30), PeakInputTokens: i(100)},
+			result:        agenticv1alpha1.TokenUsage{InputTokens: i(200), OutputTokens: i(80)},
+			wantReasoning: i(20),
+			wantTool:      i(30),
+			wantPeak:      i(100),
+			wantInput:     i(300),
+			wantOutput:    i(130),
+		},
+		{
+			name:          "peak keeps the larger value in either direction",
+			initial:       agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50), PeakInputTokens: i(100)},
+			result:        agenticv1alpha1.TokenUsage{InputTokens: i(200), OutputTokens: i(80), PeakInputTokens: i(75)},
+			wantPeak:      i(100),
+			wantInput:     i(300),
+			wantOutput:    i(130),
+			wantReasoning: nil,
+		},
+		{
+			name:          "explicit zero is a reported value, not absence",
+			initial:       agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50), ReasoningTokens: i(0), PeakInputTokens: i(0)},
+			result:        agenticv1alpha1.TokenUsage{InputTokens: i(200), OutputTokens: i(80), ReasoningTokens: i(5), PeakInputTokens: i(125)},
+			wantReasoning: i(5),
+			wantPeak:      i(125),
+			wantInput:     i(300),
+			wantOutput:    i(130),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			run := &agenticv1alpha1.AgenticRun{
+				Status: agenticv1alpha1.AgenticRunStatus{TokenUsage: *tt.initial.DeepCopy()},
+			}
+
+			aggregateTokenUsage(run, tt.result)
+
+			got := run.Status.TokenUsage
+			assertOptionalTokens(t, "inputTokens", got.InputTokens, tt.wantInput)
+			assertOptionalTokens(t, "outputTokens", got.OutputTokens, tt.wantOutput)
+			assertOptionalTokens(t, "reasoningTokens", got.ReasoningTokens, tt.wantReasoning)
+			assertOptionalTokens(t, "toolTokens", got.ToolTokens, tt.wantTool)
+			assertOptionalTokens(t, "peakInputTokens", got.PeakInputTokens, tt.wantPeak)
+			if got.Model != "" {
+				t.Errorf("model must not be aggregated onto AgenticRun, got %q", got.Model)
+			}
+		})
+	}
+}
+
+// TestAggregateTokenUsage_NoReseed pins the two sequences the old
+// "is the aggregate zero?" seeding rule got wrong: it re-copied the later
+// contribution instead of adding to it, publishing a total that was neither the
+// run's sum nor marked as partial.
+func TestAggregateTokenUsage_NoReseed(t *testing.T) {
+	i := func(v int64) *int64 { return ptr.To(v) }
+
+	t.Run("disjoint partial contributions add up", func(t *testing.T) {
+		run := &agenticv1alpha1.AgenticRun{}
+		aggregateTokenUsage(run, agenticv1alpha1.TokenUsage{InputTokens: i(100)})
+		aggregateTokenUsage(run, agenticv1alpha1.TokenUsage{OutputTokens: i(50)})
+		aggregateTokenUsage(run, agenticv1alpha1.TokenUsage{InputTokens: i(200), OutputTokens: i(20), PeakInputTokens: i(300)})
+
+		got := run.Status.TokenUsage
+		assertOptionalTokens(t, "inputTokens", got.InputTokens, i(300))
+		assertOptionalTokens(t, "outputTokens", got.OutputTokens, i(70))
+		assertOptionalTokens(t, "peakInputTokens", got.PeakInputTokens, i(300))
+	})
+
+	t.Run("a step that reports nothing does not let the next one overwrite", func(t *testing.T) {
+		run := &agenticv1alpha1.AgenticRun{}
+		aggregateTokenUsage(run, agenticv1alpha1.TokenUsage{}) // e.g. a pre-OLS-4921 sandbox
+		aggregateTokenUsage(run, agenticv1alpha1.TokenUsage{InputTokens: i(400), OutputTokens: i(150)})
+		aggregateTokenUsage(run, agenticv1alpha1.TokenUsage{InputTokens: i(100), OutputTokens: i(50)})
+
+		got := run.Status.TokenUsage
+		assertOptionalTokens(t, "inputTokens", got.InputTokens, i(500))
+		assertOptionalTokens(t, "outputTokens", got.OutputTokens, i(200))
+	})
+}
+
+// TestTokenUsage_IsZero pins presence across every field: IsZero means "nothing
+// was reported", so a record carrying only an optional field must survive
+// serialization rather than being dropped as empty.
+func TestTokenUsage_IsZero(t *testing.T) {
+	i := func(v int64) *int64 { return ptr.To(v) }
+
+	tests := []struct {
+		name string
+		tu   agenticv1alpha1.TokenUsage
+		want bool
+	}{
+		{name: "empty", tu: agenticv1alpha1.TokenUsage{}, want: true},
+		{name: "input only", tu: agenticv1alpha1.TokenUsage{InputTokens: i(1)}},
+		{name: "output only", tu: agenticv1alpha1.TokenUsage{OutputTokens: i(1)}},
+		{name: "reasoning only", tu: agenticv1alpha1.TokenUsage{ReasoningTokens: i(1)}},
+		{name: "tool only", tu: agenticv1alpha1.TokenUsage{ToolTokens: i(1)}},
+		{name: "peak only", tu: agenticv1alpha1.TokenUsage{PeakInputTokens: i(1)}},
+		{name: "model only", tu: agenticv1alpha1.TokenUsage{Model: "claude-x"}},
+		{name: "explicit zeros", tu: agenticv1alpha1.TokenUsage{InputTokens: i(0), OutputTokens: i(0)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.tu.IsZero(); got != tt.want {
+				t.Errorf("IsZero() = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }
@@ -569,6 +754,109 @@ func TestCompleteStep_AggregatesTokenUsage(t *testing.T) {
 			}
 			assertTokenUsage(t, got.Status.TokenUsage, tt.wantInput, tt.wantOutput)
 		})
+	}
+}
+
+// TestCompleteStep_TwiceAggregatesUsageOnce pins the guard that makes step
+// completion safe under concurrent callers: completeStep re-reads the run and
+// returns early once the step condition is terminal, and status patches carry an
+// optimistic lock, so a duplicate completion (pod event and timeout ticker can
+// both reach it) cannot aggregate the same Result CR twice. This is what a
+// package-level mutex used to be credited with.
+func TestCompleteStep_TwiceAggregatesUsageOnce(t *testing.T) {
+	ctx := context.Background()
+	r, run := newVerifyingReconciler(t)
+
+	setupVerificationResultCR(t, r, run, agenticv1alpha1.ActionOutcomeSucceeded,
+		[]agenticv1alpha1.VerifyCheck{{Name: "pod-running", Source: "oc", Value: "Running", Result: agenticv1alpha1.CheckResultPassed}},
+		"Pod healthy", makeTokenUsage(500, 200))
+
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	for i := 0; i < 2; i++ {
+		if err := r.completeStep(ctx, run, pod, "verification", stepConditionType("verification"), "", ""); err != nil {
+			t.Fatalf("completeStep attempt %d: %v", i+1, err)
+		}
+	}
+
+	got, err := getAgenticRun(r, "fix-crash")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	assertTokenUsage(t, got.Status.TokenUsage, 500, 200)
+}
+
+// TestPatchStepResult_SkipsWhenStepAlreadyTerminal covers the window
+// TestCompleteStep_TwiceAggregatesUsageOnce cannot: completeStep's own terminal
+// check has already passed on a stale read when a second caller reaches
+// patchStepResult, whose re-read then returns the state the first caller
+// committed. The fresh read carries the terminal condition and the aggregated
+// usage, so aggregating again would double the totals — the optimistic lock
+// cannot help, because the second write's base is that same fresh version.
+func TestPatchStepResult_SkipsWhenStepAlreadyTerminal(t *testing.T) {
+	ctx := context.Background()
+	r, run := newVerifyingReconciler(t)
+
+	setupVerificationResultCR(t, r, run, agenticv1alpha1.ActionOutcomeSucceeded,
+		[]agenticv1alpha1.VerifyCheck{{Name: "pod-running", Source: "oc", Value: "Running", Result: agenticv1alpha1.CheckResultPassed}},
+		"Pod healthy", makeTokenUsage(500, 200))
+
+	crName := resultCRName(run.Name, "verification", nextResultIndex(run, "verification"))
+	cr := &agenticv1alpha1.VerificationResult{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "default", Name: crName}, cr); err != nil {
+		t.Fatalf("get VerificationResult: %v", err)
+	}
+
+	pod := &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodSucceeded}}
+	if err := r.completeStep(ctx, run, pod, "verification", stepConditionType("verification"), "", ""); err != nil {
+		t.Fatalf("first completion: %v", err)
+	}
+
+	// The loser of the race still holds the pre-completion run, so it gets here.
+	if err := r.patchStepResult(ctx, run, "verification", stepConditionType("verification"), crName, cr,
+		metav1.ConditionTrue, ReasonSucceeded, "Sandbox completed"); err != nil {
+		t.Fatalf("late patchStepResult: %v", err)
+	}
+
+	got, err := getAgenticRun(r, "fix-crash")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	assertTokenUsage(t, got.Status.TokenUsage, 500, 200)
+	if refs := got.Status.Steps.Verification.Results; len(refs) != 1 {
+		t.Errorf("verification result refs = %d, want 1 (a late caller must not append a duplicate)", len(refs))
+	}
+}
+
+// TestPatchVerificationFailedEscalating_SkipsWhenAlreadyTerminal is the same
+// guard for the escalating path, which writes Verified=False instead of a
+// success condition.
+func TestPatchVerificationFailedEscalating_SkipsWhenAlreadyTerminal(t *testing.T) {
+	ctx := context.Background()
+	r, run := newVerifyingReconciler(t)
+
+	setupVerificationResultCR(t, r, run, agenticv1alpha1.ActionOutcomeFailed,
+		[]agenticv1alpha1.VerifyCheck{{Name: "pod-running", Source: "oc", Value: "CrashLoopBackOff", Result: agenticv1alpha1.CheckResultFailed}},
+		"Pod still crashing", makeTokenUsage(300, 120))
+
+	crName := resultCRName(run.Name, "verification", nextResultIndex(run, "verification"))
+	cr := &agenticv1alpha1.VerificationResult{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "default", Name: crName}, cr); err != nil {
+		t.Fatalf("get VerificationResult: %v", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := r.patchVerificationFailedEscalating(ctx, run, crName, cr, agenticv1alpha1.ReasonVerificationFailed); err != nil {
+			t.Fatalf("patch attempt %d: %v", i+1, err)
+		}
+	}
+
+	got, err := getAgenticRun(r, "fix-crash")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	assertTokenUsage(t, got.Status.TokenUsage, 300, 120)
+	if refs := got.Status.Steps.Verification.Results; len(refs) != 1 {
+		t.Errorf("verification result refs = %d, want 1", len(refs))
 	}
 }
 
@@ -721,4 +1009,568 @@ func TestPodTerminatedInfo(t *testing.T) {
 	if msg != "boom" || code == nil || *code != 2 {
 		t.Fatalf("got msg=%q code=%v", msg, code)
 	}
+}
+
+// fullTokenUsage returns a TokenUsage with every field reported.
+func fullTokenUsage() agenticv1alpha1.TokenUsage {
+	return agenticv1alpha1.TokenUsage{
+		InputTokens:     ptr.To[int64](100),
+		OutputTokens:    ptr.To[int64](50),
+		ReasoningTokens: ptr.To[int64](20),
+		ToolTokens:      ptr.To[int64](30),
+		PeakInputTokens: ptr.To[int64](100),
+	}
+}
+
+// bedrockTokenUsage is the shape Anthropic on Bedrock/Vertex produces today: the
+// provider reports input and output but no reasoning details, so the sandbox MUST
+// omit reasoningTokens rather than report 0.
+func bedrockTokenUsage() agenticv1alpha1.TokenUsage {
+	tu := fullTokenUsage()
+	tu.ReasoningTokens = nil
+	return tu
+}
+
+// reportStepUsage mirrors the production call order: the run aggregate is updated
+// first, then completeness of the step's token usage is recorded.
+func reportStepUsage(r *AgenticRunReconciler, run *agenticv1alpha1.AgenticRun, step string, incoming agenticv1alpha1.TokenUsage, stepSucceeded bool) {
+	aggregateTokenUsage(run, incoming)
+	r.reportTokenUsage(context.Background(), run, step, incoming, stepSucceeded)
+}
+
+// TestAssessTokenUsageReporting pins the severity split: only missing required
+// fields (or an absent struct) are negative; omitted optional fields keep the
+// assessment positive.
+func TestAssessTokenUsageReporting(t *testing.T) {
+	tests := []struct {
+		name            string
+		usage           agenticv1alpha1.TokenUsage
+		wantStatus      metav1.ConditionStatus
+		wantReason      string
+		wantMessage     string
+		wantRequired    []string
+		wantOptionalGap []string
+	}{
+		{
+			name:        "all fields reported",
+			usage:       fullTokenUsage(),
+			wantStatus:  metav1.ConditionTrue,
+			wantReason:  agenticv1alpha1.ReasonTokenUsageReportedComplete,
+			wantMessage: "All required token usage fields were reported",
+		},
+		{
+			name: "reasoning reported as an explicit zero counts as reported",
+			usage: func() agenticv1alpha1.TokenUsage {
+				tu := fullTokenUsage()
+				tu.ReasoningTokens = ptr.To[int64](0)
+				return tu
+			}(),
+			wantStatus: metav1.ConditionTrue,
+			wantReason: agenticv1alpha1.ReasonTokenUsageReportedComplete,
+		},
+		{
+			name:            "reasoning omitted stays positive (Bedrock and Vertex today)",
+			usage:           bedrockTokenUsage(),
+			wantStatus:      metav1.ConditionTrue,
+			wantReason:      agenticv1alpha1.ReasonTokenUsageReportedComplete,
+			wantOptionalGap: []string{"reasoningTokens"},
+		},
+		{
+			name: "reasoning and tool omitted stay positive",
+			usage: agenticv1alpha1.TokenUsage{
+				InputTokens:     ptr.To[int64](100),
+				OutputTokens:    ptr.To[int64](50),
+				PeakInputTokens: ptr.To[int64](100),
+			},
+			wantStatus:      metav1.ConditionTrue,
+			wantReason:      agenticv1alpha1.ReasonTokenUsageReportedComplete,
+			wantOptionalGap: []string{"reasoningTokens", "toolTokens"},
+		},
+		{
+			name: "peak absent is an alarm: it is required context occupancy",
+			usage: agenticv1alpha1.TokenUsage{
+				InputTokens:     ptr.To[int64](100),
+				OutputTokens:    ptr.To[int64](50),
+				ReasoningTokens: ptr.To[int64](20),
+				ToolTokens:      ptr.To[int64](30),
+			},
+			wantStatus:   metav1.ConditionFalse,
+			wantReason:   agenticv1alpha1.ReasonTokenUsageReportedIncomplete,
+			wantRequired: []string{"peakInputTokens"},
+		},
+		{
+			name:         "entire struct absent is bad",
+			usage:        agenticv1alpha1.TokenUsage{},
+			wantStatus:   metav1.ConditionFalse,
+			wantReason:   agenticv1alpha1.ReasonTokenUsageReportedNone,
+			wantRequired: []string{"inputTokens", "outputTokens", "peakInputTokens"},
+		},
+		{
+			name: "output absent is bad",
+			usage: agenticv1alpha1.TokenUsage{
+				InputTokens: ptr.To[int64](100),
+			},
+			wantStatus:      metav1.ConditionFalse,
+			wantReason:      agenticv1alpha1.ReasonTokenUsageReportedIncomplete,
+			wantRequired:    []string{"outputTokens", "peakInputTokens"},
+			wantOptionalGap: []string{"reasoningTokens", "toolTokens"},
+		},
+		{
+			name: "input absent is bad",
+			usage: agenticv1alpha1.TokenUsage{
+				OutputTokens: ptr.To[int64](50),
+			},
+			wantStatus:      metav1.ConditionFalse,
+			wantReason:      agenticv1alpha1.ReasonTokenUsageReportedIncomplete,
+			wantRequired:    []string{"inputTokens", "peakInputTokens"},
+			wantOptionalGap: []string{"reasoningTokens", "toolTokens"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := assessTokenUsageReporting(tt.usage)
+			if got.Status != tt.wantStatus {
+				t.Errorf("status = %q, want %q", got.Status, tt.wantStatus)
+			}
+			if got.Reason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", got.Reason, tt.wantReason)
+			}
+			if strings.Join(got.RequiredMissing, ",") != strings.Join(tt.wantRequired, ",") {
+				t.Errorf("required missing = %v, want %v", got.RequiredMissing, tt.wantRequired)
+			}
+			if strings.Join(got.OptionalMissing, ",") != strings.Join(tt.wantOptionalGap, ",") {
+				t.Errorf("optional missing = %v, want %v", got.OptionalMissing, tt.wantOptionalGap)
+			}
+			if got.Message == "" {
+				t.Error("message must never be empty")
+			}
+			if tt.wantMessage != "" && got.Message != tt.wantMessage {
+				t.Errorf("message = %q, want %q", got.Message, tt.wantMessage)
+			}
+		})
+	}
+}
+
+// TestTokenUsageJSON_HasNoSkillTokens guards the decision that skill tokens are
+// part of toolTokens: the field must not exist on the API.
+func TestTokenUsageJSON_HasNoSkillTokens(t *testing.T) {
+	tu := agenticv1alpha1.TokenUsage{
+		InputTokens:     ptr.To[int64](100),
+		OutputTokens:    ptr.To[int64](50),
+		ReasoningTokens: ptr.To[int64](20),
+		ToolTokens:      ptr.To[int64](30),
+		PeakInputTokens: ptr.To[int64](100),
+		Model:           "claude-sonnet-4-5-20250929",
+	}
+	raw, err := json.Marshal(tu)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "skill") {
+		t.Errorf("tokenUsage JSON must not expose skill tokens, got %s", raw)
+	}
+}
+
+// TestCRDTokenUsageSchema pins the generated CRD contract for tokenUsage. Unit
+// tests use a fake client that ignores schemas entirely, so without this guard a
+// regenerated CRD could quietly reintroduce `required` fields and every real
+// sandbox that under-reports would have its whole status patch rejected — losing
+// the failure reason, diagnosis and options along with the token counts.
+//
+// The contract (spec: token-usage.md rules 3a-3b, crd-api.md rule 6c.1): no field
+// is required, minProperties keeps a present-but-empty record invalid, and every
+// counter is individually expressible.
+func TestCRDTokenUsageSchema(t *testing.T) {
+	crdsWithTokenUsage := []string{
+		"agenticruns",
+		"analysisresults",
+		"executionresults",
+		"verificationresults",
+		"escalationresults",
+	}
+	fields := []string{"inputTokens", "outputTokens", "reasoningTokens", "toolTokens", "peakInputTokens", "model"}
+
+	for _, name := range crdsWithTokenUsage {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join("..", "..", "config", "crd", "bases", "agentic.openshift.io_"+name+".yaml")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v", path, err)
+			}
+
+			var crd apiextensionsv1.CustomResourceDefinition
+			if err := yaml.Unmarshal(raw, &crd); err != nil {
+				t.Fatalf("unmarshal %s: %v", path, err)
+			}
+
+			schema := findPropertySchema(&crd, "tokenUsage")
+			if schema == nil {
+				t.Fatalf("%s: no tokenUsage schema found", name)
+			}
+
+			if len(schema.Required) != 0 {
+				t.Errorf("tokenUsage.required = %v, want none: a missing count must never reject a status patch",
+					schema.Required)
+			}
+			if schema.MinProperties == nil || *schema.MinProperties != 1 {
+				t.Errorf("tokenUsage.minProperties = %v, want 1 (a present-but-empty record is meaningless)",
+					schema.MinProperties)
+			}
+			for _, field := range fields {
+				if _, ok := schema.Properties[field]; !ok {
+					t.Errorf("tokenUsage has no %q property", field)
+				}
+			}
+			if _, ok := schema.Properties["skillTokens"]; ok {
+				t.Error("tokenUsage has a skillTokens property: skill content is read through tools and is part of toolTokens")
+			}
+		})
+	}
+}
+
+// findPropertySchema returns the first schema for the named property in any
+// version of the CRD, searching nested properties.
+func findPropertySchema(crd *apiextensionsv1.CustomResourceDefinition, property string) *apiextensionsv1.JSONSchemaProps {
+	var walk func(*apiextensionsv1.JSONSchemaProps) *apiextensionsv1.JSONSchemaProps
+	walk = func(schema *apiextensionsv1.JSONSchemaProps) *apiextensionsv1.JSONSchemaProps {
+		if schema == nil {
+			return nil
+		}
+		if found, ok := schema.Properties[property]; ok {
+			return &found
+		}
+		for name := range schema.Properties {
+			child := schema.Properties[name]
+			if found := walk(&child); found != nil {
+				return found
+			}
+		}
+		if schema.Items != nil && schema.Items.Schema != nil {
+			return walk(schema.Items.Schema)
+		}
+		return nil
+	}
+
+	for i := range crd.Spec.Versions {
+		if found := walk(crd.Spec.Versions[i].Schema.OpenAPIV3Schema); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+// TestReportTokenUsage_BedrockOmissionStaysPositive is the contract test for the
+// current provider deficiency: an omitted reasoningTokens must not warn, must not
+// flip the condition, and must leave the run aggregate without reasoning.
+func TestReportTokenUsage_BedrockOmissionStaysPositive(t *testing.T) {
+	recorder := record.NewFakeRecorder(20)
+	r := &AgenticRunReconciler{EventRecorder: recorder}
+	run := &agenticv1alpha1.AgenticRun{}
+
+	before := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("reasoningTokens"))
+	reportStepUsage(r, run, "analysis", bedrockTokenUsage(), true)
+
+	if got := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("reasoningTokens")) - before; got != 1 {
+		t.Errorf("reasoningTokens omission counter delta = %v, want 1", got)
+	}
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("omitting reasoningTokens must not warn, got %q", event)
+	default:
+	}
+
+	c := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionTokenUsageReported)
+	if c == nil || c.Status != metav1.ConditionTrue || c.Reason != agenticv1alpha1.ReasonTokenUsageReportedComplete {
+		t.Fatalf("condition = %+v, want True/%s", c, agenticv1alpha1.ReasonTokenUsageReportedComplete)
+	}
+
+	if run.Status.TokenUsage.ReasoningTokens != nil {
+		t.Errorf("run reasoningTokens = %d, want absent (provider could not report it)",
+			*run.Status.TokenUsage.ReasoningTokens)
+	}
+	if run.Status.TokenUsage.InputTokens == nil || *run.Status.TokenUsage.InputTokens != 100 {
+		t.Errorf("run inputTokens = %v, want 100", run.Status.TokenUsage.InputTokens)
+	}
+}
+
+// TestReportTokenUsage_MissingRequiredIsLoud verifies a dropped required field is
+// visible through the counter and negative condition without creating a Kubernetes event.
+func TestReportTokenUsage_MissingRequiredIsLoud(t *testing.T) {
+	recorder := record.NewFakeRecorder(20)
+	r := &AgenticRunReconciler{EventRecorder: recorder}
+	run := &agenticv1alpha1.AgenticRun{ObjectMeta: metav1.ObjectMeta{Name: "fix-crash", Namespace: "default"}}
+
+	before := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("outputTokens"))
+	reportStepUsage(r, run, "analysis", agenticv1alpha1.TokenUsage{InputTokens: ptr.To[int64](100)}, true)
+
+	if got := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("outputTokens")) - before; got != 1 {
+		t.Errorf("outputTokens missing counter delta = %v, want 1", got)
+	}
+
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("token usage reporting must not create Kubernetes events, got %q", event)
+	default:
+	}
+
+	c := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionTokenUsageReported)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != agenticv1alpha1.ReasonTokenUsageReportedIncomplete {
+		t.Fatalf("condition = %+v, want False/%s", c, agenticv1alpha1.ReasonTokenUsageReportedIncomplete)
+	}
+}
+
+// TestReportTokenUsage_NegativeConditionIsSticky verifies a run that once lost
+// required data stays flagged: later steps cannot repair an already-summed total.
+func TestReportTokenUsage_NegativeConditionIsSticky(t *testing.T) {
+	r := &AgenticRunReconciler{EventRecorder: record.NewFakeRecorder(20)}
+	run := &agenticv1alpha1.AgenticRun{}
+
+	reportStepUsage(r, run, "analysis", agenticv1alpha1.TokenUsage{InputTokens: ptr.To[int64](100)}, true)
+	reportStepUsage(r, run, "execution", fullTokenUsage(), true)
+
+	c := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionTokenUsageReported)
+	if c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("condition = %+v, want it to stay False", c)
+	}
+}
+
+// TestReportTokenUsage_FailedStepWithNoUsageIsSilent covers the failure contract: a
+// failed step that published no token usage is expected, not a defect. Nothing is
+// recorded: no event, no counter, and no condition.
+func TestReportTokenUsage_FailedStepWithNoUsageIsSilent(t *testing.T) {
+	recorder := record.NewFakeRecorder(20)
+	r := &AgenticRunReconciler{EventRecorder: recorder}
+	run := &agenticv1alpha1.AgenticRun{}
+
+	beforeIn := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("inputTokens"))
+	beforeOut := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("outputTokens"))
+
+	reportStepUsage(r, run, "verification", agenticv1alpha1.TokenUsage{}, false)
+
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("a failed step without token usage must not warn, got %q", event)
+	default:
+	}
+	if got := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("inputTokens")) - beforeIn; got != 0 {
+		t.Errorf("inputTokens counter delta = %v, want 0 for a failed step", got)
+	}
+	if got := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("outputTokens")) - beforeOut; got != 0 {
+		t.Errorf("outputTokens counter delta = %v, want 0 for a failed step", got)
+	}
+	if c := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionTokenUsageReported); c != nil {
+		t.Errorf("condition = %+v, want unset for a failed step without usage", c)
+	}
+}
+
+// TestReportTokenUsage_FailedStepWithPartialUsageIsSilent verifies failures do not
+// carry the completeness contract even when the sandbox reported something before
+// dying: the usage is still aggregated, but nothing is flagged.
+func TestReportTokenUsage_FailedStepWithPartialUsageIsSilent(t *testing.T) {
+	recorder := record.NewFakeRecorder(20)
+	r := &AgenticRunReconciler{EventRecorder: recorder}
+	run := &agenticv1alpha1.AgenticRun{}
+
+	beforeOut := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("outputTokens"))
+	reportStepUsage(r, run, "execution", agenticv1alpha1.TokenUsage{InputTokens: ptr.To[int64](100)}, false)
+
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("a failed step must not warn about token usage, got %q", event)
+	default:
+	}
+	if got := testutil.ToFloat64(tokenUsageMissingTotal.WithLabelValues("outputTokens")) - beforeOut; got != 0 {
+		t.Errorf("outputTokens counter delta = %v, want 0 for a failed step", got)
+	}
+	if c := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionTokenUsageReported); c != nil {
+		t.Errorf("condition = %+v, want unset for a failed step", c)
+	}
+	if run.Status.TokenUsage.InputTokens == nil || *run.Status.TokenUsage.InputTokens != 100 {
+		t.Errorf("failed step usage must still be aggregated, inputTokens = %v", run.Status.TokenUsage.InputTokens)
+	}
+}
+
+// sandboxChainPod builds a Pod owned by a Sandbox that is owned by a
+// SandboxClaim, following the agents.x-k8s.io ownership chain the resolvers walk.
+func sandboxChainPod(podLabels, podAnnotations, sandboxLabels, sandboxAnnotations, claimLabels, claimAnnotations map[string]string) []client.Object {
+	sandbox := &unstructured.Unstructured{}
+	sandbox.SetGroupVersionKind(smSandboxGVK)
+	sandbox.SetName("sandbox-analysis")
+	sandbox.SetNamespace("test-ns")
+	sandbox.SetLabels(sandboxLabels)
+	sandbox.SetAnnotations(sandboxAnnotations)
+
+	claim := &unstructured.Unstructured{}
+	claim.SetGroupVersionKind(smClaimGVK)
+	claim.SetName("claim-analysis")
+	claim.SetNamespace("test-ns")
+	claim.SetLabels(claimLabels)
+	claim.SetAnnotations(claimAnnotations)
+	claim.SetCreationTimestamp(metav1.NewTime(time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)))
+
+	sandbox.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: smClaimGVK.GroupVersion().String(),
+		Kind:       smClaimGVK.Kind,
+		Name:       claim.GetName(),
+	}})
+
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:            "sandbox-analysis-pod",
+		Namespace:       "test-ns",
+		Labels:          podLabels,
+		Annotations:     podAnnotations,
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: smSandboxGVK.GroupVersion().String(), Kind: smSandboxGVK.Kind, Name: sandbox.GetName()}},
+	}}
+	return []client.Object{pod, sandbox, claim}
+}
+
+// TestResolveSandboxPodMetadata pins which object wins when identity is spread
+// across the Pod → Sandbox → SandboxClaim chain: the Pod's own copy first, then
+// the Sandbox, then the Claim.
+func TestResolveSandboxPodMetadata(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		objects  []client.Object
+		wantStep string
+		wantName string
+		wantUID  types.UID
+		wantErr  bool
+	}{
+		{
+			name: "pod copy wins over the chain",
+			objects: sandboxChainPod(
+				map[string]string{LabelStep: "analysis", LabelRun: "run-uid"},
+				map[string]string{AnnotationRunName: "fix-crash"},
+				map[string]string{LabelStep: "execution", LabelRun: "other-uid"},
+				map[string]string{AnnotationRunName: "other-run"},
+				map[string]string{LabelStep: "verification", LabelRun: "claim-uid"},
+				map[string]string{AnnotationRunName: "claim-run"},
+			),
+			wantStep: "analysis",
+			wantName: "fix-crash",
+			wantUID:  "run-uid",
+		},
+		{
+			name: "sandbox supplies what the pod lacks",
+			objects: sandboxChainPod(
+				nil, nil,
+				map[string]string{LabelStep: "analysis", LabelRun: "run-uid"},
+				map[string]string{AnnotationRunName: "fix-crash"},
+				map[string]string{LabelStep: "verification", LabelRun: "claim-uid"},
+				map[string]string{AnnotationRunName: "claim-run"},
+			),
+			wantStep: "analysis",
+			wantName: "fix-crash",
+			wantUID:  "run-uid",
+		},
+		{
+			name: "claim supplies what the sandbox lacks",
+			objects: sandboxChainPod(
+				nil, nil, nil, nil,
+				map[string]string{LabelStep: "analysis", LabelRun: "claim-uid"},
+				map[string]string{AnnotationRunName: "claim-run"},
+			),
+			wantStep: "analysis",
+			wantName: "claim-run",
+			wantUID:  "claim-uid",
+		},
+		{
+			name: "pod without a sandbox owner",
+			objects: []client.Object{&corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+				Name: "orphan", Namespace: "test-ns",
+			}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithObjects(tt.objects...).Build()
+			pod := &corev1.Pod{}
+			for _, obj := range tt.objects {
+				if p, ok := obj.(*corev1.Pod); ok {
+					pod = p
+				}
+			}
+
+			step, runName, runUID, err := resolveSandboxPodMetadata(ctx, c, pod)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if step != tt.wantStep || runName != tt.wantName || runUID != tt.wantUID {
+				t.Errorf("got step=%q runName=%q runUID=%q, want step=%q runName=%q runUID=%q",
+					step, runName, runUID, tt.wantStep, tt.wantName, tt.wantUID)
+			}
+		})
+	}
+
+	t.Run("sandbox fetch failure surfaces", func(t *testing.T) {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "sandbox-analysis-pod", Namespace: "test-ns",
+			OwnerReferences: []metav1.OwnerReference{{Kind: smSandboxGVK.Kind, Name: "gone-sandbox"}},
+		}}
+		c := fake.NewClientBuilder().WithObjects(pod).Build()
+		if _, _, _, err := resolveSandboxPodMetadata(ctx, c, pod); err == nil {
+			t.Fatal("expected an error when the Sandbox is missing")
+		}
+	})
+}
+
+// TestSandboxClaimCreationTime pins the startup clock used in claim mode: the
+// claim's timestamp, not the pod's.
+func TestSandboxClaimCreationTime(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("claim timestamp", func(t *testing.T) {
+		objects := sandboxChainPod(nil, nil, nil, nil, nil, nil)
+		c := fake.NewClientBuilder().WithObjects(objects...).Build()
+		pod := objects[0].(*corev1.Pod)
+
+		got, err := sandboxClaimCreationTime(ctx, c, pod)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
+		if !got.Equal(want) {
+			t.Errorf("claim creation time = %s, want %s", got, want)
+		}
+	})
+
+	t.Run("no claim owner yields zero", func(t *testing.T) {
+		sandbox := &unstructured.Unstructured{}
+		sandbox.SetGroupVersionKind(smSandboxGVK)
+		sandbox.SetName("sandbox-analysis")
+		sandbox.SetNamespace("test-ns")
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "pod", Namespace: "test-ns",
+			OwnerReferences: []metav1.OwnerReference{{Kind: smSandboxGVK.Kind, Name: sandbox.GetName()}},
+		}}
+		c := fake.NewClientBuilder().WithObjects(pod, sandbox).Build()
+
+		got, err := sandboxClaimCreationTime(ctx, c, pod)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !got.IsZero() {
+			t.Errorf("claim creation time = %s, want zero", got)
+		}
+	})
+
+	t.Run("sandbox fetch failure surfaces", func(t *testing.T) {
+		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+			Name: "pod", Namespace: "test-ns",
+			OwnerReferences: []metav1.OwnerReference{{Kind: smSandboxGVK.Kind, Name: "gone-sandbox"}},
+		}}
+		c := fake.NewClientBuilder().WithObjects(pod).Build()
+		if _, err := sandboxClaimCreationTime(ctx, c, pod); err == nil {
+			t.Fatal("expected an error when the Sandbox is missing")
+		}
+	})
 }
