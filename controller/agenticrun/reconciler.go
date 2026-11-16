@@ -379,15 +379,17 @@ func (r *AgenticRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
-// degradableSpokeStopFailure releases a cancellation finalizer only after the
-// deletion retry window, when hub cleanup is confirmed and spoke access is gone
-// or the spoke API is unreachable.
+// degradableSpokeStopFailure releases a stopped run's finalizer only after the
+// deletion retry window, when the run recorded a failed stop outcome, hub
+// cleanup is confirmed, and spoke access is gone or the spoke API is
+// unreachable. The live spoke probe decides reachability; the recorded
+// failure message can only veto release when it names a non-transport fault.
 func (r *AgenticRunReconciler) degradableSpokeStopFailure(
 	ctx context.Context,
 	run *agenticv1alpha1.AgenticRun,
 	source stopSource,
 ) (string, bool) {
-	if source != stopSourceCancellation ||
+	if (source != stopSourceCancellation && source != stopSourceSuspension) ||
 		run == nil ||
 		run.DeletionTimestamp.IsZero() ||
 		r.now().Before(run.DeletionTimestamp.Add(rbacCleanupFinalizerRetryWindow)) ||
@@ -399,20 +401,12 @@ func (r *AgenticRunReconciler) degradableSpokeStopFailure(
 	}
 	acceptedSource, _, accepted := acceptedStopSource(run)
 	if !accepted ||
-		acceptedSource != stopSourceCancellation ||
+		acceptedSource != source ||
 		!HasFinalStopOutcome(run) ||
-		!hasCancellationFailure(run) {
+		!HasStopTeardownFailure(run) {
 		return "", false
 	}
-
-	failureMessage := ""
-	for i := range run.Status.Conditions {
-		condition := &run.Status.Conditions[i]
-		if condition.Status == metav1.ConditionFalse && condition.Reason == reasonCancellationFailed {
-			failureMessage = condition.Message
-			break
-		}
-	}
+	failureMessage := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionStopping).Message
 
 	hubCtx, cancelHub := context.WithTimeout(ctx, cleanupTimeout)
 	hubReport, hubErr := r.Sandbox.CleanupSuspension(hubCtx, run.UID, nil)
@@ -442,7 +436,7 @@ func (r *AgenticRunReconciler) degradableSpokeStopFailure(
 	if probeErr == nil || apierrors.IsNotFound(probeErr) {
 		return "", false
 	}
-	if !isDegradableSpokeError(probeErr) || !degradableSpokeDiagnostic(failureMessage) {
+	if !isDegradableSpokeError(probeErr) || hasNonDegradableSpokeDiagnostic(failureMessage) {
 		return "", false
 	}
 	return probeErr.Error(), true
@@ -453,9 +447,9 @@ func (r *AgenticRunReconciler) releaseDegradedStopFinalizer(
 	run *agenticv1alpha1.AgenticRun,
 	source stopSource,
 ) (bool, error) {
-	// The deleting run is the durable cleanup obligation while suspension is
-	// active: it holds the namespace inventory and blocks SafeToResume. Do not
-	// degrade the finalizer until the system is no longer suspended.
+	// While suspension is active the deleting run keeps the namespace inventory
+	// for the run controller's cleanup retries. Do not degrade the finalizer
+	// until the system is no longer suspended.
 	suspended, _, _, err := r.readSuspensionActivation(ctx)
 	if err != nil {
 		return false, err

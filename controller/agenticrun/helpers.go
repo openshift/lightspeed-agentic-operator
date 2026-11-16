@@ -289,30 +289,6 @@ func hasNonDegradableSpokeDiagnostic(diagnostic string) bool {
 	return false
 }
 
-func degradableSpokeDiagnostic(diagnostic string) bool {
-	if hasNonDegradableSpokeDiagnostic(diagnostic) {
-		return false
-	}
-	message := strings.ToLower(diagnostic)
-	for _, marker := range []string{
-		"connection refused",
-		"connection reset",
-		"network is unreachable",
-		"no such host",
-		"dial tcp",
-		"i/o timeout",
-		"tls handshake timeout",
-		"context deadline exceeded",
-		"service unavailable",
-		"server timeout",
-	} {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
-}
-
 // StopCleanupConfirmed reports whether the run's recorded state satisfies stop-cleanup resolution.
 func StopCleanupConfirmed(run *agenticv1alpha1.AgenticRun) bool {
 	if run == nil || hasRunSandboxInfo(run) {

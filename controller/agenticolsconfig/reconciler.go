@@ -54,6 +54,7 @@ const (
 	reasonAdminDeactivated           = "AdminDeactivated"
 	reasonSystemSuspended            = "SystemSuspended"
 	reasonCleanupConfirmed           = "CleanupConfirmed"
+	reasonRunCleanupUnverified       = "RunCleanupUnverified"
 	eventReasonSuspensionActivated   = "SuspensionActivated"
 	eventReasonSuspensionDeactivated = "SuspensionDeactivated"
 )
@@ -256,6 +257,10 @@ type activationEvidence struct {
 	runInventoryErr    error
 	unsavedMarkers     []string
 	pendingRunOutcomes []string
+	// unverifiedRunStops lists affected runs whose final stop outcome is
+	// recorded but whose cleanup the run controller could not confirm. They
+	// keep the activation outcome "with errors" but do not block resumption.
+	unverifiedRunStops []string
 }
 
 func (e activationEvidence) cleanupConfirmed() bool {
@@ -275,13 +280,14 @@ func (e activationEvidence) safeToResume() bool {
 func (e activationEvidence) unresolved() bool {
 	return !e.cleanupConfirmed() ||
 		!e.runAcceptanceConfirmed() ||
-		len(e.pendingRunOutcomes) > 0
+		len(e.pendingRunOutcomes) > 0 ||
+		len(e.unverifiedRunStops) > 0
 }
 
 func (e activationEvidence) diagnostic(prefix string) string {
 	items := make([]string, 0,
 		len(e.cleanup.Pending)+len(e.cleanup.Failures)+len(e.cleanup.Unverified)+
-			len(e.unsavedMarkers)+len(e.pendingRunOutcomes)+2,
+			len(e.unsavedMarkers)+len(e.pendingRunOutcomes)+len(e.unverifiedRunStops)+2,
 	)
 	for _, item := range e.cleanup.Pending {
 		items = append(items, "cleanup pending: "+item)
@@ -294,6 +300,7 @@ func (e activationEvidence) diagnostic(prefix string) string {
 	}
 	items = append(items, e.unsavedMarkers...)
 	items = append(items, e.pendingRunOutcomes...)
+	items = append(items, e.unverifiedRunStops...)
 	if e.cleanupErr != nil {
 		items = append(items, "cleanup pass returned an error")
 	}
@@ -303,12 +310,13 @@ func (e activationEvidence) diagnostic(prefix string) string {
 	items = sortedUnique(items)
 
 	counts := fmt.Sprintf(
-		"%d cleanup pending, %d cleanup failures, %d cleanup unverified, %d unsaved stop markers, %d run outcomes pending",
+		"%d cleanup pending, %d cleanup failures, %d cleanup unverified, %d unsaved stop markers, %d run outcomes pending, %d run stops unverified",
 		len(e.cleanup.Pending),
 		len(e.cleanup.Failures),
 		len(e.cleanup.Unverified),
 		len(e.unsavedMarkers),
 		len(e.pendingRunOutcomes),
+		len(e.unverifiedRunStops),
 	)
 	if e.cleanupErr != nil {
 		counts += ", cleanup pass error"
@@ -419,10 +427,12 @@ func (r *Reconciler) reconcileSuspension(
 			}
 
 			if acceptStop && !agenticrun.StopCleanupConfirmed(current) {
-				evidence.pendingRunOutcomes = append(
-					evidence.pendingRunOutcomes,
-					fmt.Sprintf("run stop unresolved: %s/%s uid=%s", current.Namespace, current.Name, current.UID),
-				)
+				runRef := fmt.Sprintf("%s/%s uid=%s", current.Namespace, current.Name, current.UID)
+				if agenticrun.HasStopTeardownFailure(current) {
+					evidence.unverifiedRunStops = append(evidence.unverifiedRunStops, "run stop unverified: "+runRef)
+				} else {
+					evidence.pendingRunOutcomes = append(evidence.pendingRunOutcomes, "run stop unresolved: "+runRef)
+				}
 			}
 		}
 	}
@@ -564,6 +574,10 @@ func (r *Reconciler) patchActivationOutcome(
 			safeStatus = metav1.ConditionTrue
 			safeReason = reasonCleanupConfirmed
 			safeMessage = "Observed workload/access cleanup and durable run-stop acceptance are confirmed"
+			if len(evidence.unverifiedRunStops) > 0 {
+				safeReason = reasonRunCleanupUnverified
+				safeMessage = evidence.diagnostic("Resumption allowed; hub cleanup is confirmed and every affected run has a final stop outcome, but some run cleanup is unverified")
+			}
 		}
 		base := current.DeepCopy()
 		setConditionAt(&current.Status.Conditions, metav1.Condition{
