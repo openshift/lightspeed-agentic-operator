@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/name: agentic-operator-metrics
 spec:
   selector:
-    control-plane: controller-manager
+    control-plane: agentic-controller-manager
     app.kubernetes.io/name: lightspeed-agentic-operator
   ports:
     - name: metrics

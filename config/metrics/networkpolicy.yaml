@@ -5,7 +5,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      control-plane: controller-manager
+      control-plane: agentic-controller-manager
       app.kubernetes.io/name: lightspeed-agentic-operator
   policyTypes:
     - Ingress

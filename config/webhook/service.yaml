@@ -11,4 +11,4 @@ spec:
       targetPort: 9443
       protocol: TCP
   selector:
-    control-plane: controller-manager
+    control-plane: agentic-controller-manager

@@ -347,7 +347,7 @@ echo "Waiting for operator rollout..."
 oc rollout status deployment/controller-manager -n "${OPERATOR_NAMESPACE}" --timeout=120s
 
 echo "Operator pods:"
-oc get pods -n "${OPERATOR_NAMESPACE}" -l control-plane=controller-manager
+oc get pods -n "${OPERATOR_NAMESPACE}" -l control-plane=agentic-controller-manager
 
 # Create ApprovalPolicy (analysis auto-approved for e2e).
 echo "Creating ApprovalPolicy..."
