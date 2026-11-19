@@ -289,6 +289,7 @@ func (s AgenticRunStep) IsZero() bool {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.analysis) || (has(self.analysis) && self.analysis == oldSelf.analysis)",message="analysis is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.execution) || (has(self.execution) && self.execution == oldSelf.execution)",message="execution is immutable once set"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.verification) || (has(self.verification) && self.verification == oldSelf.verification)",message="verification is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.cancelled) || (has(self.cancelled) && (!oldSelf.cancelled || self.cancelled))",message="cancelled cannot be cleared or removed"
 type AgenticRunSpec struct {
 	// request is the user's original request, alert description, or a
 	// description of what triggered this agentic run. This text is passed to
@@ -357,12 +358,16 @@ type AgenticRunSpec struct {
 	// the operator detects (generation > observedGeneration) and triggers
 	// re-analysis with the feedback appended to the original request.
 	//
-	// Mutable: this and terminalTTL below are the only mutable spec
+	// Mutable: revisionFeedback, cancelled, and terminalTTL are the only mutable spec
 	// fields. All other spec fields are immutable via CEL rules.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=32768
 	RevisionFeedback string `json:"revisionFeedback,omitempty"`
+
+	// cancelled requests that this run stop. Omission and false both mean no cancellation request.
+	// +optional
+	Cancelled *bool `json:"cancelled,omitempty"` //nolint:kubeapilinter // optional tri-state signal; nil and false both mean not cancelled
 
 	// terminalTTL requests cleanup after this many whole days in a terminal
 	// phase (Completed, Failed, Denied, Escalated, EmergencyStopped).
