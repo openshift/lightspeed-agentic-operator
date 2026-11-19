@@ -405,7 +405,7 @@ func TestTokenUsageFlow_FailedStepIsSilent(t *testing.T) {
 		t.Fatalf("VerificationResult has no failing check: %+v", verification.Status.Checks)
 	}
 
-	t.Log("PASS: the failed verification step did not produce a token-usage signal")
+	t.Log("PASS: VerificationResult omits peakInputTokens and records a failed check")
 }
 
 // singleAnalysisResult returns the only AnalysisResult belonging to the run.

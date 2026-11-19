@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/prometheus/client_golang/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,7 +14,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	agenticv1alpha1 "github.com/openshift/lightspeed-agentic-operator/api/v1alpha1"
 )
@@ -157,41 +155,34 @@ func resolveBarePodMetadata(pod *corev1.Pod) (step, runName string, runUID types
 	return step, runName, runUID
 }
 
-// sandboxClaimForPod walks the agents.x-k8s.io ownership chain from a sandbox Pod
-// to the SandboxClaim that created it. The pod-event handler needs the identity
-// labels carried along that chain and the timeout loop needs the claim's creation
-// time, so the walk lives here once instead of once per caller.
-//
-// A nil Sandbox means the Pod has no Sandbox owner; a nil Claim with a non-nil
-// Sandbox means the chain is incomplete rather than broken. The first Sandbox
-// owner wins: a Pod never has more than one, and a partial chain is not worth a
-// second lookup. The Claim is always fetched, so callers that could stop early
-// pay one cached read.
-func sandboxClaimForPod(ctx context.Context, c client.Client, pod *corev1.Pod) (sandbox, claim *unstructured.Unstructured, err error) {
-	for _, podRef := range pod.OwnerReferences {
-		if podRef.Kind != smSandboxGVK.Kind {
+func sandboxForPod(ctx context.Context, c client.Client, pod *corev1.Pod) (*unstructured.Unstructured, error) {
+	for _, ref := range pod.OwnerReferences {
+		if ref.Kind != smSandboxGVK.Kind {
 			continue
 		}
-		sb := &unstructured.Unstructured{}
-		sb.SetGroupVersionKind(smSandboxGVK)
-		if err := c.Get(ctx, client.ObjectKey{Name: podRef.Name, Namespace: pod.Namespace}, sb); err != nil {
-			return nil, nil, err
+		sandbox := &unstructured.Unstructured{}
+		sandbox.SetGroupVersionKind(smSandboxGVK)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: ref.Name}, sandbox); err != nil {
+			return nil, err
 		}
-		sandbox = sb
-		for _, sbRef := range sb.GetOwnerReferences() {
-			if sbRef.Kind != smClaimGVK.Kind {
-				continue
-			}
-			cl := &unstructured.Unstructured{}
-			cl.SetGroupVersionKind(smClaimGVK)
-			if err := c.Get(ctx, client.ObjectKey{Name: sbRef.Name, Namespace: pod.Namespace}, cl); err != nil {
-				return sandbox, nil, err
-			}
-			return sandbox, cl, nil
-		}
-		return sandbox, nil, nil
+		return sandbox, nil
 	}
-	return nil, nil, nil
+	return nil, nil
+}
+
+func claimForSandbox(ctx context.Context, c client.Client, sandbox *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	for _, ref := range sandbox.GetOwnerReferences() {
+		if ref.Kind != smClaimGVK.Kind {
+			continue
+		}
+		claim := &unstructured.Unstructured{}
+		claim.SetGroupVersionKind(smClaimGVK)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: sandbox.GetNamespace(), Name: ref.Name}, claim); err != nil {
+			return nil, err
+		}
+		return claim, nil
+	}
+	return nil, nil
 }
 
 // resolveSandboxPodMetadata prefers identity copied onto the Pod template and
@@ -212,7 +203,7 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 		return step, runName, runUID, nil
 	}
 
-	sandbox, claim, err := sandboxClaimForPod(ctx, c, pod)
+	sandbox, err := sandboxForPod(ctx, c, pod)
 	if err != nil {
 		return step, runName, runUID, err
 	}
@@ -230,8 +221,12 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 	if runName == "" {
 		runName = sandbox.GetAnnotations()[AnnotationRunName]
 	}
-	if claim == nil {
+	if step != "" && runUID != "" {
 		return step, runName, runUID, nil
+	}
+	claim, err := claimForSandbox(ctx, c, sandbox)
+	if err != nil || claim == nil {
+		return step, runName, runUID, err
 	}
 
 	claimLabels := claim.GetLabels()
@@ -419,7 +414,7 @@ func (r *AgenticRunReconciler) patchStepResult(ctx context.Context, run *agentic
 	// can never disagree about the numbers they are describing.
 	usage := extractTokenUsage(resultCR)
 	aggregateTokenUsage(run, usage)
-	r.reportTokenUsage(ctx, run, step, usage, status == metav1.ConditionTrue)
+	missingFields := r.reportTokenUsage(ctx, run, step, usage, status == metav1.ConditionTrue)
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 		Type:               condType,
 		Status:             status,
@@ -431,6 +426,8 @@ func (r *AgenticRunReconciler) patchStepResult(ctx context.Context, run *agentic
 		logf.FromContext(ctx).Error(err, "pod handler: failed to patch step result", LogKeyCondition, condType)
 		return err
 	}
+	recordMissingTokenUsage(missingFields)
+	recordTokenUsage(run.Namespace, step, usage)
 	return nil
 }
 
@@ -458,7 +455,6 @@ func (r *AgenticRunReconciler) patchVerificationFailedEscalating(ctx context.Con
 	usage := extractTokenUsage(resultCR)
 	aggregateTokenUsage(run, usage)
 	// A verification failure is a failed step: aggregate only, never assess completeness.
-	r.reportTokenUsage(ctx, run, "verification", usage, false)
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
 		Type:               agenticv1alpha1.AgenticRunConditionVerified,
 		Status:             metav1.ConditionFalse,
@@ -477,6 +473,7 @@ func (r *AgenticRunReconciler) patchVerificationFailedEscalating(ctx context.Con
 		logf.FromContext(ctx).Error(err, "pod handler: failed to patch verification-failed escalation")
 		return err
 	}
+	recordTokenUsage(run.Namespace, "verification", usage)
 	return nil
 }
 
@@ -734,23 +731,6 @@ func podTerminatedInfo(pod *corev1.Pod) (msg string, exitCode *int32) {
 // Token usage completeness reporting
 // ---------------------------------------------------------------------------
 
-// tokenUsageMissingTotal counts observations of Result CRs that omitted a token
-// usage field, labelled by field name. It makes silent under-reporting visible to
-// alerting: a non-zero rate for inputTokens/outputTokens is a sandbox defect,
-// while reasoningTokens is expected to be non-zero on providers that cannot
-// report reasoning tokens yet (Bedrock, Vertex).
-var tokenUsageMissingTotal = prometheus.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "agenticrun_token_usage_missing_total",
-		Help: "Number of observations of Result CRs that omitted a token usage field, by field.",
-	},
-	[]string{"field"},
-)
-
-func init() {
-	metrics.Registry.MustRegister(tokenUsageMissingTotal)
-}
-
 // Token-usage reporting contract (spec: token-usage.md):
 //   - required: inputTokens, outputTokens and peakInputTokens whenever tokenUsage
 //     is present. Their absence means the sandbox dropped data we cannot
@@ -862,16 +842,14 @@ func assessTokenUsageReporting(tu agenticv1alpha1.TokenUsage) tokenUsageReportin
 //
 // Token-usage telemetry never creates Kubernetes Events: the condition is the
 // API-visible per-run signal, while logs and metrics provide operational detail.
-func (r *AgenticRunReconciler) reportTokenUsage(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, usage agenticv1alpha1.TokenUsage, stepSucceeded bool) {
+func (r *AgenticRunReconciler) reportTokenUsage(ctx context.Context, run *agenticv1alpha1.AgenticRun, step string, usage agenticv1alpha1.TokenUsage, stepSucceeded bool) []string {
 	if !stepSucceeded {
-		return
+		return nil
 	}
 
 	assessment := assessTokenUsageReporting(usage)
 
-	for _, field := range append(append([]string{}, assessment.RequiredMissing...), assessment.OptionalMissing...) {
-		tokenUsageMissingTotal.WithLabelValues(field).Inc()
-	}
+	missingFields := append(assessment.RequiredMissing, assessment.OptionalMissing...)
 
 	if len(assessment.RequiredMissing) > 0 {
 		logf.FromContext(ctx).Info("step Result CR did not report required token usage fields",
@@ -881,7 +859,7 @@ func (r *AgenticRunReconciler) reportTokenUsage(ctx context.Context, run *agenti
 	// Sticky: once the run is known to be under-reported, a later well-behaved
 	// step cannot repair an already-summed total.
 	if existing := meta.FindStatusCondition(run.Status.Conditions, agenticv1alpha1.AgenticRunConditionTokenUsageReported); existing != nil && existing.Status == metav1.ConditionFalse {
-		return
+		return missingFields
 	}
 
 	meta.SetStatusCondition(&run.Status.Conditions, metav1.Condition{
@@ -891,4 +869,5 @@ func (r *AgenticRunReconciler) reportTokenUsage(ctx context.Context, run *agenti
 		Message:            assessment.Message,
 		ObservedGeneration: run.Generation,
 	})
+	return missingFields
 }
