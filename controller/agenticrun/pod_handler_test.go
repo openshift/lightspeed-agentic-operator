@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,12 +23,15 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 )
 
+const testTokenUsageModel = "test-model"
+
 // makeTokenUsage is a helper to build a TokenUsage value concisely.
 func makeTokenUsage(in, out int64) agenticv1alpha1.TokenUsage {
-	return agenticv1alpha1.TokenUsage{InputTokens: ptr.To(in), OutputTokens: ptr.To(out)}
+	return agenticv1alpha1.TokenUsage{InputTokens: ptr.To(in), OutputTokens: ptr.To(out), Model: testTokenUsageModel}
 }
 
 // assertOptionalTokens compares one optional token count, treating nil as
@@ -766,6 +770,8 @@ func TestCompleteStep_AggregatesTokenUsage(t *testing.T) {
 func TestCompleteStep_TwiceAggregatesUsageOnce(t *testing.T) {
 	ctx := context.Background()
 	r, run := newVerifyingReconciler(t)
+	inputBefore := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "input")
+	outputBefore := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "output")
 
 	setupVerificationResultCR(t, r, run, agenticv1alpha1.ActionOutcomeSucceeded,
 		[]agenticv1alpha1.VerifyCheck{{Name: "pod-running", Source: "oc", Value: "Running", Result: agenticv1alpha1.CheckResultPassed}},
@@ -783,6 +789,12 @@ func TestCompleteStep_TwiceAggregatesUsageOnce(t *testing.T) {
 		t.Fatalf("get run: %v", err)
 	}
 	assertTokenUsage(t, got.Status.TokenUsage, 500, 200)
+	if increment := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "input") - inputBefore; increment != 500 {
+		t.Errorf("input metric increment = %v, want 500", increment)
+	}
+	if increment := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "output") - outputBefore; increment != 200 {
+		t.Errorf("output metric increment = %v, want 200", increment)
+	}
 }
 
 // TestPatchStepResult_SkipsWhenStepAlreadyTerminal covers the window
@@ -827,12 +839,52 @@ func TestPatchStepResult_SkipsWhenStepAlreadyTerminal(t *testing.T) {
 	}
 }
 
+func TestPatchStepResult_StatusPatchFailureDoesNotRecordUsage(t *testing.T) {
+	ctx := context.Background()
+	r, run := newVerifyingReconciler(t)
+	setupVerificationResultCR(t, r, run, agenticv1alpha1.ActionOutcomeSucceeded,
+		[]agenticv1alpha1.VerifyCheck{{Name: "pod-running", Source: "oc", Value: "Running", Result: agenticv1alpha1.CheckResultPassed}},
+		"Pod healthy", makeTokenUsage(80, 20))
+
+	crName := resultCRName(run.Name, "verification", nextResultIndex(run, "verification"))
+	cr := &agenticv1alpha1.VerificationResult{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "default", Name: crName}, cr); err != nil {
+		t.Fatalf("get VerificationResult: %v", err)
+	}
+	inputBefore := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "input")
+	missing := tokenUsageMissingTotal.WithLabelValues("peakInputTokens")
+	missingBefore := testutil.ToFloat64(missing)
+	baseClient, ok := r.Client.(client.WithWatch)
+	if !ok {
+		t.Fatal("test client does not implement client.WithWatch")
+	}
+	r.Client = interceptor.NewClient(baseClient, interceptor.Funcs{
+		SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+			return fmt.Errorf("simulated status patch failure")
+		},
+	})
+
+	err := r.patchStepResult(ctx, run, "verification", stepConditionType("verification"), crName, cr,
+		metav1.ConditionTrue, ReasonSucceeded, "Sandbox completed")
+	if err == nil {
+		t.Fatal("patchStepResult succeeded, want status patch failure")
+	}
+	if increment := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "input") - inputBefore; increment != 0 {
+		t.Errorf("input metric increment after failed status patch = %v, want 0", increment)
+	}
+	if got := testutil.ToFloat64(missing) - missingBefore; got != 0 {
+		t.Errorf("missing-field increment after failed status patch = %v, want 0", got)
+	}
+}
+
 // TestPatchVerificationFailedEscalating_SkipsWhenAlreadyTerminal is the same
 // guard for the escalating path, which writes Verified=False instead of a
 // success condition.
 func TestPatchVerificationFailedEscalating_SkipsWhenAlreadyTerminal(t *testing.T) {
 	ctx := context.Background()
 	r, run := newVerifyingReconciler(t)
+	inputBefore := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "input")
+	outputBefore := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "output")
 
 	setupVerificationResultCR(t, r, run, agenticv1alpha1.ActionOutcomeFailed,
 		[]agenticv1alpha1.VerifyCheck{{Name: "pod-running", Source: "oc", Value: "CrashLoopBackOff", Result: agenticv1alpha1.CheckResultFailed}},
@@ -857,6 +909,12 @@ func TestPatchVerificationFailedEscalating_SkipsWhenAlreadyTerminal(t *testing.T
 	assertTokenUsage(t, got.Status.TokenUsage, 300, 120)
 	if refs := got.Status.Steps.Verification.Results; len(refs) != 1 {
 		t.Errorf("verification result refs = %d, want 1", len(refs))
+	}
+	if increment := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "input") - inputBefore; increment != 300 {
+		t.Errorf("failed-step input metric increment = %v, want 300", increment)
+	}
+	if increment := tokenUsageMetricValue("default", "verification", testTokenUsageModel, "output") - outputBefore; increment != 120 {
+		t.Errorf("failed-step output metric increment = %v, want 120", increment)
 	}
 }
 
@@ -1035,7 +1093,7 @@ func bedrockTokenUsage() agenticv1alpha1.TokenUsage {
 // first, then completeness of the step's token usage is recorded.
 func reportStepUsage(r *AgenticRunReconciler, run *agenticv1alpha1.AgenticRun, step string, incoming agenticv1alpha1.TokenUsage, stepSucceeded bool) {
 	aggregateTokenUsage(run, incoming)
-	r.reportTokenUsage(context.Background(), run, step, incoming, stepSucceeded)
+	recordMissingTokenUsage(r.reportTokenUsage(context.Background(), run, step, incoming, stepSucceeded))
 }
 
 // TestAssessTokenUsageReporting pins the severity split: only missing required
@@ -1510,6 +1568,16 @@ func TestResolveSandboxPodMetadata(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("complete sandbox identity does not require claim", func(t *testing.T) {
+		objects := sandboxChainPod(nil, nil, map[string]string{LabelStep: "analysis", LabelRun: "run-uid"}, nil, nil, nil)
+		pod := objects[0].(*corev1.Pod)
+		c := fake.NewClientBuilder().WithObjects(objects[:2]...).Build()
+		step, _, uid, err := resolveSandboxPodMetadata(ctx, c, pod)
+		if err != nil || step != "analysis" || uid != "run-uid" {
+			t.Fatalf("identity = (%q, %q), err = %v", step, uid, err)
+		}
+	})
 
 	t.Run("sandbox fetch failure surfaces", func(t *testing.T) {
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
