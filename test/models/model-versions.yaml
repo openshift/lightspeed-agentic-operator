@@ -1,0 +1,27 @@
+# Single source of product E2E model IDs. Use explicit IDs, not aliases.
+# For replacements, use modelversions swap to maintain model-history.yaml.
+routes:
+  claude:
+    family: anthropic
+    primary: claude-haiku-5-5
+    extras: [claude-sonnet-5-5, claude-opus-5-5]
+  gemini:
+    family: google
+    primary: gemini-3.1-flash-lite
+    extras: [gemini-3.8-flash]
+  openai:
+    family: openai
+    primary: gpt-6-luna
+    extras: [gpt-6.1-sol, gpt-6.1-terra]
+  azure-openai:
+    family: openai
+    primary: gpt-6-luna
+    extras: [gpt-6.1-sol, gpt-6.1-terra]
+  bedrock-claude:
+    family: anthropic
+    primary: global.anthropic.claude-haiku-5-5
+    extras: [global.anthropic.claude-sonnet-5-5, global.anthropic.claude-opus-5-5]
+  bedrock-openai:
+    family: openai
+    primary: openai.gpt-6-luna
+    extras: [openai.gpt-6.1-sol, openai.gpt-6.1-terra]

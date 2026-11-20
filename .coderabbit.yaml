@@ -106,6 +106,12 @@ reviews:
   # Prodsec recommended path-specific instructions
   # https://github.com/RedHatProductSecurity/prodsec-skills/blob/main/.coderabbit.yaml
   path_instructions:
+    - path: "test/models/model-versions.yaml"
+      instructions: |
+        If the model catalog changed without a corresponding change to
+        test/models/model-history.yaml, post a non-blocking note asking the
+        author to check whether a removed model needs a history record. Never
+        request changes solely for a missing or expired history record.
 
     # ── Injection & input validation ─────────────────────────────
     - path: "**/*.{py,js,ts,go,rs,java,rb,php,kt,swift,cs}"
