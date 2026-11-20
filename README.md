@@ -284,7 +284,13 @@ ARTIFACT_DIR="$PWD/artifacts" \
 bash scripts/e2e-cluster.sh claude
 ```
 
-`claude` and `gemini` require `VERTEX_PROVIDER_KEY_PATH` and `VERTEX_PROJECT_ID`; `openai` requires `OPENAI_PROVIDER_KEY_PATH`; `azure-openai` requires `AZUREOPENAI_PROVIDER_KEY_PATH`; `bedrock-deepseek` requires `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY`; and `bedrock-claude` requires `BEDROCK_ROLE_AWS_ACCESS_KEY_ID` and `BEDROCK_ROLE_AWS_SECRET_ACCESS_KEY`. The default run order is `claude`, `gemini`, `openai`, `azure-openai`, `bedrock-deepseek`, then `bedrock-claude`.
+`claude` and `gemini` require `VERTEX_PROVIDER_KEY_PATH` and `VERTEX_PROJECT_ID`; `openai` requires `OPENAI_PROVIDER_KEY_PATH`; `azure-openai` requires `AZUREOPENAI_PROVIDER_KEY_PATH`; `bedrock-claude` requires `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY`. The default run order is `claude`, `gemini`, `openai`, `azure-openai`, then `bedrock-claude`.
+
+The [model catalog](test/models/model-versions.yaml) defines each route's full
+E2E primary and smoke-only extras. `E2E_MODEL` overrides the primary for local
+runs. From the repository root, run `go run ./test/models/cmd/modelversions
+matrix` to print the smoke matrix, or `make check-model-history` to warn about
+unrecorded swaps and expired history entries.
 
 | Variable | Purpose |
 | --- | --- |

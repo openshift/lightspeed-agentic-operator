@@ -113,6 +113,11 @@ test-metrics-e2e-build: $(LOCALBIN) ## Compile metrics E2E tests without contact
 product-e2e: ## Run product e2e: deploy operator, run all providers against live LLMs, collect artifacts.
 	bash scripts/e2e-cluster.sh $(PROVIDERS)
 
+MODEL_HISTORY_BASE ?= origin/main
+.PHONY: check-model-history
+check-model-history: ## Warn about unrecorded model removals and expired swap records.
+	go run ./test/models/cmd/modelversions check-history --base "$(MODEL_HISTORY_BASE)"
+
 .PHONY: product-e2e-disconnected
 product-e2e-disconnected: ## Provision Gemma via a pinned service checkout, then run restricted core product E2E.
 	bash scripts/e2e-disconnected.sh

@@ -155,7 +155,7 @@ func setupRealProviderFixtures(c client.Client) error {
 	}
 
 	var creds []byte
-	if provider != "bedrock-deepseek" && provider != "bedrock-claude" {
+	if provider != "bedrock-claude" {
 		if keyPath == "" {
 			return fmt.Errorf("E2E_PROVIDER=%s requires E2E_PROVIDER_KEY_PATH", provider)
 		}
@@ -218,7 +218,7 @@ func setupRealProviderFixtures(c client.Client) error {
 				Endpoint:          os.Getenv("AZURE_OPENAI_ENDPOINT"),
 			},
 		}
-	case "bedrock-deepseek", "bedrock-claude":
+	case "bedrock-claude":
 		accessKey, secretKey := os.Getenv("E2E_BEDROCK_ACCESS_KEY_ID"), os.Getenv("E2E_BEDROCK_SECRET_ACCESS_KEY")
 		if accessKey == "" || secretKey == "" {
 			return fmt.Errorf("%s requires Bedrock AWS credentials", provider)

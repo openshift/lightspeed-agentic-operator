@@ -1,0 +1,3 @@
+# Swaps record slot, model, replacedBy, swappedAt, expiresAt and lastRun.
+# Records expire six months after a swap. Use modelversions swap to update.
+[]
