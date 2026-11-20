@@ -8,6 +8,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -431,7 +432,14 @@ func TestCreateIdempotent_ExecutionResult(t *testing.T) {
 }
 
 func TestCopyResultStatus_CopiesTokenUsage(t *testing.T) {
-	tu := makeTokenUsage(100, 50)
+	tu := agenticv1alpha1.TokenUsage{
+		InputTokens:     ptr.To[int64](100),
+		OutputTokens:    ptr.To[int64](50),
+		ReasoningTokens: ptr.To[int64](20),
+		ToolTokens:      ptr.To[int64](30),
+		PeakInputTokens: ptr.To[int64](100),
+		Model:           "claude-sonnet-4-5-20250929",
+	}
 
 	tests := []struct {
 		name string
@@ -463,7 +471,14 @@ func TestCopyResultStatus_CopiesTokenUsage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			copyResultStatus(tt.dst, tt.src)
-			assertTokenUsage(t, extractTokenUsage(tt.dst), 100, 50)
+			got := extractTokenUsage(tt.dst)
+			assertTokenUsage(t, got, 100, 50)
+			assertOptionalTokens(t, "reasoningTokens", got.ReasoningTokens, ptr.To[int64](20))
+			assertOptionalTokens(t, "toolTokens", got.ToolTokens, ptr.To[int64](30))
+			assertOptionalTokens(t, "peakInputTokens", got.PeakInputTokens, ptr.To[int64](100))
+			if got.Model != "claude-sonnet-4-5-20250929" {
+				t.Errorf("model = %q, want the sandbox-reported model", got.Model)
+			}
 		})
 	}
 }

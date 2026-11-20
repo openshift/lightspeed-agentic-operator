@@ -148,7 +148,7 @@ SANDBOX_MODE ?= bare-pod
 
 # Agent image used by deploy-config to populate the configuration ConfigMap.
 # Batch mock image used by the operator E2E tests. Override for product/local runs.
-AGENT_IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1
+AGENT_IMAGE ?= quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2
 
 # kubernetes-sigs/agent-sandbox release reference (used only for documentation links).
 AGENT_SANDBOX_VERSION ?= v1.0.0

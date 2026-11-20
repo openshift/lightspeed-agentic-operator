@@ -17,7 +17,7 @@ import (
 
 // NOTE: verification-failure behavior lives in the mock-agent image, keyed on
 // the MOCK_VERIFY_FAIL request keyword (test/agent/main.go). The e2e
-// SandboxTemplate pulls quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1,
+// SandboxTemplate pulls quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2,
 // so that image must be rebuilt+pushed (make -C test/agent docker-build
 // docker-push) after changing the mock, or the failing test's run will just
 // Complete.
