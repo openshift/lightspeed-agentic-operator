@@ -252,6 +252,16 @@ func (s *SandboxAgentCaller) ReleaseSandboxes(ctx context.Context, run *agenticv
 			firstErr = err
 		}
 	}
+
+	// The cleanup above finds RBAC only through recorded claim names and the
+	// rbac-namespaces annotation. On deletion, also remove the run's hub reader
+	// and execution RBAC by label, so a missing claim name or annotation cannot
+	// leave it behind. Spoke RBAC is not covered. [OLS-3266]
+	if !run.DeletionTimestamp.IsZero() {
+		if err := deleteRunRBACByLabel(ctx, s.APIReader, s.K8sClient, string(run.UID)); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	return firstErr
 }
 
