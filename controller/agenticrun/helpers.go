@@ -115,6 +115,7 @@ const (
 	LogKeyPhase     = "phase"
 	LogKeyClaim     = "claimName"
 	LogKeyCondition = "condition"
+	LogKeyResultCR  = "resultCR"
 
 	maxCreateRetries = 3
 )

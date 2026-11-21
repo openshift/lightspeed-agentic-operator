@@ -335,26 +335,16 @@ func mainContainerStartedAt(pod *corev1.Pod) time.Time {
 }
 
 func sandboxClaimCreationTime(ctx context.Context, c client.Client, pod *corev1.Pod) (time.Time, error) {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Kind != "Sandbox" {
-			continue
-		}
-		sb := &unstructured.Unstructured{}
-		sb.SetGroupVersionKind(smSandboxGVK)
-		if err := c.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: pod.Namespace}, sb); err != nil {
-			return time.Time{}, err
-		}
-		for _, sbRef := range sb.GetOwnerReferences() {
-			if sbRef.Kind != "SandboxClaim" {
-				continue
-			}
-			claim := &unstructured.Unstructured{}
-			claim.SetGroupVersionKind(smClaimGVK)
-			if err := c.Get(ctx, client.ObjectKey{Name: sbRef.Name, Namespace: pod.Namespace}, claim); err != nil {
-				return time.Time{}, err
-			}
-			return claim.GetCreationTimestamp().Time, nil
-		}
+	sandbox, err := sandboxForPod(ctx, c, pod)
+	if err != nil || sandbox == nil {
+		return time.Time{}, err
 	}
-	return time.Time{}, nil
+	claim, err := claimForSandbox(ctx, c, sandbox)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if claim == nil {
+		return time.Time{}, nil
+	}
+	return claim.GetCreationTimestamp().Time, nil
 }
