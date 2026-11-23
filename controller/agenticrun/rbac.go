@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +37,12 @@ const (
 	ErrDeleteRole               = "delete Role in"
 	ErrDeleteClusterRoleBinding = "delete ClusterRoleBinding"
 	ErrDeleteClusterRole        = "delete ClusterRole"
+
+	// ErrTerminatingNamespace is returned when the API server rejects an
+	// execution Role/RoleBinding create because the target namespace is
+	// terminating (status cause NamespaceTerminating). See
+	// sandbox-execution.md rule 21d [OLS-4237].
+	ErrTerminatingNamespace = "namespace-scoped execution RBAC cannot be granted: namespace"
 )
 
 var (
@@ -398,6 +405,9 @@ func ensureExecutionRBAC(
 				Rules:      rbacRulesToPolicyRules(nsRules),
 			}
 			if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
+				if isNamespaceTerminatingRejection(err) {
+					return fmt.Errorf("%s %s is terminating: %w", ErrTerminatingNamespace, ns, err)
+				}
 				return fmt.Errorf("%s %s: %w", ErrCreateRole, ns, err)
 			}
 			binding := &rbacv1.RoleBinding{
@@ -406,6 +416,9 @@ func ensureExecutionRBAC(
 				Subjects:   subjects,
 			}
 			if err := c.Create(ctx, binding); err != nil && !apierrors.IsAlreadyExists(err) {
+				if isNamespaceTerminatingRejection(err) {
+					return fmt.Errorf("%s %s is terminating: %w", ErrTerminatingNamespace, ns, err)
+				}
 				return fmt.Errorf("%s %s: %w", ErrCreateRoleBinding, ns, err)
 			}
 		}
@@ -432,6 +445,30 @@ func ensureExecutionRBAC(
 	}
 
 	return nil
+}
+
+// isNamespaceTerminatingRejection reports whether err is the API server's
+// NamespaceLifecycle admission rejection for creating content in a
+// terminating namespace: Forbidden with a NamespaceTerminating status cause.
+// Only this specific rejection counts — other Forbidden errors (RBAC policy
+// denials, escalation prevention) keep their original meaning.
+func isNamespaceTerminatingRejection(err error) bool {
+	if !apierrors.IsForbidden(err) {
+		return false
+	}
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	if statusErr.ErrStatus.Details == nil {
+		return false
+	}
+	for _, cause := range statusErr.ErrStatus.Details.Causes {
+		if cause.Type == corev1.NamespaceTerminatingCause {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanupExecutionRBAC removes all RBAC resources and the per-run SA created for
