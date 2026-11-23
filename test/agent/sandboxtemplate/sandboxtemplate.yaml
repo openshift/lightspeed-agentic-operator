@@ -25,8 +25,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: agent
-          image: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent1
-          # Always pull: :lightspeed-mock-agent1 is a MUTABLE tag rebuilt in place
+          image: quay.io/openshift-lightspeed/ols-qe:lightspeed-mock-agent2
+          # Always pull: :lightspeed-mock-agent2 is a MUTABLE tag rebuilt in place
           # on every mock change. With the default IfNotPresent, nodes that cached
           # the tag keep the stale image after a fresh push and the e2e exercises
           # old mock behavior. (The Tekton CI path sets this explicitly too.)

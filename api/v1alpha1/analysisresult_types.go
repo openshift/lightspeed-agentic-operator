@@ -20,28 +20,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// TokenUsage records the number of LLM tokens consumed during a step.
-// Uses the omitzero / IsZero() pattern: the zero value (both fields nil)
-// is omitted from serialization; any non-nil field makes the struct present.
-//
-// +kubebuilder:validation:MinProperties=1
-type TokenUsage struct {
-	// inputTokens is the number of input (prompt) tokens consumed.
-	// +required
-	// +kubebuilder:validation:Minimum=0
-	InputTokens *int64 `json:"inputTokens,omitempty"`
-	// outputTokens is the number of output (completion) tokens consumed.
-	// +required
-	// +kubebuilder:validation:Minimum=0
-	OutputTokens *int64 `json:"outputTokens,omitempty"`
-}
-
-// IsZero returns true when both token counts are nil, making the struct
-// compatible with the omitzero JSON tag.
-func (t TokenUsage) IsZero() bool {
-	return t.InputTokens == nil && t.OutputTokens == nil
-}
-
 // ActionRequiredValue is a string enum indicating whether the analysis
 // determined that remediation action is required. Uses string values
 // "True"/"False" instead of a boolean to satisfy the kube-api-linter

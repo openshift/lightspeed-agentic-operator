@@ -185,3 +185,76 @@ type SkillsSource struct {
 	// +kubebuilder:validation:items:MaxLength=512
 	Paths []string `json:"paths,omitempty"`
 }
+
+// TokenUsage records the number of LLM tokens consumed during a single step.
+// It is shared by every Result CR status (AnalysisResult, ExecutionResult,
+// VerificationResult, EscalationResult) and by AgenticRunStatus, which is why it
+// lives here rather than in a per-kind file.
+//
+// Uses the omitzero / IsZero() pattern: the zero value (every field absent) is
+// omitted from serialization. No field is required, by design: token accounting
+// is telemetry, and a sandbox that under-reports must still be able to publish
+// its status. Rejecting the patch would cost the run its failure reason,
+// diagnosis and options, which is a much worse outcome than an incomplete
+// count. The operator reports incompleteness instead (AgenticRun condition
+// TokenUsageReported plus a Warning on the offending Result CR).
+//
+// The fields distinguish "not reported" (absent) from "reported as zero", and
+// that distinction is preserved end to end: a step that made no model call
+// reports explicit zeros, while a step that does not know omits the field and
+// the run-level total for that field stays absent.
+// Cross-field relationships (reasoningTokens <= outputTokens,
+// toolTokens <= inputTokens, peakInputTokens <= inputTokens) are
+// deliberately NOT validated here: the sandbox clamps before publishing, so a
+// token anomaly must never reject a Result CR status patch.
+//
+// +kubebuilder:validation:MinProperties=1
+type TokenUsage struct {
+	// inputTokens is the number of input (prompt) tokens consumed.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	InputTokens *int64 `json:"inputTokens,omitempty"`
+	// outputTokens is the number of output (completion) tokens consumed. It is
+	// the provider-reported total and includes reasoning tokens.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	OutputTokens *int64 `json:"outputTokens,omitempty"`
+	// reasoningTokens is the reasoning portion of outputTokens. An "of which"
+	// subset: absent means not reported (partial coverage), never zero-filled.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ReasoningTokens *int64 `json:"reasoningTokens,omitempty"`
+	// toolTokens is a lower-bound estimate of the portion of inputTokens
+	// contributed by tool results; it is not a provider-reported count. The
+	// sandbox omits it when reasoning coverage or input growth makes attribution
+	// unreliable. Skill content is read through tools, so it is included here and
+	// there is deliberately no separate skillTokens field.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	ToolTokens *int64 `json:"toolTokens,omitempty"`
+	// peakInputTokens is the largest provider-reported input of any single
+	// main-agent call: observed context occupancy, not the configured limit.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	PeakInputTokens *int64 `json:"peakInputTokens,omitempty"`
+	// model is the observed response model of the sandbox invocation.
+	// Set by the sandbox on Result CRs only; never populated on
+	// AgenticRun.status (spec: token-usage.md rule 9).
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Model string `json:"model,omitempty"`
+}
+
+// IsZero returns true only when no field was reported at all, making the struct
+// compatible with the omitzero JSON tag. Presence is a property of every field:
+// a tokenUsage carrying a single count is reported, not empty, and must survive
+// serialization so incompleteness can be observed downstream.
+func (t TokenUsage) IsZero() bool {
+	return t.InputTokens == nil &&
+		t.OutputTokens == nil &&
+		t.ReasoningTokens == nil &&
+		t.ToolTokens == nil &&
+		t.PeakInputTokens == nil &&
+		t.Model == ""
+}
