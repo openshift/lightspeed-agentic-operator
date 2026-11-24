@@ -263,14 +263,22 @@ func (r *AgenticRunReconciler) completeStep(ctx context.Context, run *agenticv1a
 			stepReason := ReasonSucceeded
 			stepMsg := "Sandbox completed"
 			if step == "analysis" {
-				if ar, ok := resultCR.(*agenticv1alpha1.AnalysisResult); ok && ar.Status.ActionRequired == agenticv1alpha1.ActionRequiredFalse {
-					stepReason = reasonNoActionRequired
-					stepMsg = "Analysis complete — no action required"
+				if ar, ok := resultCR.(*agenticv1alpha1.AnalysisResult); ok {
+					if ar.Status.ActionRequired == agenticv1alpha1.ActionRequiredFalse {
+						stepReason = reasonNoActionRequired
+						stepMsg = "Analysis complete — no action required"
+					} else if err := r.augmentOptions(ctx, ar, preApprovalAugmentations); err != nil {
+						// Augmentations to options applied here so they are visible in AnalysisResult
+						log.Error(err, "option augmentation failed; keeping step in progress")
+						patchErr = err
+					}
 				}
 			}
-			log.Info("sandbox step succeeded", "reason", stepReason)
-			patchErr = r.patchStepResult(ctx, run, step, condType, resultCR.GetName(), resultCR,
-				metav1.ConditionTrue, stepReason, stepMsg)
+			if patchErr == nil {
+				log.Info("sandbox step succeeded", "reason", stepReason)
+				patchErr = r.patchStepResult(ctx, run, step, condType, resultCR.GetName(), resultCR,
+					metav1.ConditionTrue, stepReason, stepMsg)
+			}
 		} else if resultCR != nil {
 			log.Info("agent reported failure", "reason", reason)
 			if reason == agenticv1alpha1.ResultReasonAgentTimeout && step == "verification" {
