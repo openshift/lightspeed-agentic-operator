@@ -85,12 +85,20 @@ Suspension requests zero-grace deletion of sandbox Pods in both bare-pod and san
 Global suspension separates its terminal outcome from permission to resume. The
 current-generation `SafeToResume=True` condition is required alongside current
 `Suspended=True/AdminActivated` or `AdminActivatedWithErrors` before resuming or
-deleting a suspended `AgenticOLSConfig`. The initial cleanup deadline is ten
-seconds; unresolved work produces terminal error completion but does not itself
-authorize either action. `oc agentic status` shows
-the safety state and diagnostics; `oc agentic resume` remains an API-authorized
-request and reports the admission denial when safety is unconfirmed. Control-plane
-confirmation does not prove process death on an unreachable node.
+deleting a suspended `AgenticOLSConfig`. At the ten-second deadline, an
+Unverified or Pending run stop contributes to terminal `AdminActivatedWithErrors`;
+that outcome alone does not authorize either action. If global hub cleanup is
+confirmed, stop markers are saved, run inventory is readable, and no Pending
+runs remain, `SafeToResume=True` may use reason `RunCleanupUnverified` when
+recorded `TeardownFailed` runs remain, or `CleanupConfirmed` otherwise.
+Resumption may therefore proceed while spoke cleanup is unverified. The run
+controller continues cleanup retries after resume, but spoke access may remain
+if that spoke returns before cleanup is confirmed. The failure remains visible
+in `Suspended` diagnostics, the `SafeToResume` reason/message, and run conditions.
+`oc agentic status` shows the safety state and diagnostics; `oc agentic resume`
+remains an API-authorized request and reports the admission denial when safety
+is unconfirmed. Control-plane confirmation does not prove process death on an
+unreachable node.
 
 ### Preserve a Failed Sandbox for Debugging
 
@@ -189,7 +197,7 @@ kustomize replacement.
 
 ### CRDs and manifests
 
-Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make manifests`**.
+Do not edit **`config/crd/bases/`** or generated **`config/rbac/role.yaml`** by hand. After changing **`api/v1alpha1/`** types or kubebuilder markers, run **`make generate`** and **`make manifests`**.
 
 Downstream OLM installations must synchronize the updated role before relying on suspension confirmation.
 `lightspeed-operator` consumes these permissions through its pinned-source `make sync-agentic-crds` and bundle regeneration workflow.
@@ -202,6 +210,7 @@ Updating this repository does not update an installed OLM bundle.
 ### Common targets
 
 ```bash
+make generate  # controller-gen → DeepCopy implementations
 make manifests # controller-gen → config/crd/bases + config/rbac/role.yaml
 make test      # fmt-check + vet + go test (root + api module)
 make install   # kubectl apply CRDs from config/crd only

@@ -1123,6 +1123,37 @@ func TestCreateRejectsAcceptedStopAfterResumptionBeforeSideEffects(t *testing.T)
 	}
 }
 
+func TestCreateRejectsCancellationRequestBeforeSideEffects(t *testing.T) {
+	cache := testCache(t, "bare-pod")
+	run := testSMRun()
+	cancelled := true
+	run.Spec.Cancelled = &cancelled
+	fc := fake.NewClientBuilder().
+		WithScheme(testScheme()).
+		WithObjects(testReaderCRB(), run).
+		Build()
+	manager := newTestSandboxManager(fc, cache)
+
+	if _, err := manager.Create(context.Background(), seedSandboxRun(t, manager, run), "analysis", testSMAgent(), testLLMForManager(), nil, 15*time.Minute, nil); err != errStopAccepted {
+		t.Fatalf("Create error = %v, want %v", err, errStopAccepted)
+	}
+	var pods corev1.PodList
+	if err := fc.List(context.Background(), &pods, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	var serviceAccounts corev1.ServiceAccountList
+	if err := fc.List(context.Background(), &serviceAccounts, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	var configMaps corev1.ConfigMapList
+	if err := fc.List(context.Background(), &configMaps, client.InNamespace("test-ns")); err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 0 || len(serviceAccounts.Items) != 0 || len(configMaps.Items) != 0 {
+		t.Fatalf("cancellation request created resources: Pods=%d ServiceAccounts=%d ConfigMaps=%d", len(pods.Items), len(serviceAccounts.Items), len(configMaps.Items))
+	}
+}
+
 func TestCreateRequiresUncachedReaderBeforeSideEffects(t *testing.T) {
 	cache := testCache(t, "bare-pod")
 	run := testSMRun()

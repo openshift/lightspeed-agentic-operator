@@ -272,6 +272,23 @@ func TestTerminalTTLJSONContract(t *testing.T) {
 	}
 }
 
+func TestAgenticRunCancelledJSONAndDeepCopy(t *testing.T) {
+	cancelled := true
+	spec := AgenticRunSpec{Cancelled: &cancelled}
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"cancelled":true`) {
+		t.Fatalf("serialized AgenticRunSpec = %s, want cancelled=true", data)
+	}
+	copy := spec.DeepCopy()
+	*copy.Cancelled = false
+	if !*spec.Cancelled {
+		t.Fatal("DeepCopy shares the Cancelled pointer")
+	}
+}
+
 func TestLegacyLifecycleFieldIsNotExposed(t *testing.T) {
 	var config AgenticOLSConfig
 	if err := json.Unmarshal([]byte(`{"spec":{"suspended":false,"lifecycle":{"terminalTTL":60}}}`), &config); err != nil {
