@@ -1569,16 +1569,6 @@ func TestResolveSandboxPodMetadata(t *testing.T) {
 		})
 	}
 
-	t.Run("complete sandbox identity does not require claim", func(t *testing.T) {
-		objects := sandboxChainPod(nil, nil, map[string]string{LabelStep: "analysis", LabelRun: "run-uid"}, nil, nil, nil)
-		pod := objects[0].(*corev1.Pod)
-		c := fake.NewClientBuilder().WithObjects(objects[:2]...).Build()
-		step, _, uid, err := resolveSandboxPodMetadata(ctx, c, pod)
-		if err != nil || step != "analysis" || uid != "run-uid" {
-			t.Fatalf("identity = (%q, %q), err = %v", step, uid, err)
-		}
-	})
-
 	t.Run("sandbox fetch failure surfaces", func(t *testing.T) {
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Name: "sandbox-analysis-pod", Namespace: "test-ns",

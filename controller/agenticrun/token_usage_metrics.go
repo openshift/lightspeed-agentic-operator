@@ -42,7 +42,11 @@ func recordTokenUsage(namespace, step string, usage agenticv1alpha1.TokenUsage) 
 	}
 	for _, count := range counts {
 		if count.value != nil {
-			tokenUsageTotal.WithLabelValues(namespace, step, usage.Model, count.tokenType).Add(float64(*count.value))
+			model := usage.Model
+			if model == "" {
+				model = "unknown"
+			}
+			tokenUsageTotal.WithLabelValues(namespace, step, model, count.tokenType).Add(float64(*count.value))
 		}
 	}
 }

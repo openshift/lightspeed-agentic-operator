@@ -155,34 +155,41 @@ func resolveBarePodMetadata(pod *corev1.Pod) (step, runName string, runUID types
 	return step, runName, runUID
 }
 
-func sandboxForPod(ctx context.Context, c client.Client, pod *corev1.Pod) (*unstructured.Unstructured, error) {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Kind != smSandboxGVK.Kind {
+// sandboxClaimForPod walks the agents.x-k8s.io ownership chain from a sandbox Pod
+// to the SandboxClaim that created it. The pod-event handler needs the identity
+// labels carried along that chain and the timeout loop needs the claim's creation
+// time, so the walk lives here once instead of once per caller.
+//
+// A nil Sandbox means the Pod has no Sandbox owner; a nil Claim with a non-nil
+// Sandbox means the chain is incomplete rather than broken. The first Sandbox
+// owner wins: a Pod never has more than one, and a partial chain is not worth a
+// second lookup. The Claim is always fetched, so callers that could stop early
+// pay one cached read.
+func sandboxClaimForPod(ctx context.Context, c client.Client, pod *corev1.Pod) (sandbox, claim *unstructured.Unstructured, err error) {
+	for _, podRef := range pod.OwnerReferences {
+		if podRef.Kind != smSandboxGVK.Kind {
 			continue
 		}
-		sandbox := &unstructured.Unstructured{}
-		sandbox.SetGroupVersionKind(smSandboxGVK)
-		if err := c.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: ref.Name}, sandbox); err != nil {
-			return nil, err
+		sb := &unstructured.Unstructured{}
+		sb.SetGroupVersionKind(smSandboxGVK)
+		if err := c.Get(ctx, client.ObjectKey{Name: podRef.Name, Namespace: pod.Namespace}, sb); err != nil {
+			return nil, nil, err
 		}
-		return sandbox, nil
+		sandbox = sb
+		for _, sbRef := range sb.GetOwnerReferences() {
+			if sbRef.Kind != smClaimGVK.Kind {
+				continue
+			}
+			cl := &unstructured.Unstructured{}
+			cl.SetGroupVersionKind(smClaimGVK)
+			if err := c.Get(ctx, client.ObjectKey{Name: sbRef.Name, Namespace: pod.Namespace}, cl); err != nil {
+				return sandbox, nil, err
+			}
+			return sandbox, cl, nil
+		}
+		return sandbox, nil, nil
 	}
-	return nil, nil
-}
-
-func claimForSandbox(ctx context.Context, c client.Client, sandbox *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	for _, ref := range sandbox.GetOwnerReferences() {
-		if ref.Kind != smClaimGVK.Kind {
-			continue
-		}
-		claim := &unstructured.Unstructured{}
-		claim.SetGroupVersionKind(smClaimGVK)
-		if err := c.Get(ctx, client.ObjectKey{Namespace: sandbox.GetNamespace(), Name: ref.Name}, claim); err != nil {
-			return nil, err
-		}
-		return claim, nil
-	}
-	return nil, nil
+	return nil, nil, nil
 }
 
 // resolveSandboxPodMetadata prefers identity copied onto the Pod template and
@@ -203,7 +210,7 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 		return step, runName, runUID, nil
 	}
 
-	sandbox, err := sandboxForPod(ctx, c, pod)
+	sandbox, claim, err := sandboxClaimForPod(ctx, c, pod)
 	if err != nil {
 		return step, runName, runUID, err
 	}
@@ -221,12 +228,8 @@ func resolveSandboxPodMetadata(ctx context.Context, c client.Client, pod *corev1
 	if runName == "" {
 		runName = sandbox.GetAnnotations()[AnnotationRunName]
 	}
-	if step != "" && runUID != "" {
+	if claim == nil {
 		return step, runName, runUID, nil
-	}
-	claim, err := claimForSandbox(ctx, c, sandbox)
-	if err != nil || claim == nil {
-		return step, runName, runUID, err
 	}
 
 	claimLabels := claim.GetLabels()

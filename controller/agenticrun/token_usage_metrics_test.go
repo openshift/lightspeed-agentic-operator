@@ -53,6 +53,15 @@ func TestRecordTokenUsageReportsEachConsumptionField(t *testing.T) {
 	}
 }
 
+func TestRecordTokenUsageUsesUnknownForMissingModel(t *testing.T) {
+	const namespace = "metrics-missing-model"
+	t.Cleanup(func() { tokenUsageTotal.DeletePartialMatch(prometheus.Labels{"namespace": namespace}) })
+	recordTokenUsage(namespace, "analysis", agenticv1alpha1.TokenUsage{InputTokens: ptr.To[int64](12)})
+	if got := tokenUsageMetricValue(namespace, "analysis", "unknown", "input"); got != 12 {
+		t.Errorf("input tokens for unknown model = %v, want 12", got)
+	}
+}
+
 func TestRecordTokenUsageHandlesPartialUsage(t *testing.T) {
 	const (
 		namespace = "metrics-partial"

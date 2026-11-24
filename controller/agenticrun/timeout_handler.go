@@ -335,11 +335,7 @@ func mainContainerStartedAt(pod *corev1.Pod) time.Time {
 }
 
 func sandboxClaimCreationTime(ctx context.Context, c client.Client, pod *corev1.Pod) (time.Time, error) {
-	sandbox, err := sandboxForPod(ctx, c, pod)
-	if err != nil || sandbox == nil {
-		return time.Time{}, err
-	}
-	claim, err := claimForSandbox(ctx, c, sandbox)
+	_, claim, err := sandboxClaimForPod(ctx, c, pod)
 	if err != nil {
 		return time.Time{}, err
 	}
