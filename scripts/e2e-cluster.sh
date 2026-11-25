@@ -15,8 +15,8 @@
 #   VERTEX_PROJECT_ID                 — GCP project ID (for claude/gemini)
 #   OPENAI_PROVIDER_KEY_PATH          — OpenAI API key file (for openai)
 #   AZUREOPENAI_PROVIDER_KEY_PATH     — Azure OpenAI API key file (for azure-openai)
-#   BEDROCK_AWS_ACCESS_KEY_ID         — AWS access key ID (for bedrock-claude)
-#   BEDROCK_AWS_SECRET_ACCESS_KEY     — AWS secret access key (for bedrock-claude)
+#   BEDROCK_AWS_ACCESS_KEY_ID         — AWS access key ID (for bedrock-claude and bedrock-openai)
+#   BEDROCK_AWS_SECRET_ACCESS_KEY     — AWS secret access key (for bedrock-claude and bedrock-openai)
 #
 # Optional env:
 #   OPERATOR_NAMESPACE       — default: openshift-lightspeed
@@ -38,7 +38,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/e2e-lib.sh
 source "$SCRIPT_DIR/e2e-lib.sh"
 
-PROVIDERS="${*:-claude gemini openai azure-openai bedrock-claude}"
+PROVIDERS="${*:-claude gemini openai azure-openai bedrock-claude bedrock-openai}"
 NAMESPACE="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
 export OPERATOR_NAMESPACE="$NAMESPACE"
 SCENARIOS_TMPDIR=""
@@ -126,7 +126,7 @@ run_provider() {
         azure-openai)
             key_path="${AZUREOPENAI_PROVIDER_KEY_PATH:?Missing AZUREOPENAI_PROVIDER_KEY_PATH}"
             ;;
-        bedrock-claude)
+        bedrock-claude|bedrock-openai)
             bedrock_access_key="${BEDROCK_AWS_ACCESS_KEY_ID:?Missing BEDROCK_AWS_ACCESS_KEY_ID}"
             bedrock_secret_key="${BEDROCK_AWS_SECRET_ACCESS_KEY:?Missing BEDROCK_AWS_SECRET_ACCESS_KEY}"
             ;;

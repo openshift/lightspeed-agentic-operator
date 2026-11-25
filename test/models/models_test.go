@@ -8,8 +8,23 @@ import (
 )
 
 func TestCommittedCatalog(t *testing.T) {
-	if _, err := Load("model-versions.yaml"); err != nil {
+	catalog, err := Load("model-versions.yaml")
+	if err != nil {
 		t.Fatal(err)
+	}
+	var bedrockOpenAI []string
+	for _, pair := range catalog.SmokeMatrix() {
+		if pair.Route == "bedrock-openai" {
+			bedrockOpenAI = append(bedrockOpenAI, pair.Model)
+		}
+	}
+	if len(bedrockOpenAI) != 3 {
+		t.Fatalf("want three Bedrock OpenAI smoke models, got %v", bedrockOpenAI)
+	}
+	for _, id := range bedrockOpenAI {
+		if !strings.HasPrefix(id, "openai.") {
+			t.Errorf("Bedrock OpenAI smoke model %q must use the openai. prefix", id)
+		}
 	}
 }
 
@@ -33,13 +48,6 @@ func TestRouteOrderAndPrimaries(t *testing.T) {
 		if err != nil || got != pair.Model {
 			t.Errorf("primary %s: got %q, %v", pair.Route, got, err)
 		}
-	}
-}
-
-func TestDeferredBedrockOpenAIRouteIsRejected(t *testing.T) {
-	_, err := Parse([]byte("routes: {bedrock-openai: {family: openai, primary: openai.gpt-6-luna}}"))
-	if err == nil || !strings.Contains(err.Error(), `unknown route "bedrock-openai"`) {
-		t.Fatalf("expected unsupported route error, got %v", err)
 	}
 }
 

@@ -8,7 +8,7 @@ spec:
     Runs lightspeed-agentic-operator product e2e tests on a Konflux HyperShift ephemeral OpenShift cluster.
     Deploys the operator with the real sandbox image from SNAPSHOT, then runs
     scripts/e2e-cluster.sh in order against Vertex Claude, Vertex Gemini,
-    OpenAI, Azure OpenAI, and Bedrock Claude, with live
+    OpenAI, Azure OpenAI, Bedrock Claude, and Bedrock OpenAI, with live
     credentials from Konflux workspace secrets.
   params:
     - name: SNAPSHOT

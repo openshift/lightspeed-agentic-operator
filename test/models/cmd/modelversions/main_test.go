@@ -43,15 +43,21 @@ func TestSwapWritesCatalogAndHistory(t *testing.T) {
 func TestRejectedSwapLeavesFilesUnchanged(t *testing.T) {
 	for _, tc := range []struct {
 		name, summary, replacement, wantError string
+		bedrock                               bool
 	}{
-		{"malformed summary", `{"results":[`, "new", "parse smoke summary"},
-		{"invalid summary result", `{"results":[{"route":"openai","model":"old","result":"unknown","date":"2026-01-01"}]}`, "new", "invalid lastRun"},
-		{"unchanged model", `{"results":[]}`, "old", "different from old model"},
+		{"malformed summary", `{"results":[`, "new", "parse smoke summary", false},
+		{"invalid summary result", `{"results":[{"route":"openai","model":"old","result":"unknown","date":"2026-01-01"}]}`, "new", "invalid lastRun", false},
+		{"unchanged model", `{"results":[]}`, "old", "different from old model", false},
+		{"invalid replacement for Bedrock OpenAI", `{"results":[]}`, "new", "must start with", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
+			route, old := "openai", "old"
+			if tc.bedrock {
+				route, old = "bedrock-openai", "openai.old"
+			}
 			files := map[string]string{
-				"model-versions.yaml": "# Keep catalog comment\nroutes: {openai: {family: openai, primary: old}}\n",
+				"model-versions.yaml": "# Keep catalog comment\nroutes: {" + route + ": {family: openai, primary: " + old + "}}\n",
 				"model-history.yaml":  "# Keep history comment\n[]\n",
 			}
 			for name, original := range files {
@@ -59,7 +65,7 @@ func TestRejectedSwapLeavesFilesUnchanged(t *testing.T) {
 			}
 			summary := filepath.Join(dir, "summary.json")
 			writeTestFile(t, summary, tc.summary)
-			args := []string{"swap", "--slot", "routes.openai.primary", "--old", "old", "--new", tc.replacement,
+			args := []string{"swap", "--slot", "routes." + route + ".primary", "--old", old, "--new", tc.replacement,
 				"--summary", summary, "--date", "2026-01-02"}
 			if err := run(args, dir, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantError, err)
@@ -103,6 +109,30 @@ func TestCheckHistoryAgainstGitBase(t *testing.T) {
 	if got := diagnostics.String(); got != want {
 		t.Fatalf("diagnostics: got %q, want %q", got, want)
 	}
+
+	historyPath := filepath.Join(dir, "model-history.yaml")
+	writeTestFile(t, historyPath, "[\n")
+	diagnostics.Reset()
+	if err := run([]string{"check-history", "--base", "HEAD"}, dir, io.Discard, &diagnostics); err != nil {
+		t.Fatalf("invalid local history must only warn: %v", err)
+	}
+	if got := diagnostics.String(); !strings.Contains(got, "WARNING: "+historyPath) || !strings.Contains(got, want) {
+		t.Fatalf("expected history parse and missing record warnings, got %q", got)
+	}
+
+	writeTestFile(t, catalogPath, "routes: [\n")
+	git("add", "--", catalogPath)
+	git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "core.hooksPath=/dev/null",
+		"commit", "--quiet", "--no-gpg-sign", "-m", "Invalid base catalog")
+	writeTestFile(t, catalogPath, "routes: {openai: {family: openai, primary: new}}\n")
+	writeTestFile(t, historyPath, "[]\n")
+	diagnostics.Reset()
+	if err := run([]string{"check-history", "--base", "HEAD"}, dir, io.Discard, &diagnostics); err != nil {
+		t.Fatalf("invalid base catalog must only warn: %v", err)
+	}
+	if got := diagnostics.String(); !strings.HasPrefix(got, "WARNING: cannot parse base catalog:") {
+		t.Fatalf("expected base catalog parse warning, got %q", got)
+	}
 }
 
 func writeTestFile(t *testing.T, path, text string) {
@@ -128,7 +158,7 @@ func TestReadBaseCatalogDeadline(t *testing.T) {
 func TestQueries(t *testing.T) {
 	base := t.TempDir()
 	for name, text := range map[string]string{
-		"model-versions.yaml": "routes: {bedrock-claude: {family: anthropic, primary: primary-model, extras: [extra-model]}}\n",
+		"model-versions.yaml": "routes: {bedrock-claude: {family: anthropic, primary: primary-model, extras: [extra-model]}, bedrock-openai: {family: openai, primary: openai.fixture}}\n",
 		"model-history.yaml":  "[]\n",
 	} {
 		if err := os.WriteFile(filepath.Join(base, name), []byte(text), 0o600); err != nil {
@@ -142,7 +172,7 @@ func TestQueries(t *testing.T) {
 	}{
 		{[]string{"validate"}, "", false},
 		{[]string{"primary", "bedrock-claude"}, "primary-model\n", false},
-		{[]string{"primary", "bedrock-openai"}, "", true},
+		{[]string{"primary", "bedrock-openai"}, "openai.fixture\n", false},
 		{[]string{"primary", "bedrock-deepseek"}, "", true},
 		{[]string{"matrix"}, `"model":"extra-model"`, false},
 		{[]string{"check-history", "--base", "no-such-ref"}, "WARNING:", false},

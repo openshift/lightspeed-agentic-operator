@@ -13,7 +13,7 @@ import (
 // Keep these keys in sync with the real-provider fixtures in test/e2e.
 var supported = map[string]string{
 	"claude": "anthropic", "gemini": "google", "openai": "openai", "azure-openai": "openai",
-	"bedrock-claude": "anthropic",
+	"bedrock-claude": "anthropic", "bedrock-openai": "openai",
 }
 
 type Route struct {
@@ -95,16 +95,19 @@ func (c *Catalog) Validate() error {
 		} else if route.Family != family {
 			errs = append(errs, fmt.Errorf("routes.%s.family must be %q", name, family))
 		}
-		if strings.TrimSpace(route.Primary) == "" {
-			errs = append(errs, fmt.Errorf("routes.%s.primary is empty", name))
+		validateModel := func(slot, model string) {
+			if strings.TrimSpace(model) == "" {
+				errs = append(errs, fmt.Errorf("routes.%s.%s is empty", name, slot))
+			} else if name == "bedrock-openai" && !strings.HasPrefix(model, "openai.") {
+				errs = append(errs, fmt.Errorf("routes.%s.%s must start with openai.", name, slot))
+			}
 		}
+		validateModel("primary", route.Primary)
 		if !route.Enabled() && len(route.Extras) != 0 {
 			errs = append(errs, fmt.Errorf("routes.%s has extras but smoke is disabled", name))
 		}
 		for i, extra := range route.Extras {
-			if strings.TrimSpace(extra) == "" {
-				errs = append(errs, fmt.Errorf("routes.%s.extras[%d] is empty", name, i))
-			}
+			validateModel(fmt.Sprintf("extras[%d]", i), extra)
 		}
 	}
 	return errors.Join(errs...)

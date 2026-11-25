@@ -147,7 +147,8 @@ belong to evals (epic OLS-3758).
 
 4. The file MUST be validated before any cluster changes. Validation fails
    on an unknown route key, a missing or incorrect family, a missing primary,
-   extras on a route with `smoke: false`, or an empty model ID.
+   extras on a route with `smoke: false`, or an empty model ID. All
+   `bedrock-openai` model IDs MUST start with `openai.` to select Mantle.
 
 ### Smoke matrix
 
@@ -160,19 +161,18 @@ belong to evals (epic OLS-3758).
    in catalog route order. The same model on separate routes is tested twice.
 6. In-scope routes are Vertex/Anthropic (`claude`), Bedrock/Anthropic
    (`bedrock-claude`), Vertex/Gemini (`gemini`), native OpenAI (`openai`),
-   and Azure OpenAI (`azure-openai`). OLS-4946 configures 14 smoke pairs
-   across these five routes: five primaries and nine route-specific extras.
-   Direct Anthropic (`anthropic`) is added with its fixture in OLS-4947.
-   Bedrock OpenAI (`bedrock-openai`) is deferred to a follow-up after
-   [OLS-4986](https://redhat.atlassian.net/browse/OLS-4986) adds sandbox
-   support for Mantle's OpenAI API. Until then, `bedrock-openai` is not in
-   the catalog, fixtures, or default product E2E runs. The follow-up must
-   verify its primary and both extras live through the sandbox. Bedrock
+   Azure OpenAI (`azure-openai`), and Bedrock OpenAI (`bedrock-openai`).
+   OLS-4946 configures 17 smoke pairs across these six routes: six primaries
+   and eleven route-specific extras. Direct Anthropic (`anthropic`) is added
+   with its fixture in OLS-4947. Bedrock OpenAI requires a sandbox image with
+   [OLS-4986](https://redhat.atlassian.net/browse/OLS-4986) for Mantle's OpenAI
+   API. Verify its primary and both extras live through the sandbox. Bedrock
    DeepSeek is retired from product E2E and is not a fallback.
    OpenAI-compatible/vLLM routes are out of scope.
 7. The real-provider fixtures MUST support `E2E_PROVIDER=anthropic`: a Secret
    with key `ANTHROPIC_API_KEY` and `LLMProvider.spec.type=Anthropic`. Existing
-   fixtures cover the other in-scope routes.
+   fixtures cover the other in-scope routes. `bedrock-claude` and
+   `bedrock-openai` use the same AWS credentials and `LLMProvider.spec.type=Bedrock`.
 
 ### Scenario
 

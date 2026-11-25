@@ -21,3 +21,7 @@ routes:
     family: anthropic
     primary: global.anthropic.claude-haiku-5-5
     extras: [global.anthropic.claude-sonnet-5-5, global.anthropic.claude-opus-5-5]
+  bedrock-openai:
+    family: openai
+    primary: openai.gpt-6-luna
+    extras: [openai.gpt-6.1-sol, openai.gpt-6.1-terra]
