@@ -245,7 +245,8 @@ func TestSuspension_AdmissionRequiresCurrentCleanupSafety(t *testing.T) {
 	t.Cleanup(func() { cleanupSuspensionConfig(t, c) })
 
 	runUID := newSuspensionRunUID()
-	pod := createSuspensionHeldPod(t, c, runUID)
+	// A Pod finalizer preserves the object, but does not prevent it becoming terminal.
+	account := createSuspensionHeldServiceAccount(t, c, runUID)
 	// Keep the required spec present when all typed spec fields are zero.
 	activeConfig := &unstructured.Unstructured{Object: map[string]interface{}{
 		"apiVersion": "agentic.openshift.io/v1alpha1",
@@ -261,8 +262,8 @@ func TestSuspension_AdmissionRequiresCurrentCleanupSafety(t *testing.T) {
 		t.Fatalf("active-config transition to suspended was denied: %v", err)
 	}
 
-	config := waitForConfigOutcome(t, c, "AdminActivatedWithErrors", metav1.ConditionFalse)
-	assertSuspensionDeletionStarted(t, c, pod)
+	config := waitForConfigOutcome(t, c, "AdminActivatedWithErrors", metav1.ConditionFalse, account)
+	assertSuspensionDeletionStarted(t, c, account)
 	if err := patchSuspensionValue(ctx, c, false); err == nil {
 		t.Fatal("unsafe resume unexpectedly succeeded")
 	} else {
@@ -299,8 +300,8 @@ func TestSuspension_AdmissionRequiresCurrentCleanupSafety(t *testing.T) {
 		t.Fatalf("/status write was denied by main-resource admission: %v", err)
 	}
 
-	if err := releaseSuspensionObject(ctx, c, pod); err != nil {
-		t.Fatalf("release held Pod: %v", err)
+	if err := releaseSuspensionObject(ctx, c, account); err != nil {
+		t.Fatalf("release held ServiceAccount: %v", err)
 	}
 	config = waitForConfigOutcome(t, c, "AdminActivatedWithErrors", metav1.ConditionTrue)
 	suspended := meta.FindStatusCondition(config.Status.Conditions, agenticv1alpha1.AgenticOLSConfigConditionSuspended)
@@ -522,7 +523,7 @@ func waitForConfigEvent(t *testing.T, c client.Client, reason string) {
 		t.Fatalf("timed out waiting for event reason=%q: %v", reason, err)
 	}
 }
-func waitForConfigOutcome(t *testing.T, c client.Client, reason string, safetyStatus metav1.ConditionStatus) *agenticv1alpha1.AgenticOLSConfig {
+func waitForConfigOutcome(t *testing.T, c client.Client, reason string, safetyStatus metav1.ConditionStatus, accounts ...*corev1.ServiceAccount) *agenticv1alpha1.AgenticOLSConfig {
 	t.Helper()
 	ctx := context.Background()
 
@@ -545,6 +546,18 @@ func waitForConfigOutcome(t *testing.T, c client.Client, reason string, safetySt
 		return true, nil
 	})
 	if err != nil {
+		for _, account := range accounts {
+			key := client.ObjectKeyFromObject(account)
+			diagnosticCtx, cancel := context.WithTimeout(ctx, pollInterval)
+			var current corev1.ServiceAccount
+			getErr := c.Get(diagnosticCtx, key, &current)
+			cancel()
+			if getErr != nil {
+				t.Logf("held ServiceAccount %s: %v", key, getErr)
+			} else {
+				t.Logf("held ServiceAccount %s: deletionTimestamp=%v finalizers=%v", key, current.DeletionTimestamp, current.Finalizers)
+			}
+		}
 		t.Fatalf("timed out waiting for Suspended=%s and SafeToResume=%s at the current generation: %v",
 			reason, safetyStatus, err)
 	}
@@ -685,33 +698,6 @@ func suspensionOperatorNamespace() string {
 		return namespace
 	}
 	return "openshift-lightspeed"
-}
-
-func createSuspensionHeldPod(t *testing.T, c client.Client, runUID types.UID) *corev1.Pod {
-	t.Helper()
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("suspension-held-%d", time.Now().UnixNano()),
-			Namespace: suspensionOperatorNamespace(),
-			Labels: map[string]string{
-				"agentic.openshift.io/run":  string(runUID),
-				"agentic.openshift.io/step": "analysis",
-			},
-			Finalizers: []string{suspensionHoldFinalizer},
-		},
-		Spec: corev1.PodSpec{
-			// Keep the Pod Pending. A scheduled Pod may become Failed after
-			// the zero-grace deletion and stop blocking cleanup confirmation.
-			NodeSelector:  map[string]string{"e2e.agentic.openshift.io/unschedulable": string(runUID)},
-			Containers:    []corev1.Container{{Name: "hold", Image: "registry.k8s.io/pause:3.9"}},
-			RestartPolicy: corev1.RestartPolicyNever,
-		},
-	}
-	t.Cleanup(func() { cleanupSuspensionObject(t, c, pod) })
-	if err := c.Create(context.Background(), pod); err != nil {
-		t.Fatalf("create managed held Pod in operator namespace %q: %v", pod.Namespace, err)
-	}
-	return pod
 }
 
 func createSuspensionHeldServiceAccount(t *testing.T, c client.Client, runUID types.UID) *corev1.ServiceAccount {
