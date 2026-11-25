@@ -12,7 +12,7 @@ import (
 
 // Keep these keys in sync with the real-provider fixtures in test/e2e.
 var supported = map[string]string{
-	"claude": "anthropic", "gemini": "google", "openai": "openai", "azure-openai": "openai",
+	"claude": "anthropic", "anthropic": "anthropic", "gemini": "google", "openai": "openai", "azure-openai": "openai",
 	"bedrock-claude": "anthropic", "bedrock-openai": "openai",
 }
 

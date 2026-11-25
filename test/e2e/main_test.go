@@ -218,6 +218,8 @@ func setupRealProviderFixtures(c client.Client) error {
 				Endpoint:          os.Getenv("AZURE_OPENAI_ENDPOINT"),
 			},
 		}
+	case "anthropic":
+		llmSpec, secretData = anthropicProviderFixture(secretName, creds)
 	case "bedrock-claude", "bedrock-openai":
 		accessKey, secretKey := os.Getenv("E2E_BEDROCK_ACCESS_KEY_ID"), os.Getenv("E2E_BEDROCK_SECRET_ACCESS_KEY")
 		if accessKey == "" || secretKey == "" {

@@ -284,7 +284,7 @@ ARTIFACT_DIR="$PWD/artifacts" \
 bash scripts/e2e-cluster.sh claude
 ```
 
-`claude` and `gemini` require `VERTEX_PROVIDER_KEY_PATH` and `VERTEX_PROJECT_ID`; `openai` requires `OPENAI_PROVIDER_KEY_PATH`; `azure-openai` requires `AZUREOPENAI_PROVIDER_KEY_PATH`; `bedrock-claude` and `bedrock-openai` require `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY`. `bedrock-openai` also requires a sandbox image with Bedrock Mantle OpenAI support. The default run order is `claude`, `gemini`, `openai`, `azure-openai`, `bedrock-claude`, then `bedrock-openai`.
+`claude` and `gemini` require `VERTEX_PROVIDER_KEY_PATH` and `VERTEX_PROJECT_ID`; `openai` requires `OPENAI_PROVIDER_KEY_PATH`; `azure-openai` requires `AZUREOPENAI_PROVIDER_KEY_PATH`;  `anthropic` (direct Anthropic API) requires `ANTHROPIC_PROVIDER_KEY_PATH`;`bedrock-claude` and `bedrock-openai` require `BEDROCK_AWS_ACCESS_KEY_ID` and `BEDROCK_AWS_SECRET_ACCESS_KEY`. `bedrock-openai` also requires a sandbox image with Bedrock Mantle OpenAI support. The default run order is `claude`, `gemini`, `openai`, `azure-openai`, `bedrock-claude`, `bedrock-openai`, then `anthropic`. The runner redacts the Anthropic key from its output and from `artifacts/anthropic/`.
 
 The [model catalog](test/models/model-versions.yaml) defines each route's full
 E2E primary and smoke-only extras. `E2E_MODEL` overrides the primary for local

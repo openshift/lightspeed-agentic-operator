@@ -8,7 +8,7 @@ spec:
     Runs lightspeed-agentic-operator product e2e tests on a Konflux HyperShift ephemeral OpenShift cluster.
     Deploys the operator with the real sandbox image from SNAPSHOT, then runs
     scripts/e2e-cluster.sh in order against Vertex Claude, Vertex Gemini,
-    OpenAI, Azure OpenAI, Bedrock Claude, and Bedrock OpenAI, with live
+    OpenAI, Azure OpenAI, Bedrock Claude, and Bedrock OpenAI, and Anthropic with live
     credentials from Konflux workspace secrets.
   params:
     - name: SNAPSHOT
@@ -88,6 +88,9 @@ spec:
           - name: bedrock-role-creds
             secret:
               secretName: bedrock-role-apitoken
+          - name: anthropic-creds
+            secret:
+              secretName: anthropic-apitoken
           - name: ols-konflux-artifacts-bot-creds
             secret:
               secretName: ols-konflux-artifacts-bot
@@ -191,6 +194,8 @@ spec:
                 mountPath: /var/run/credentials/bedrock
               - name: bedrock-role-creds
                 mountPath: /var/run/credentials/bedrock-role
+              - name: anthropic-creds
+                mountPath: /var/run/credentials/anthropic
             env:
               - name: KUBECONFIG
                 value: "/credentials/kubeconfig"
@@ -210,6 +215,8 @@ spec:
                 value: "/var/run/credentials/azure-openai/token"
               - name: AZURE_OPENAI_ENDPOINT
                 value: "https://ols-test.openai.azure.com/"
+              - name: ANTHROPIC_PROVIDER_KEY_PATH
+                value: "/var/run/credentials/anthropic/apitoken"
               - name: BEDROCK_REGION
                 value: "us-east-1"
               - name: BEDROCK_URL

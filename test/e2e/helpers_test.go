@@ -529,9 +529,10 @@ type evalsSkill struct {
 }
 
 var providerSuffix = map[string]string{
-	"claude": "_anthropic",
-	"gemini": "_gemini",
-	"openai": "_openai",
+	"claude":    "_anthropic",
+	"anthropic": "_anthropic",
+	"gemini":    "_gemini",
+	"openai":    "_openai",
 }
 
 // discoveredScenario is a scenario discovered from the troubleshooting-scenarios repo.
@@ -761,6 +762,8 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 				Endpoint:          os.Getenv("AZURE_OPENAI_ENDPOINT"),
 			},
 		}
+	case "anthropic":
+		llmSpec, secretData = anthropicProviderFixture(secretName, creds)
 	case "bedrock-claude", "bedrock-openai":
 		accessKey, secretKey := os.Getenv("E2E_BEDROCK_ACCESS_KEY_ID"), os.Getenv("E2E_BEDROCK_SECRET_ACCESS_KEY")
 		if accessKey == "" || secretKey == "" {
@@ -827,6 +830,19 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 
 	t.Logf("Real provider fixtures created: provider=%s model=%s llm=%s", provider, model, llmName)
 	return &e2eFixtures{LLM: llm, Agent: agent, Policy: policy, Secret: secret}
+}
+
+// anthropicProviderFixture builds the direct Anthropic API LLMProvider spec and
+// its Secret data. Shared by the per-test and suite-level real-provider fixtures.
+func anthropicProviderFixture(secretName string, creds []byte) (agenticv1alpha1.LLMProviderSpec, map[string][]byte) {
+	spec := agenticv1alpha1.LLMProviderSpec{
+		Type: agenticv1alpha1.LLMProviderAnthropic,
+		Anthropic: agenticv1alpha1.AnthropicConfig{
+			CredentialsSecret: agenticv1alpha1.SecretReference{Name: secretName},
+		},
+	}
+	data := map[string][]byte{"ANTHROPIC_API_KEY": []byte(strings.TrimSpace(string(creds)))}
+	return spec, data
 }
 
 func deleteSandboxClaim(t *testing.T, c client.Client, name, ns string) {
