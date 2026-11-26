@@ -132,60 +132,47 @@ belong to evals (epic OLS-3758).
 2. Every model value MUST be an explicit, deployable model ID, never an alias.
    Route-specific identifiers (Bedrock inference-profile IDs, Azure deployment
    names) are stored exactly as the route expects them.
-3. The file has two maps. Route keys equal the `E2E_PROVIDER` values accepted
-   by the real-provider fixtures:
-
-   ```yaml
-   routes:                       # one entry per E2E_PROVIDER fixture
-     <route>:
-       family: anthropic | google | openai | <other>
-       primary: <model-id>       # used by product-e2e and smoke
-       smoke: true | false       # optional, default true
-   families:
-     <family>:
-       referenceRoute: <route>   # route that runs this family's extras
-       extras: [<model-id>, ...] # smoke-only compatibility models
-   ```
-
-   Illustrative content (model IDs change as providers ship):
+3. Route keys equal the `E2E_PROVIDER` values accepted by the real-provider
+   fixtures. Extras are defined per route because routes in the same family
+   can need different model identifiers. See the catalog for current IDs.
 
    ```yaml
    routes:
-     anthropic:        { family: anthropic, primary: claude-haiku-5-5 }
-     claude:           { family: anthropic, primary: claude-haiku-5-5 }   # Vertex
-     bedrock-claude:   { family: anthropic, primary: global.anthropic.claude-haiku-5-5 }
-     gemini:           { family: google,    primary: gemini-3.1-flash-lite }  # Vertex
-     openai:           { family: openai,    primary: gpt-6-luna }
-     azure-openai:     { family: openai,    primary: gpt-6-luna }
-     bedrock-deepseek: { family: deepseek,  primary: deepseek.v3.2, smoke: false }
-   families:
-     anthropic: { referenceRoute: anthropic, extras: [claude-sonnet-5-5, claude-opus-4-6] }
-     google:    { referenceRoute: gemini,    extras: [gemini-3.8-flash] }
-     openai:    { referenceRoute: openai,    extras: [gpt-6.1-sol, gpt-6.1-terra] }
+     <route>:
+       family: anthropic | google | openai
+       primary: <model-id>       # used by product-e2e and smoke
+       smoke: true | false       # optional, default true
+       extras: [<model-id>, ...] # optional; smoke-only models for this route
    ```
 
-4. The file MUST be validated before any cluster work. Validation fails on an
-   unknown route key, a route without `primary`, a smoke-enabled route whose
-   family has no `families` entry, a `referenceRoute` that is missing, has
-   `smoke: false`, or belongs to another family, or an empty model ID.
+4. The file MUST be validated before any cluster changes. Validation fails
+   on an unknown route key, a missing or incorrect family, a missing primary,
+   extras on a route with `smoke: false`, or an empty model ID. All
+   `bedrock-openai` model IDs MUST start with `openai.` to select Mantle.
 
 ### Smoke matrix
 
 5. The matrix MUST contain:
    - one `(route, primary)` pair for every route with `smoke` not set to
      `false`;
-   - one `(referenceRoute, extra)` pair for every extra of every family.
+   - one `(route, extra)` pair for each extra listed by a smoke-enabled route.
 
-   Duplicate pairs are collapsed. Every in-scope route is proven with its
-   primary model. Every extra model is proven on one route of its family.
-6. In-scope routes are direct Anthropic (`anthropic`), Vertex/Anthropic
-   (`claude`), Bedrock/Anthropic (`bedrock-claude`), Vertex/Gemini
-   (`gemini`), native OpenAI (`openai`) and Azure OpenAI (`azure-openai`).
-   `bedrock-deepseek` is a product-e2e route with `smoke: false`. Bedrock
-   OpenAI and OpenAI-compatible/vLLM routes are out of scope.
+   Duplicate pairs are collapsed. Primaries appear first, then extras, both
+   in catalog route order. The same model on separate routes is tested twice.
+6. In-scope routes are Vertex/Anthropic (`claude`), Bedrock/Anthropic
+   (`bedrock-claude`), Vertex/Gemini (`gemini`), native OpenAI (`openai`),
+   Azure OpenAI (`azure-openai`), and Bedrock OpenAI (`bedrock-openai`).
+   OLS-4946 configures 17 smoke pairs across these six routes: six primaries
+   and eleven route-specific extras. Direct Anthropic (`anthropic`) is added
+   with its fixture in OLS-4947. Bedrock OpenAI requires a sandbox image with
+   [OLS-4986](https://redhat.atlassian.net/browse/OLS-4986) for Mantle's OpenAI
+   API. Verify its primary and both extras live through the sandbox. Bedrock
+   DeepSeek is retired from product E2E and is not a fallback.
+   OpenAI-compatible/vLLM routes are out of scope.
 7. The real-provider fixtures MUST support `E2E_PROVIDER=anthropic`: a Secret
    with key `ANTHROPIC_API_KEY` and `LLMProvider.spec.type=Anthropic`. Existing
-   fixtures cover the other in-scope routes.
+   fixtures cover the other in-scope routes. `bedrock-claude` and
+   `bedrock-openai` use the same AWS credentials and `LLMProvider.spec.type=Bedrock`.
 
 ### Scenario
 
@@ -246,9 +233,27 @@ belong to evals (epic OLS-3758).
     mirrors the existing FBC-test failure-notification mechanism. A passing
     job sends no notification.
 
+### Model swap history
+
+19. `test/models/model-history.yaml` records swapped-out models. A record
+    stores `slot` (`routes.<route>.primary` or `routes.<route>.extras`),
+    `model`, optional `replacedBy`, `swappedAt`, `expiresAt`, and `lastRun`.
+    Dates use `YYYY-MM-DD`. `lastRun` is null or contains `date`, `route`,
+    and `result` (`passed` or `failed`).
+20. `modelversions swap` replaces one model in its slot and appends a record.
+    It takes `lastRun` from the latest matching route/model in the smoke
+    summary, or warns and uses null when no row matches. The summary's
+    `results` array includes `date`, `route`, `model`, and `result` per row.
+    Expand YAML aliases in the catalog before swapping so only one slot changes.
+21. Records expire six calendar months after the swap (clamped to the end of
+    the target month). The swap helper prunes expired records and validates
+    both files before writing them. CI does not rewrite the files.
+22. `make check-model-history` warns about removed slot/model entries without
+    records and expired records still present. These warnings do not block CI.
+
 ### Constraints and exclusions
 
-- Credentials for all six in-scope routes must be available to the Konflux
+- Credentials for all smoke-enabled routes must be available to the Konflux
   tenant pipeline.
 - The scenario's skill image is referenced by a mutable tag in
   `troubleshooting-scenarios`. A broken skill push can fail every entry with
@@ -257,7 +262,7 @@ belong to evals (epic OLS-3758).
   (OLS-4818) are separate work. Consumers outside this repository read the
   file from this repository.
 - Out of scope: execution and verification phases, LLM judges, RCA
-  correctness, Bedrock OpenAI, OpenAI-compatible/vLLM and Gemma routes.
+  correctness, and OpenAI-compatible/vLLM and Gemma routes.
 
 ## Multicluster e2e (agentic-operator share)
 

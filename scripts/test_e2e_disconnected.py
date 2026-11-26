@@ -439,13 +439,37 @@ exec /bin/bash "$@"
         self.assertNotIn("test-secret", result.stdout + result.stderr + commands)
         self.assertNotIn("hf-secret", result.stdout + result.stderr + commands)
 
+    def test_invalid_model_catalog_stops_before_cluster_changes(self):
+        scripts = self.root / "cluster/scripts"
+        scripts.mkdir(parents=True)
+        cluster = scripts / "e2e-cluster.sh"
+        cluster.write_text(SCRIPT.with_name("e2e-cluster.sh").read_text())
+        (scripts / "e2e-lib.sh").write_text('''log_info() { :; }
+check_prerequisites() { :; }
+modelversions() { [[ "$*" == validate ]] && return 23; }
+parse_snapshot() { :; }
+deploy_operator() { touch "$CLUSTER_TOUCHED"; }
+cleanup_e2e_otel() { touch "$CLUSTER_TOUCHED"; }
+cleanup_operator() { touch "$CLUSTER_TOUCHED"; }
+''')
+        marker = self.root / "cluster-touched"
+        result = subprocess.run(
+            ["/bin/bash", str(cluster)], env={**self.env, "CLUSTER_TOUCHED": str(marker)},
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(result.returncode, 23, result.stdout + result.stderr)
+        self.assertFalse(marker.exists())
+
     def test_product_cleanup_marker_controls_outer_fallback(self):
         scripts = self.root / "cluster/scripts"
         scripts.mkdir(parents=True)
         cluster = scripts / "e2e-cluster.sh"
         cluster.write_text(SCRIPT.with_name("e2e-cluster.sh").read_text())
         (scripts / "e2e-lib.sh").write_text('''log_info() { :; }
-check_prerequisites() { exit "${TEST_SUITE_RC:-0}"; }
+check_prerequisites() { :; }
+modelversions() { [[ "$*" == validate ]]; }
+parse_snapshot() { :; }
+deploy_operator() { exit "${TEST_SUITE_RC:-0}"; }
 cleanup_e2e_otel() { :; }
 cleanup_operator() { :; }
 ''')
@@ -473,7 +497,10 @@ cleanup_operator() { :; }
         cluster = scripts / "e2e-cluster.sh"
         cluster.write_text(SCRIPT.with_name("e2e-cluster.sh").read_text())
         (scripts / "e2e-lib.sh").write_text('''log_info() { :; }
-check_prerequisites() { exit "${TEST_SUITE_RC:-0}"; }
+check_prerequisites() { :; }
+modelversions() { [[ "$*" == validate ]]; }
+parse_snapshot() { :; }
+deploy_operator() { exit "${TEST_SUITE_RC:-0}"; }
 cleanup_e2e_otel() { :; }
 cleanup_operator() { echo undeploy >> "$CLEANUP_CALLS"; }
 ''')
@@ -509,7 +536,10 @@ _E2E_READER_RBAC_CREATED_BY_SCRIPT=0
 _E2E_MANAGER_RB_CREATED_BY_SCRIPT=0
 _E2E_MANAGER_ROLE_CREATED_BY_SCRIPT=0
 log_info() { :; }
-check_prerequisites() { exit 0; }
+check_prerequisites() { :; }
+modelversions() { [[ "$*" == validate ]]; }
+parse_snapshot() { :; }
+deploy_operator() { exit 0; }
 cleanup_e2e_otel() { :; }
 cleanup_operator() { touch "$CRDS_REMOVED"; echo undeploy >> "$EVENT_LOG"; }
 ''')
@@ -556,7 +586,10 @@ _E2E_READER_RBAC_CREATED_BY_SCRIPT=0
 _E2E_MANAGER_RB_CREATED_BY_SCRIPT=0
 _E2E_MANAGER_ROLE_CREATED_BY_SCRIPT=0
 log_info() { :; }
-check_prerequisites() { exit 0; }
+check_prerequisites() { :; }
+modelversions() { [[ "$*" == validate ]]; }
+parse_snapshot() { :; }
+deploy_operator() { exit 0; }
 cleanup_e2e_otel() { :; }
 cleanup_operator() { echo undeploy >> "$EVENT_LOG"; }
 ''')

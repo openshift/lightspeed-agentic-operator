@@ -697,7 +697,7 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 	}
 
 	var creds []byte
-	if provider != "bedrock-deepseek" && provider != "bedrock-claude" {
+	if provider != "bedrock-claude" && provider != "bedrock-openai" {
 		if keyPath == "" {
 			t.Fatalf("E2E_PROVIDER=%s requires E2E_PROVIDER_KEY_PATH", provider)
 		}
@@ -761,7 +761,7 @@ func createRealProviderFixtures(t *testing.T, c client.Client) *e2eFixtures {
 				Endpoint:          os.Getenv("AZURE_OPENAI_ENDPOINT"),
 			},
 		}
-	case "bedrock-deepseek", "bedrock-claude":
+	case "bedrock-claude", "bedrock-openai":
 		accessKey, secretKey := os.Getenv("E2E_BEDROCK_ACCESS_KEY_ID"), os.Getenv("E2E_BEDROCK_SECRET_ACCESS_KEY")
 		if accessKey == "" || secretKey == "" {
 			t.Fatalf("%s requires Bedrock AWS credentials", provider)
