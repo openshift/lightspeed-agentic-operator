@@ -11,6 +11,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	toolscache "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,6 +37,7 @@ const (
 	ErrDeleteRole               = "delete Role in"
 	ErrDeleteClusterRoleBinding = "delete ClusterRoleBinding"
 	ErrDeleteClusterRole        = "delete ClusterRole"
+	ErrListRunRBAC              = "list run RBAC for cleanup"
 )
 
 var (
@@ -477,6 +479,63 @@ func deleteIfExists(ctx context.Context, c client.Client, obj client.Object) err
 		return err
 	}
 	return nil
+}
+
+// deleteRunRBACByLabel deletes a run's per-run reader ClusterRoleBindings and
+// its execution RBAC (Roles and RoleBindings in any namespace, ClusterRole,
+// ClusterRoleBinding) on the hub, found by run-UID and component labels.
+//
+// It does not depend on recorded step claim names or the rbac-namespaces
+// annotation, which can be missing when a status patch fails or the annotation
+// is removed. These objects have no ownerReference, so garbage collection
+// cannot remove them. Shared source reader bindings carry no run label and are
+// never selected. Lists use the uncached reader. NotFound is success; every
+// object is attempted and the first error is returned. [OLS-3266]
+func deleteRunRBACByLabel(ctx context.Context, reader client.Reader, c client.Client, runUID string) error {
+	if reader == nil {
+		return fmt.Errorf("%s: uncached API reader is required", ErrListRunRBAC)
+	}
+	// Bindings before roles, matching cleanupExecutionRBAC.
+	sweeps := []struct {
+		list      client.ObjectList
+		component string
+		what      string
+		errPrefix string
+	}{
+		{&rbacv1.ClusterRoleBindingList{}, "reader-rbac", "reader ClusterRoleBindings", ErrDeleteClusterRoleBinding},
+		{&rbacv1.RoleBindingList{}, "execution-rbac", "execution RoleBindings", ErrDeleteRoleBinding},
+		{&rbacv1.RoleList{}, "execution-rbac", "execution Roles", ErrDeleteRole},
+		{&rbacv1.ClusterRoleBindingList{}, "execution-rbac", "execution ClusterRoleBindings", ErrDeleteClusterRoleBinding},
+		{&rbacv1.ClusterRoleList{}, "execution-rbac", "execution ClusterRoles", ErrDeleteClusterRole},
+	}
+
+	var firstErr error
+	for _, sw := range sweeps {
+		selector := client.MatchingLabels{LabelRun: runUID, LabelComponent: sw.component}
+		if err := reader.List(ctx, sw.list, selector); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %s: %w", ErrListRunRBAC, sw.what, err)
+			}
+			continue
+		}
+		items, err := apimeta.ExtractList(sw.list)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %s: %w", ErrListRunRBAC, sw.what, err)
+			}
+			continue
+		}
+		for _, item := range items {
+			obj, ok := item.(client.Object)
+			if !ok {
+				continue
+			}
+			if err := deleteIfExists(ctx, c, obj); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("%s %s: %w", sw.errPrefix, client.ObjectKeyFromObject(obj), err)
+			}
+		}
+	}
+	return firstErr
 }
 
 func rbacTargetNamespaces(rbacResult *agenticv1alpha1.RBACResult) []string {
