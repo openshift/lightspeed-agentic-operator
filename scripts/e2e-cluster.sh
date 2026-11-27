@@ -15,8 +15,9 @@
 #   VERTEX_PROJECT_ID                 — GCP project ID (for claude/gemini)
 #   OPENAI_PROVIDER_KEY_PATH          — OpenAI API key file (for openai)
 #   AZUREOPENAI_PROVIDER_KEY_PATH     — Azure OpenAI API key file (for azure-openai)
-#   BEDROCK_AWS_ACCESS_KEY_ID         — AWS access key ID (for bedrock-claude and bedrock-openai)
-#   BEDROCK_AWS_SECRET_ACCESS_KEY     — AWS secret access key (for bedrock-claude and bedrock-openai)
+#   ANTHROPIC_PROVIDER_KEY_PATH       — Anthropic API key file (for anthropic)
+#   BEDROCK_AWS_ACCESS_KEY_ID         — AWS access key ID (for bedrock-deepseek and bedrock-claude)
+#   BEDROCK_AWS_SECRET_ACCESS_KEY     — AWS secret access key (for bedrock-deepseek and bedrock-claude)
 #
 # Optional env:
 #   OPERATOR_NAMESPACE       — default: openshift-lightspeed
@@ -38,7 +39,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=scripts/e2e-lib.sh
 source "$SCRIPT_DIR/e2e-lib.sh"
 
-PROVIDERS="${*:-claude gemini openai azure-openai bedrock-claude bedrock-openai}"
+PROVIDERS="${*:-claude gemini openai azure-openai bedrock-claude bedrock-openai anthropic}"
 NAMESPACE="${OPERATOR_NAMESPACE:-openshift-lightspeed}"
 export OPERATOR_NAMESPACE="$NAMESPACE"
 SCENARIOS_TMPDIR=""
@@ -126,6 +127,9 @@ run_provider() {
         azure-openai)
             key_path="${AZUREOPENAI_PROVIDER_KEY_PATH:?Missing AZUREOPENAI_PROVIDER_KEY_PATH}"
             ;;
+        anthropic)
+            key_path="${ANTHROPIC_PROVIDER_KEY_PATH:?Missing ANTHROPIC_PROVIDER_KEY_PATH}"
+            ;;
         bedrock-claude|bedrock-openai)
             bedrock_access_key="${BEDROCK_AWS_ACCESS_KEY_ID:?Missing BEDROCK_AWS_ACCESS_KEY_ID}"
             bedrock_secret_key="${BEDROCK_AWS_SECRET_ACCESS_KEY:?Missing BEDROCK_AWS_SECRET_ACCESS_KEY}"
@@ -157,6 +161,9 @@ run_provider() {
     local output_filter=(tee /dev/null)
     if [[ "${E2E_DISCONNECTED:-false}" == true ]]; then
         output_filter=(python3 "$SCRIPT_DIR/e2e-redact.py")
+    elif [[ "$provider" == anthropic ]]; then
+        # The Anthropic key must never reach runner output or artifacts.
+        output_filter=(env E2E_PROVIDER_KEY_PATH="$key_path" python3 "$SCRIPT_DIR/e2e-redact.py")
     fi
 
     # Product e2e (troubleshooting scenarios against real LLMs).
@@ -177,6 +184,13 @@ run_provider() {
     # Disconnected diagnostics are collected/redacted by the product harness
     # and timeout fallback; the connected collector writes unredacted logs.
     if [[ "${E2E_DISCONNECTED:-false}" != true ]]; then collect_artifacts "$provider"; fi
+
+    # Harness and collector artifacts are written unredacted; scrub them in place.
+    if [[ "$provider" == anthropic && -n "${ARTIFACT_DIR:-}" && -d "$ARTIFACT_DIR/$provider" ]]; then
+        find "$ARTIFACT_DIR/$provider" -type f -print0 \
+            | xargs -0 -r env E2E_PROVIDER_KEY_PATH="$key_path" python3 "$SCRIPT_DIR/e2e-redact.py" --in-place \
+            || { log_error "Failed to redact $provider artifacts; removing them"; rm -rf "${ARTIFACT_DIR:?}/$provider"; test_rc=1; }
+    fi
 
     return "$test_rc"
 }

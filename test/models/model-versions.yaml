@@ -5,6 +5,10 @@ routes:
     family: anthropic
     primary: claude-haiku-5-5
     extras: [claude-sonnet-5-5, claude-opus-5-5]
+  anthropic:
+    family: anthropic
+    primary: claude-haiku-5-5
+    extras: [claude-sonnet-5-5, claude-opus-5-5]
   gemini:
     family: google
     primary: gemini-3.1-flash-lite

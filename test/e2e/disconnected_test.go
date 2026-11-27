@@ -49,6 +49,37 @@ func TestOpenAIFixtureCustomURL(t *testing.T) {
 	}
 }
 
+func TestAnthropicFixture(t *testing.T) {
+	t.Setenv("E2E_PROVIDER", "anthropic")
+	t.Setenv("E2E_MODEL", "claude-haiku-5-5")
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte("  test-anthropic-key\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("E2E_PROVIDER_KEY_PATH", path)
+	s := runtime.NewScheme()
+	_ = corev1.AddToScheme(s)
+	_ = agenticv1alpha1.AddToScheme(s)
+	c := fake.NewClientBuilder().WithScheme(s).Build()
+	fixture := createRealProviderFixtures(t, c)
+
+	if fixture.LLM.Spec.Type != agenticv1alpha1.LLMProviderAnthropic {
+		t.Fatalf("LLMProvider type = %q, want %q", fixture.LLM.Spec.Type, agenticv1alpha1.LLMProviderAnthropic)
+	}
+	if got := fixture.LLM.Spec.Anthropic.CredentialsSecret.Name; got != fixture.Secret.Name {
+		t.Fatalf("LLMProvider references secret %q, want %q", got, fixture.Secret.Name)
+	}
+	if got := string(fixture.Secret.Data["ANTHROPIC_API_KEY"]); got != "test-anthropic-key" {
+		t.Fatalf("ANTHROPIC_API_KEY = %q, want trimmed key", got)
+	}
+	if len(fixture.Secret.Data) != 1 {
+		t.Fatalf("secret has unexpected keys: %v", fixture.Secret.Data)
+	}
+	if fixture.Agent.Spec.Model != os.Getenv("E2E_MODEL") {
+		t.Fatal("selected model not preserved")
+	}
+}
+
 func prepareDisconnected(t *testing.T, c client.Client, scenarios []discoveredScenario) context.Context {
 	t.Helper()
 	cfg, err := disconnected.FromEnv()
